@@ -1,7 +1,7 @@
 import Foundation
 
 enum DiagLog {
-    private static var buffer: [(Date, String)] = []
+    nonisolated(unsafe) private static var buffer: [(Date, String)] = []
     private static let lock = NSLock()
 
     static func mark(_ sender: Any, _ message: String) {

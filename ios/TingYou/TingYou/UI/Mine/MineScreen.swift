@@ -80,7 +80,7 @@ extension View {
         HStack {
             self
             Spacer()
-            if show { Image(systemName: "checkmark").foregroundStyle(.accent) }
+            if show { Image(systemName: "checkmark").foregroundStyle(.tint) }
         }
     }
 }

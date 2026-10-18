@@ -16,7 +16,7 @@ final class DiscoverViewModel {
         currentPage = 1
         do {
             let client = APIClient()
-            let repo = AlbumRepository(apiClient: client, modelContext: ModelContext(.init(schema: Schema([]))))
+            let repo = AlbumRepository(apiClient: client)
             let result = try await repo.rank(section: section, page: 1)
             albums = result.items
             hasMore = result.hasMore
@@ -32,7 +32,7 @@ final class DiscoverViewModel {
         currentPage += 1
         do {
             let client = APIClient()
-            let repo = AlbumRepository(apiClient: client, modelContext: ModelContext(.init(schema: Schema([]))))
+            let repo = AlbumRepository(apiClient: client)
             let result = try await repo.rank(section: currentSection, page: currentPage)
             albums.append(contentsOf: result.items)
             hasMore = result.hasMore

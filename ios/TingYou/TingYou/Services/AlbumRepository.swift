@@ -3,11 +3,11 @@ import SwiftData
 
 actor AlbumRepository {
     private let apiClient: APIClient
-    private let modelContext: ModelContext
+    private let modelContext: ModelContext?
     private var cache: [String: Album] = [:]
     private let cacheLock = NSLock()
 
-    init(apiClient: APIClient, modelContext: ModelContext) {
+    init(apiClient: APIClient, modelContext: ModelContext? = nil) {
         self.apiClient = apiClient
         self.modelContext = modelContext
     }

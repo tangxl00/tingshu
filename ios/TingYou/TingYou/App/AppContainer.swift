@@ -1,6 +1,8 @@
 import Foundation
 import SwiftData
+import SwiftUI
 
+@MainActor
 @Observable
 final class AppContainer {
     let modelContainer: ModelContainer

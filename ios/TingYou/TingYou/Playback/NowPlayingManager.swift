@@ -1,7 +1,7 @@
 import Foundation
 import MediaPlayer
 
-final class NowPlayingManager {
+final class NowPlayingManager: @unchecked Sendable {
     static let shared = NowPlayingManager()
     private init() {}
 

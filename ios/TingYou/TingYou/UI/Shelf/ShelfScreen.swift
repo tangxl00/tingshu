@@ -22,14 +22,14 @@ struct ShelfScreen: View {
                         Section(header: Text("最近收听").font(.headline).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal)) {
                             if layout == 0 {
                                 LazyVStack(spacing: 12) {
-                                    ForEach(histories.prefix(20), id: \Self.updatedAt) { h in
+                                    ForEach(histories.prefix(20), id: \.self) { h in
                                         HistoryRow(history: h)
                                     }
                                 }
                                 .padding(.horizontal)
                             } else {
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 12) {
-                                    ForEach(histories.prefix(20), id: \Self.updatedAt) { h in
+                                    ForEach(histories.prefix(20), id: \.self) { h in
                                         HistoryGridItem(history: h)
                                     }
                                 }

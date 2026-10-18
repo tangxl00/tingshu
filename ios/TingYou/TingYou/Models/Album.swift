@@ -31,7 +31,7 @@ struct Chapter: Identifiable, Hashable, Sendable {
     var id: Int64 { chapterId }
 }
 
-struct PagedResult<T>: Sendable {
+struct PagedResult<T: Sendable>: Sendable {
     let items: [T]
     let hasMore: Bool
 }

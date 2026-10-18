@@ -56,7 +56,7 @@ struct AlbumScreen: View {
     private func loadChapters() async {
         do {
             let client = APIClient()
-            let repo = AlbumRepository(apiClient: client, modelContext: ModelContext(.init(schema: Schema([]))))
+            let repo = AlbumRepository(apiClient: client)
             chapters = try await repo.chapters(albumId: album.albumId)
         } catch {
             print("Album load error: \(error)")

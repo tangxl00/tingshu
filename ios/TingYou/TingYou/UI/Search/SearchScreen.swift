@@ -24,7 +24,7 @@ struct SearchScreen: View {
         isSearching = true
         do {
             let client = APIClient()
-            let repo = AlbumRepository(apiClient: client, modelContext: ModelContext(.init(schema: Schema([]))))
+            let repo = AlbumRepository(apiClient: client)
             let resp = try await repo.search(keyword: keyword, page: 1)
             results = resp.items
         } catch {
