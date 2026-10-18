@@ -16,7 +16,7 @@ struct DiscoverScreen: View {
                                 Task { await viewModel.loadRank(section: key) }
                             }
                             .fontWeight(selectedSection == key ? .bold : .regular)
-                            .foregroundStyle(selectedSection == key ? .primary : .secondary)
+                            .foregroundStyle(selectedSection == key ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                         }
                     }
                     .padding(.horizontal)
