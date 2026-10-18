@@ -15,11 +15,10 @@ concurrency:
 jobs:
   build:
     name: Build & Test (macOS)
-    runs-on: macos-14
-    timeout-minutes: 30
+    runs-on: macos-15
+    timeout-minutes: 40
 
     env:
-      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
       SCHEME: TingYou
       CONFIGURATION: Release
       DERIVED_DATA: ${{ github.workspace }}/build
@@ -28,14 +27,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show toolchain
+      - name: Select newest Xcode
         run: |
-          sw_vers
+          ls -d /Applications/Xcode*.app || true
+          XC=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Using $XC"
+          sudo xcode-select -s "$XC"
           xcodebuild -version
           swift --version
-
-      - name: Select Xcode
-        run: sudo xcode-select -s "$DEVELOPER_DIR"
 
       - name: Install xcodegen
         run: brew install xcodegen
@@ -68,16 +67,25 @@ jobs:
         working-directory: ios/TingYou
         run: |
           set -o pipefail
+          # Pick the first available iPhone simulator at runtime
+          DEST="platform=iOS Simulator,name=iPhone 16"
+          if ! xcrun simctl list devices available | grep -q "iPhone 16 ("; then
+            DEST="platform=iOS Simulator,name=iPhone 15"
+          fi
+          if ! xcrun simctl list devices available | grep -q "iPhone 15 ("; then
+            DEST="generic/platform=iOS Simulator"
+          fi
+          echo "Test destination: $DEST"
           xcodebuild \
             -project TingYou.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Debug \
-            -destination "platform=iOS Simulator,name=iPhone 15" \
+            -destination "$DEST" \
             -derivedDataPath "$DERIVED_DATA" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            test 2>&1 | tee test.log || (echo "::warning::Test runner did not find a simulator; will retry with any"; xcodebuild test -project TingYou.xcodeproj -scheme "$SCHEME" -destination "generic/platform=iOS Simulator" -derivedDataPath "$DERIVED_DATA" CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log)
+            test 2>&1 | tee test.log
 
       - name: Archive (unsigned .xcarchive)
         if: success()
