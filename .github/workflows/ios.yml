@@ -67,13 +67,12 @@ jobs:
         working-directory: ios/TingYou
         run: |
           set -o pipefail
-          # Pick the first available iPhone simulator at runtime
-          DEST="platform=iOS Simulator,name=iPhone 16"
-          if ! xcrun simctl list devices available | grep -q "iPhone 16 ("; then
-            DEST="platform=iOS Simulator,name=iPhone 15"
-          fi
-          if ! xcrun simctl list devices available | grep -q "iPhone 15 ("; then
-            DEST="generic/platform=iOS Simulator"
+          # Dynamically pick the first available iPhone simulator UDID
+          SIM_UDID=$(xcrun simctl list devices available | grep -E "iPhone" | head -1 | sed -E 's/.*\(([A-F0-9a-f-]{36})\).*/\1/')
+          if [ -n "$SIM_UDID" ]; then
+            DEST="id=$SIM_UDID"
+          else
+            DEST="platform=iOS Simulator,name=iPhone 16"
           fi
           echo "Test destination: $DEST"
           xcodebuild \
