@@ -1,0 +1,137 @@
+name: iOS Build & Test
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Test (macOS)
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_15.4.app/Contents/Developer
+      SCHEME: TingYou
+      CONFIGURATION: Release
+      DERIVED_DATA: ${{ github.workspace }}/build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Select Xcode
+        run: sudo xcode-select -s "$DEVELOPER_DIR"
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: ios/TingYou
+        run: xcodegen generate
+
+      - name: List schemes
+        working-directory: ios/TingYou
+        run: xcodebuild -list -project TingYou.xcodeproj
+
+      - name: Build (unsigned)
+        working-directory: ios/TingYou
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project TingYou.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee build.log
+
+      - name: Test (unsigned)
+        if: success()
+        working-directory: ios/TingYou
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project TingYou.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,name=iPhone 15" \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee test.log || (echo "::warning::Test runner did not find a simulator; will retry with any"; xcodebuild test -project TingYou.xcodeproj -scheme "$SCHEME" -destination "generic/platform=iOS Simulator" -derivedDataPath "$DERIVED_DATA" CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log)
+
+      - name: Archive (unsigned .xcarchive)
+        if: success()
+        working-directory: ios/TingYou
+        run: |
+          set -o pipefail
+          mkdir -p "$DERIVED_DATA/archive"
+          xcodebuild \
+            -project TingYou.xcodeproj \
+            -scheme "$SCHEME" \
+            -configuration "$CONFIGURATION" \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -archivePath "$DERIVED_DATA/archive/TingYou.xcarchive" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            archive 2>&1 | tee archive.log
+
+      - name: Package .app
+        if: success()
+        working-directory: ios/TingYou
+        run: |
+          set -o pipefail
+          APP_PATH="$DERIVED_DATA/archive/TingYou.xcarchive/Products/Applications/TingYou.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::App bundle not found at $APP_PATH"
+            ls -la "$DERIVED_DATA/archive/TingYou.xcarchive/Products/" || true
+            exit 1
+          fi
+          mkdir -p artifact
+          cp -R "$APP_PATH" artifact/TingYou.app
+          cd artifact
+          zip -qr TingYou-unsigned-1.3.3-16.zip TingYou.app
+          ls -la
+          du -h TingYou-unsigned-1.3.3-16.zip
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TingYou-unsigned-${{ github.sha }}
+          path: ios/TingYou/artifact/TingYou-unsigned-1.3.3-16.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.sha }}
+          path: |
+            ios/TingYou/build.log
+            ios/TingYou/test.log
+            ios/TingYou/archive.log
+          if-no-files-found: warn
+          retention-days: 7

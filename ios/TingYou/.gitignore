@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+.swiftpm/
+.build/
+
+# Generated
+TingYou.xcodeproj/
+build.log
+test.log
+archive.log
+artifact/
+
+# Python (generator)
+__pycache__/
+*.pyc
+generate_ios.py

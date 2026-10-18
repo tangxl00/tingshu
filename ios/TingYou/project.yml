@@ -1,0 +1,60 @@
+name: TingYou
+targets:
+  TingYou:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: TingYou
+        excludes:
+          - "Resources/**"
+    resources:
+      - path: TingYou/Resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tingyou.app.ios
+        MARKETING_VERSION: 1.3.3
+        CURRENT_PROJECT_VERSION: 16
+        INFOPLIST_FILE: TingYou/Info.plist
+        SWIFT_VERSION: "6.0"
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_IDENTITY: ""
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGNING_ALLOWED: NO
+    info:
+      path: TingYou/Info.plist
+      properties:
+        CFBundleShortVersionString: "1.3.3"
+        CFBundleVersion: "16"
+    dependencies: []
+  TingYouTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: TingYouTests
+    dependencies:
+      - target: TingYou
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tingyou.app.ios.tests
+        SWIFT_VERSION: "6.0"
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
+schemes:
+  TingYou:
+    build:
+      targets:
+        TingYou: all
+    test:
+      targets:
+        - name: TingYouTests
+          parallelizable: true
+      commandLineArguments:
+        "-UITesting": true
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
