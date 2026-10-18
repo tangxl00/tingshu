@@ -40,8 +40,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tingyou.app.ios.tests
         SWIFT_VERSION: "5.0"
-        TEST_HOST: ""
-        BUNDLE_LOADER: ""
 schemes:
   TingYou:
     build:
