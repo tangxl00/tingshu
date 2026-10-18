@@ -70,7 +70,7 @@ enum SourceRegistry {
 
     static func configOf(src: String) -> MsrcSourceConfig? { msrcSources[src] }
 
-    static func allImgHosts: Set<String> {
+    static var allImgHosts: Set<String> {
         Set(msrcSources.values.flatMap { $0.imgHosts })
     }
 
