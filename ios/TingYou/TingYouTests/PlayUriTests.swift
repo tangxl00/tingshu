@@ -46,7 +46,13 @@ final class PlayUriTests: XCTestCase {
 
     func testGarbageUrlIsRejected() {
         XCTAssertNil(URL(string: ""))
-        XCTAssertNil(URL(string: "not a url"))
-        XCTAssertNil(URL(string: "http://exa mple.com"))
+        // Space-containing garbage: strict parsers reject (nil); the lenient
+        // iOS 17+ Foundation parser percent-encodes the space instead. Either
+        // way, the input must never surface as-is or with a space-bearing host.
+        for raw in ["not a url", "http://exa mple.com"] {
+            guard let url = URL(string: raw) else { continue }
+            XCTAssertNotEqual(url.absoluteString, raw)
+            XCTAssertNil(url.host?.range(of: " "))
+        }
     }
 }
