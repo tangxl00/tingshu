@@ -142,7 +142,7 @@ final class MsrcAdapter: Sendable {
 final class PaidChapterRegistry: @unchecked Sendable {
     private var keys = Set<String>()
     private let lock = NSLock()
-    private init() {}
+    init() {}
     static let shared = PaidChapterRegistry()
     func contains(_ key: String) -> Bool {
         lock.lock(); defer { lock.unlock() }

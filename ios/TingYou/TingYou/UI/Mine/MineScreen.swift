@@ -21,7 +21,7 @@ struct MineScreen: View {
                             .foregroundStyle(.secondary)
                     }
                     NavigationLink("我的书架") {
-                        ShelfScreen()
+                        ShelfScreen(onOpenPlayer: {})
                     }
                 }
 
@@ -80,7 +80,7 @@ extension View {
         HStack {
             self
             Spacer()
-            if show { Image(systemName: "checkmark").foregroundStyle(.accent) }
+            if show { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
         }
     }
 }

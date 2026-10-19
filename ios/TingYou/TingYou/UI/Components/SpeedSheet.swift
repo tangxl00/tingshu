@@ -43,7 +43,7 @@ struct ChapterListSheet: View {
                 } label: {
                     HStack {
                         Text("\(chapters[i].index). \(chapters[i].title)")
-                            .foregroundStyle(i == currentIdx ? .accentColor : .primary)
+                            .foregroundStyle(i == currentIdx ? Color.accentColor : .primary)
                         Spacer()
                         if i == currentIdx {
                             Image(systemName: "waveform")
