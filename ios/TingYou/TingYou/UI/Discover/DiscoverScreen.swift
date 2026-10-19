@@ -26,7 +26,11 @@ struct DiscoverScreen: View {
 
                 List {
                     ForEach(viewModel.albums) { album in
-                        AlbumRow(album: album)
+                        NavigationLink {
+                            AlbumScreen(album: album)
+                        } label: {
+                            AlbumRow(album: album)
+                        }
                     }
                     if viewModel.hasMore {
                         ProgressView()
