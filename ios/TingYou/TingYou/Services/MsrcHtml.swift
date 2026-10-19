@@ -72,10 +72,8 @@ enum MsrcHtml {
 
     /// encodeURI 语义（路径段）：表单语义空格→+ 需还原为 %20
     static func encodeUriComponent(_ s: String) -> String {
-        // 必须用 ASCII 白名单：CharacterSet.alphanumerics 含表意字符（中日韩），
-        // 会导致中文不被百分号编码 —— 与安卓 URLEncoder.encode(s, "UTF-8") 语义不符。
-        var allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
-        allowed.insert(charactersIn: "-_.!~*'()+")
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-_.!~*'()")
         return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
     }
 

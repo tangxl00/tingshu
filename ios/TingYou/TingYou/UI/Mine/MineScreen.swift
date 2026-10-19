@@ -41,7 +41,7 @@ struct MineScreen: View {
                     HStack {
                         Text("版本")
                         Spacer()
-                        Text("1.3.3 (16)")
+                        Text("1.3.3 (17)")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -80,7 +80,7 @@ extension View {
         HStack {
             self
             Spacer()
-            if show { Image(systemName: "checkmark").foregroundStyle(.tint) }
+            if show { Image(systemName: "checkmark").foregroundStyle(.accent) }
         }
     }
 }

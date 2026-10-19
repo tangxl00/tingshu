@@ -118,9 +118,9 @@ jobs:
           mkdir -p artifact/Payload
           cp -R "$APP_PATH" artifact/Payload/TingYou.app
           cd artifact
-          zip -qr TingYou-unsigned-1.3.3-16.ipa Payload
+          zip -qr TingYou-unsigned-1.3.3-17.ipa Payload
           ls -la
-          du -h TingYou-unsigned-1.3.3-16.ipa
+          du -h TingYou-unsigned-1.3.3-17.ipa
 
       - name: Verify Info.plist keys in archive (anti-drift assertions)
         if: success()
@@ -169,7 +169,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: TingYou-unsigned-${{ github.sha }}
-          path: ios/TingYou/artifact/TingYou-unsigned-1.3.3-16.ipa
+          path: ios/TingYou/artifact/TingYou-unsigned-1.3.3-17.ipa
           if-no-files-found: error
           retention-days: 14
 

@@ -27,32 +27,21 @@ final class PlayUriTests: XCTestCase {
 
     func testNonAsciiAudioUrlPercentEncoded() {
         let raw = "https://oss-links.guoguo.org.cn/医手遮天/第01集.mp3"
-        // iOS 17 Foundation URL parser percent-encodes non-ASCII automatically
-        guard let url = URL(string: raw) else {
-            // strict parser rejects: percent-encode then retry
-            let enc = raw.addingPercentEncoding(withAllowedCharacters: CharacterSet.urlPathAllowed.union(CharacterSet(charactersIn: "://.")))!
-            let url2 = URL(string: enc)
-            XCTAssertNotNil(url2)
-            XCTAssertEqual(url2?.host, "oss-links.guoguo.org.cn")
-            return
-        }
-        XCTAssertEqual(url.host, "oss-links.guoguo.org.cn")
-        // Serialized form must be ASCII-only
-        let normalized = url.absoluteString
+        let url = URL(string: raw)
+        XCTAssertNotNil(url)
+        let normalized = url!.absoluteString
         XCTAssertTrue(normalized.allSatisfy { $0.isASCII })
-        // Idempotent re-parse
+        XCTAssertEqual(url!.host, "oss-links.guoguo.org.cn")
+        // Path segment decoded back to Chinese
+        let seg0 = url!.pathComponents.dropFirst().first!
+        XCTAssertEqual(seg0, "%E5%8C%BB%E6%89%8B%E9%81%AE%E5%A4%A9")
+        // Idempotent
         XCTAssertEqual(URL(string: normalized)!.absoluteString, normalized)
     }
 
     func testGarbageUrlIsRejected() {
+        XCTAssertNil(URL(string: "harness://no-slash"))
         XCTAssertNil(URL(string: ""))
-        // Space-containing garbage: strict parsers reject (nil); the lenient
-        // iOS 17+ Foundation parser percent-encodes the space instead. Either
-        // way, the input must never surface as-is or with a space-bearing host.
-        for raw in ["not a url", "http://exa mple.com"] {
-            guard let url = URL(string: raw) else { continue }
-            XCTAssertNotEqual(url.absoluteString, raw)
-            XCTAssertNil(url.host?.range(of: " "))
-        }
+        XCTAssertNil(URL(string: "not a url"))
     }
 }

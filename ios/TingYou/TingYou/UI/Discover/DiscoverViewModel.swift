@@ -15,7 +15,8 @@ final class DiscoverViewModel {
     /// 幂等注入共享客户端（AppContainer.apiClient）；未注入前不发起请求。
     func attach(apiClient: APIClient) {
         guard repo == nil else { return }
-        repo = AlbumRepository(apiClient: apiClient)
+        repo = AlbumRepository(apiClient: apiClient,
+                               modelContext: ModelContext(.init(schema: Schema([]))))
     }
 
     func loadRank(section: String) async {

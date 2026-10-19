@@ -64,39 +64,30 @@ struct AlbumScreen: View {
         .navigationTitle(album.title)
         .navigationBarTitleDisplayMode(.large)
         .task {
-            DiagLog.mark(self, "进入专辑详情: src=\(album.source) albumId=\(album.albumId) title=\(album.title)")
             await loadChapters()
         }
     }
 
     /// 多源章节加载（P0-3 / P1-10：复用容器内 SourceRouter，不再自建 APIClient）
     private func loadChapters() async {
-        guard let router = container?.sourceRouter else {
-            DiagLog.mark(self, "AppContainer 缺失，无法加载章节")
-            isLoading = false
-            return
-        }
+        guard let router = container?.sourceRouter else { return }
         do {
             chapters = try await router.chapters(
                 src: album.source,
                 albumId: album.albumId,
                 detailPath: album.detailPath)
-            DiagLog.mark(self, "章节加载成功: \(chapters.count) 集 (src=\(album.source))")
         } catch let error as AntibotException {
-            DiagLog.mark(self, "章节加载被反爬拦截 (src=\(album.source)): \(error)")
             loadError = "悦听反爬拦截：请在搜索页完成人工验证后重试"
         } catch let error as PaidChapterException {
-            DiagLog.mark(self, "章节为付费内容被拦截 (src=\(album.source)): \(error)")
             loadError = "该专辑为付费内容，已拦截"
         } catch {
-            DiagLog.mark(self, "章节加载失败 (src=\(album.source)): \(error.localizedDescription)")
             loadError = "章节加载失败：\(error.localizedDescription)"
+            print("Album load error (\(album.source)): \(error)")
         }
         isLoading = false
     }
 
     private func playChapter(_ ch: Chapter) {
-        DiagLog.mark(self, "点击播放: 第\(ch.index)章「\(ch.title)」")
         container?.playbackManager.playQueue(
             album: album,
             chapters: chapters,

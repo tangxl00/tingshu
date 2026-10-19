@@ -93,7 +93,7 @@ final class DtoMappingTests: XCTestCase {
     }
 
     func testPlayResponseSignedUrl() throws {
-        let payload = #"{"play_url":"https://file.hgeuz.cn/stream/abc?ts=1791590226&sign=3c938250"}"#.data(using: .utf8)!
+        let payload = """{"play_url":"https://file.hgeuz.cn/stream/abc?ts=1791590226&sign=3c938250"}""".data(using: .utf8)!
         let resp = try decoder.decode(PlayResponse.self, from: payload)
         XCTAssertTrue(resp.playUrl?.hasPrefix("https://") ?? false)
         XCTAssertTrue(resp.playUrl?.contains("sign=") ?? false)

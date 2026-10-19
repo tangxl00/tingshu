@@ -1,93 +1,110 @@
 import SwiftUI
+import UIKit
 
 struct PlayerScreen: View {
-    @State private var viewModel = PlayerViewModel()
     @Environment(\.appContainer) private var container
     @Environment(\.dismiss) private var dismiss
+    @State private var showSpeedSheet = false
+    @State private var showChapters = false
+    @State private var showSleepTimer = false
+    @State private var showSettings = false
+    @State private var isFavorite = false
+
+    private var pm: PlaybackManager? { container?.playbackManager }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
-                CoverImage(url: viewModel.coverUrl, size: 280)
-                    .padding(.top)
+            ScrollView {
+                VStack(spacing: 16) {
+                    CoverImage(url: pm?.coverUrl, size: 280)
+                        .padding(.top)
 
-                VStack(spacing: 4) {
-                    Text(viewModel.albumTitle).font(.headline).lineLimit(1)
-                    Text(viewModel.chapterTitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                }
+                    VStack(spacing: 4) {
+                        Text(pm?.currentAlbumTitle ?? "").font(.headline).lineLimit(1)
+                        Text(pm?.currentChapterTitle ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                    }
 
-                DotProgress(
-                    value: viewModel.durationMs > 0 ? Double(viewModel.currentPositionMs) / Double(viewModel.durationMs) : 0,
-                    onSeek: { pct in
-                        viewModel.seekTo(pct: pct)
-                    }
-                )
-                .frame(height: 40)
-                .padding(.horizontal)
+                    DotProgress(
+                        value: (pm?.durationMs ?? 0) > 0 ? Double(pm?.currentPositionMs ?? 0) / Double(pm!.durationMs) : 0,
+                        onSeek: { pct in
+                            let pos = Int64(Double(pm?.durationMs ?? 0) * pct)
+                            pm?.seek(to: pos)
+                        }
+                    )
+                    .frame(height: 40)
+                    .padding(.horizontal)
 
-                HStack {
-                    Text(formatMs(viewModel.currentPositionMs)).font(.caption).monospacedDigit()
-                    Spacer()
-                    Text(formatMs(viewModel.durationMs)).font(.caption).monospacedDigit()
-                }
-                .padding(.horizontal)
+                    HStack {
+                        Text(formatMs(pm?.currentPositionMs ?? 0)).font(.caption).monospacedDigit()
+                        Spacer()
+                        Text(formatMs(pm?.durationMs ?? 0)).font(.caption).monospacedDigit()
+                    }
+                    .padding(.horizontal)
 
-                HStack(spacing: 40) {
-                    Button { viewModel.previous() } label: {
-                        Image(systemName: "backward.end.fill").font(.title2)
-                    }
-                    Button { viewModel.togglePlay() } label: {
-                        Image(systemName: viewModel.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                            .font(.system(size: 64))
-                    }
-                    Button { viewModel.next() } label: {
-                        Image(systemName: "forward.end.fill").font(.title2)
-                    }
-                }
-                .foregroundStyle(.primary)
-
-                HStack(spacing: 32) {
-                    Button { viewModel.seekRelative(-15000) } label: {
-                        Image(systemName: "gobackward.15").font(.title3)
-                    }
-                    Button { viewModel.showSpeedSheet = true } label: {
-                        Text("\(String(format: "%.1f", viewModel.speed))x").font(.caption).monospacedDigit()
-                    }
-                    Button { viewModel.seekRelative(15000) } label: {
-                        Image(systemName: "goforward.15").font(.title3)
-                    }
-                }
-                .foregroundStyle(.secondary)
-
-                HStack(spacing: 32) {
-                    Button { viewModel.showChapters = true } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: "list.bullet").font(.title3)
-                            Text("章节").font(.caption2)
+                    HStack(spacing: 40) {
+                        Button { pm?.previousChapter() } label: {
+                            Image(systemName: "backward.end.fill").font(.title2)
+                        }
+                        Button { pm?.togglePlayPause() } label: {
+                            Image(systemName: (pm?.isPlaying ?? false) ? "pause.circle.fill" : "play.circle.fill")
+                                .font(.system(size: 64))
+                        }
+                        Button { pm?.nextChapter() } label: {
+                            Image(systemName: "forward.end.fill").font(.title2)
                         }
                     }
-                    Button { viewModel.showSleepTimer = true } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: "moon.fill").font(.title3)
-                            Text("定时").font(.caption2)
-                        }
-                    }
-                    Button { viewModel.toggleFavorite() } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: viewModel.isFavorite ? "heart.fill" : "heart").font(.title3)
-                            Text("收藏").font(.caption2)
-                        }
-                    }
-                    Button { viewModel.showSettings = true } label: {
-                        VStack(spacing: 2) {
-                            Image(systemName: "gearshape").font(.title3)
-                            Text("设置").font(.caption2)
-                        }
-                    }
-                }
-                .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary)
 
-                Spacer(minLength: 20)
+                    HStack(spacing: 32) {
+                        Button { pm?.seekRelative(-15000) } label: {
+                            Image(systemName: "gobackward.15").font(.title3)
+                        }
+                        Button { showSpeedSheet = true } label: {
+                            Text("\(String(format: "%.1f", pm?.speed ?? 1.0))x")
+                                .font(.caption).monospacedDigit()
+                        }
+                        Button { pm?.seekRelative(15000) } label: {
+                            Image(systemName: "goforward.15").font(.title3)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+
+                    HStack(spacing: 32) {
+                        Button { showChapters = true } label: {
+                            VStack(spacing: 2) {
+                                Image(systemName: "list.bullet").font(.title3)
+                                Text("章节").font(.caption2)
+                            }
+                        }
+                        Button { showSleepTimer = true } label: {
+                            VStack(spacing: 2) {
+                                Image(systemName: "moon.fill").font(.title3)
+                                Text("定时").font(.caption2)
+                            }
+                        }
+                        Button { isFavorite.toggle() } label: {
+                            VStack(spacing: 2) {
+                                Image(systemName: isFavorite ? "heart.fill" : "heart").font(.title3)
+                                Text("收藏").font(.caption2)
+                            }
+                        }
+                        Button { showSettings = true } label: {
+                            VStack(spacing: 2) {
+                                Image(systemName: "gearshape").font(.title3)
+                                Text("设置").font(.caption2)
+                            }
+                        }
+                        Button { shareAlbum() } label: {
+                            VStack(spacing: 2) {
+                                Image(systemName: "square.and.arrow.up").font(.title3)
+                                Text("分享").font(.caption2)
+                            }
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+
+                    Spacer(minLength: 20)
+                }
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -96,12 +113,20 @@ struct PlayerScreen: View {
                     Button("完成") { dismiss() }
                 }
             }
-            .sheet(isPresented: $viewModel.showSpeedSheet) {
-                SpeedSheet(speed: $viewModel.speed) { s in viewModel.setSpeed(s) }
+            .sheet(isPresented: $showSpeedSheet) {
+                SpeedSheet(speed: Binding(
+                    get: { pm?.speed ?? 1.0 },
+                    set: { pm?.speed = $0 }
+                )) { _ in }
             }
-            .sheet(isPresented: $viewModel.showChapters) {
-                ChapterListSheet(chapters: viewModel.chapters, currentIdx: viewModel.currentChapterIdx) { idx in
-                    viewModel.playChapter(index: idx)
+            .sheet(isPresented: $showChapters) {
+                ChapterListSheet(
+                    chapters: pm?.currentChapters ?? [],
+                    currentIdx: pm?.currentChapters.firstIndex(where: {
+                        $0.title == (pm?.currentChapterTitle ?? "")
+                    }) ?? 0
+                ) { idx in
+                    pm?.playChapter(at: idx)
                 }
             }
         }
@@ -112,5 +137,14 @@ struct PlayerScreen: View {
         let m = sec / 60
         let s = sec % 60
         return String(format: "%02d:%02d", m, s)
+    }
+
+    private func shareAlbum() {
+        let text = "我在听《\(pm?.currentAlbumTitle ?? "")》，推荐给你"
+        let av = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootVC = windowScene.windows.first?.rootViewController {
+            rootVC.present(av, animated: true)
+        }
     }
 }
