@@ -27,6 +27,19 @@ targets:
       properties:
         CFBundleShortVersionString: "1.3.3"
         CFBundleVersion: "16"
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UIBackgroundModes:
+          - audio
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+        UIRequiredDeviceCapabilities:
+          - arm64
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
     dependencies: []
   TingYouTests:
     type: bundle.unit-test

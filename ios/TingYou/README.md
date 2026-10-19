@@ -1,6 +1,6 @@
 # 听书 iOS（v1.3.3 · com.tingyou.app.ios）
 
-iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐。沙箱内仅完成源码编写，编译与测试由 GitHub Actions macOS runner 完成。
+iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐。沙箱内仅完成源码编写，编译与测试由 GitHub Actions macOS runner 执行。
 
 ## 1. 关键信息
 
@@ -11,28 +11,28 @@ iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐
 - **签名状态**：**未签名**——本仓库与 CI 产物均不签名，需用户自行用爱思助手 / AltStore / Sideloadly 免费自签安装（7 天需重签）
 - **ATS**：全禁明文 HTTP（`NSAllowsArbitraryLoads = false`）
 - **后台播放**：`UIBackgroundModes = audio`
-- **证书 pinning**：27 张锚点证书通过 URLSession delegate 强制校验（不依赖系统信任库）
+- **证书 pinning**：27 张锚点证书通过 URLSession delegate 强制校验（不依赖系统信任库）+ 域名后缀白名单 fail-closed（见 §6）
 
 ## 2. 目录结构
 
 ```
 ios/TingYou/
-├── project.yml                     # xcodegen 配置（CI 中生成 .xcodeproj）
+├── project.yml                     # xcodegen 配置（CI 中生成 .xcodeproj；info.properties 显式声明 plist 全部关键键，防 xcodegen 重写丢键）
 ├── README.md
-├── .github/workflows/ios.yml       # GitHub Actions macOS 构建/测试流水线
+├── .github/workflows/ios.yml       # GitHub Actions macOS 构建/测试/archive/打包 + plist 关键键验证
 ├── .gitignore
 ├── TingYou/                        # 主应用源码
 │   ├── Info.plist
-│   ├── App/                        # 入口、依赖容器
+│   ├── App/                        # 入口、依赖容器（AppContainer 统一持有 SourceRouter / KeychainTokenStore / PlaybackManager）
 │   ├── Models/                     # 领域模型（Album / Chapter / Filters）
 │   ├── Data/                       # SwiftData 实体 + DataStore（UserDefaults/Keychain）
-│   ├── Network/                    # URLSession + 27张锚点证书 + TingYou API DTO
-│   ├── Playback/                   # AVPlayer + 锁屏控制 + 睡眠定时 + 跳过设置
-│   ├── Services/                   # 源注册表 / 仓库 / 路由 / 导入组织器
-│   ├── UI/                         # SwiftUI 视图
+│   ├── Network/                    # APIClient（502/503/504 重试）+ 27张锚点证书 pinning + 域名白名单 + TingYou API DTO
+│   ├── Playback/                   # AVPlayer + 锁屏控制 + 睡眠定时 + 跳过设置 + AVAssetResourceLoaderDelegate 直链解析
+│   ├── Services/                   # SourceRegistry / SourceRouter / PlaybackRepository / MsrcHtml / MsrcAdapter / YtysxsAdapter / MekuiAdapter / KeychainTokenStore / 导入组织器
+│   ├── UI/                         # SwiftUI 视图（含 YtysxsVerifyWebView 反爬人工验证容器）
 │   ├── Utils/                      # 工具（分页 / 诊断日志 / 扩展）
 │   └── Resources/Certs/            # 27 张 .pem 锚点证书
-└── TingYouTests/                   # XCTest（移植自安卓 276 条 @Test 中可平台无关化部分）
+└── TingYouTests/                   # XCTest（91 条测试函数，9 个测试类，见 §8）
 ```
 
 ## 3. 本地构建
@@ -46,7 +46,7 @@ ios/TingYou/
 
 ```bash
 cd ios/TingYou
-xcodegen generate               # 生成 TingYou.xcodeproj
+xcodegen generate               # 生成 TingYou.xcodeproj（会按 project.yml 的 info.properties 重写 Info.plist）
 xcodebuild -project TingYou.xcodeproj \
            -scheme TingYou \
            -destination 'generic/platform=iOS' \
@@ -77,9 +77,10 @@ CI 步骤：
 1. macOS-14 runner + Xcode 15.4
 2. `xcodegen generate` 生成 `.xcodeproj`
 3. `xcodebuild build` 编译
-4. `xcodebuild test` 跑 XCTest
+4. `xcodebuild test` 跑 XCTest（91 条）
 5. `xcodebuild archive` 产出未签名 `.xcarchive`
-6. 把 `TingYou.app` 打包为 zip，作为 artifact 上传
+6. **`plutil` 验证 archive 产物 Info.plist**：`UIBackgroundModes` 必含 `audio`、`NSAppTransportSecurity.NSAllowsArbitraryLoads` 必须为 `false`，缺失即 CI 失败（防 plist 漂移回归）
+7. 把 `TingYou.app` 打包为 zip，作为 artifact 上传
 
 ## 5. 自签安装（iPhone 用户）
 
@@ -93,7 +94,7 @@ CI 步骤：
 
 ### 步骤
 
-1. **下载未签名 .ipa 或 .app**
+1. **下载未签名 .app**
    - 进入本仓库的 GitHub Actions 页面，选择最近一次绿构建
    - 在页面底部 Artifacts 区下载 `TingYou-unsigned-<sha>.zip`
    - 解压得到 `TingYou.app`
@@ -123,9 +124,16 @@ CI 步骤：
 2. AltStore → "我的应用" → 右下角 "+" → 选中 .ipa
 3. AltStore 会在签名过期前自动续签（需保持 iPhone 与电脑在同一 WiFi）
 
-## 6. 27 张锚点证书体系
+## 6. 证书 pinning 与域名白名单
 
 iOS 没有 Android network-security-config 等价物，本项目通过 `URLSession` 的 `urlSession(_:didReceive:completionHandler:)` 实现证书 pinning。锚点证书打包在 `TingYou/Resources/Certs/*.pem`，运行时由 `PinningURLSessionDelegate` 加载到 `[SecCertificate]` 数组，并对所有出站请求调用 `SecTrustEvaluateWithError`。
+
+在此之上叠加**域名白名单 fail-closed**（对等安卓 `includeSubdomains` 语义，`PinnedDomainAllowlist`）：
+
+- **后缀域**（匹配自身与任意子域）：`tingyou.fm`、`tingyou8.vip`、`guoguo.org.cn`、`kuwo.cn`、`ctyun.cn`
+- **精确域**（仅匹配自身）：`file.hgeuz.cn`、`m.ting15.com`、`www.ting08.com`、`www.ytysxs.com`、`mp3.ytysxs.top`、`m.mekui.com`、`api.mekui.com`、`api.aikeu.com`、`mp3.aikeu.com`、`shuyinfm.oss-cn-hangzhou.aliyuncs.com`、`imge.kugou.com`
+
+白名单之外的 host 直接取消连接（`cancelAuthenticationChallenge`），大小写不敏感；后缀匹配要求域名边界（`eviltingyou.fm` 不匹配 `.tingyou.fm`）。清单与安卓 `network_security_config.xml` 一一对齐，并由 `RetryAndPinningTests` 中 5 条白名单测试锁定。
 
 锚点对应所有已知出站域的完整链（中间级 + 根级），覆盖：
 - tingyou.fm / tingyou8.vip（听友FM）
@@ -135,51 +143,52 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 - guoguo.org.cn 音频直链后缀
 - aliyuncs.com（OSS 封面）
 
-锚点集与安卓版 `network_security_config.xml` 一一对齐（v1.3.3 取证结论）。
-
 ## 7. 功能对照（与安卓 v1.3.3）
 
 | # | 功能 | 状态 | 说明 |
 |---|------|------|------|
 | a | 书架（含菜单） | ✅ | SwiftUI `ShelfScreen`，收藏/历史/导入分 Tab |
-| b | 发现页 | ✅ | `DiscoverScreen`，分类/排行/筛选 |
+| b | 发现页 | ✅ | `DiscoverScreen`，分类/排行/筛选；复用容器内 `APIClient`（`DiscoverViewModel.attach` 幂等注入） |
 | c | 我的页 | ✅ | `MineScreen`，含音源管理入口、听书时长统计、设置 |
-| d | 播放器 | ✅ | `AVPlayer` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，后台/锁屏控制/倍速/进度/睡眠定时/片头片尾跳过 |
-| e | 音源管理 | ✅ | tingyou / ting15 / ting08 / 悦听有声书 / 书音FM，按安卓 `SourceRegistry` 1:1 移植 |
-| f | 悦听反爬 | ✅ | `WKWebView` 渲染 + be_captcha_token 24h 持久化（Keychain） |
-| g | 502/503/504 一次重试 | ✅ | `APIClient` 中所有 `URLSession.data(for:)` 调用外层包装重试 |
+| d | 播放器 | ✅ | `AVPlayer` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，后台/锁屏控制/倍速/进度/睡眠定时/片头片尾跳过；播放直链经 `AVAssetResourceLoaderDelegate` 接管 `tingyou-chapter://` 占位 URI 惰性解析（`PlaybackRepository` 按源路由真实地址），不再把占位 URI 直接喂给 `AVPlayerItem` |
+| e | 多音源 | ✅ | 搜索/详情/章节/播放四链路全部真实路由：tingyou（JSON API）、ting15 / ting08（`MsrcAdapter`：HTML 解析 + 两步 token，付费 -1 打标、频控 -2 退避 [3s, 8s]）、悦听（`YtysxsAdapter`：WordPress + AudioIgniter，直链白名单自检）、书音FM（`MekuiAdapter`：ecmsapi + wapseries MD5 签名，黄金值测试锁定）；`AlbumScreen` 章节列表按 `album.source` 路由加载并支持点击播放 |
+| f | 悦听反爬 | ✅ | `YtysxsVerifyWebView`（WKWebView 容器）人工验证流程完整落地：命中反爬特征抛 `AntibotException` → 弹验证页 → `httpCookieStore` 捕获 `be_captcha_token` → `KeychainTokenStore`（kSecClassGenericPassword，SecItemAdd/CopyMatching/Delete）持久化 24h → 验证完成自动重试原搜索；后续请求自动携带 Cookie。不自动破解验证码 |
+| g | 502/503/504 重试 | ✅ | `APIClient.execute` 统一重试入口：Msrc 1 次 / 1.5s（与安卓 MsrcHttp 一致）、Mekui 2 次 / [2.5s, 8s]（与安卓 MekuiHttp 一致）；非 200 且不可重试直接失败。端到端行为由 stub URLProtocol 测试锁定 |
 | h | 导入功能 | ✅ | m3u / 直链 / 本地文件路径，https-only 校验，自然排序，书名建议 |
+| i | 音源开关持久化 | ✅ | `SourceManageScreen` 开关写入 `SourceEnabledStore`（UserDefaults `source_enabled_` 前缀），重启后保持 |
 
 ## 8. 测试对账
 
 - **安卓基线**：276 条 `@Test`（43 个测试类）
-- **iOS 已移植**：57 条（4 个测试类，平台无关化）
-  - `SourceRegistryTests`：11 条（白名单 / 域名放行 / 注册表查找）
-  - `PlayUriTests`：5 条（占位 URI 构建 / 解析 / 旧 URI 兼容 / 非 ASCII URL 归一化）
+- **iOS 现有**：**91 条测试函数，9 个测试类**（与 `TingYouTests/*.swift` 内 `func test` 计数一致，可 grep 核对）：
   - `DtoMappingTests`：8 条（snake_case JSON → DTO → 领域模型）
-  - `ImportOrganizerTests`：16 条（自然排序 / 章节标题 / 书名建议 / 直链 / m3u 解析）
-  - 另有未单独列类的 DTO 容错 / 自然排序 / 音频扩展名白名单共 ~17 条细分 case
+  - `ImportOrganizerTests`：14 条（自然排序 / 章节标题 / 书名建议 / 直链 / m3u 解析）
+  - `KeychainTokenStoreTests`：9 条（token 过期边界纯函数 / Keychain 存取闭环 / 过期自清理 / Cookie 头格式 / 24h 默认 Max-Age）
+  - `MekuiAdapterTests`：8 条（wapseries MD5 签名黄金值 ×2 / 详情解析黄金样本 / 付费打标 / 缺章节降级）
+  - `MsrcHtmlTests`：16 条（ting15 / ting08 搜索解析黄金样本 / 详情解析 / 两步 token 播放页 meta / 播放响应 BOM·status 双形态·-1 付费·-2 频控 / encodeUriComponent %20 语义）
+  - `PlayUriTests`：5 条（占位 URI 构建 / 解析 / 旧 URI 兼容 / 非 ASCII URL 归一化）
+  - `RetryAndPinningTests`：15 条（可重试状态码判定 / 安卓基线重试参数 / stub URLProtocol 端到端重试 3 条 / 域名白名单后缀·精确·大小写·fail-closed 5 条）
+  - `SourceRegistryTests`：6 条（源注册表 / fetch·img·audio 白名单互检）
+  - `YtysxsAdapterTests`：10 条（反爬特征全关键词 / 搜索·详情·曲目解析黄金样本 / 直链白名单自检）
 
 - **未移植**（典型原因）：
   - UI 布局测试（`ShelfLayoutTest`、`PlayerLayoutSpecTest` 等）—— iOS 用 SwiftUI，UI 测试需用 XCUITest 重建，属另一类工程；
   - Media3 / ExoPlayer 集成测试（`PlayerNotificationTest` 等）—— iOS 走 AVPlayer，平台 API 完全不同；
   - Room 迁移测试（`MigrationV1V2Test` 等）—— iOS 走 SwiftData，无版本迁移基线；
-  - Android `network_security_config` 的 DOM/锚点对账测试（`CertAnchorTest`、`MsrcCertAnchorTest`）—— iOS 走 `URLSession` delegate + `SecTrust`，验证模型不同；本项目以 `PinningURLSessionDelegate` 加载 27 张 PEM 实现等价功能，由人工/集成测试复核证书清单与 `network_security_config.xml` 字段一致；
-  - NetDiag / TlsDiag 端到端测试（`NetDiagTest`、`TlsDiagTest`）——依赖 Android TLS 栈与设备 API，iOS 无对应；运行时仍保留诊断日志（`DiagLog.swift`），失败路径打印对端链信息。
+  - Android `network_security_config` 的 DOM/锚点对账测试（`CertAnchorTest`、`MsrcCertAnchorTest`）—— iOS 走 `URLSession` delegate + `SecTrust`，验证模型不同；本项目以 `PinningURLSessionDelegate` 加载 27 张 PEM 实现等价功能，域名清单由 `RetryAndPinningTests` 锁定，证书清单与 `network_security_config.xml` 的一致性由人工复核；
+  - NetDiag / TlsDiag 端到端测试（`NetDiagTest`、`TlsDiagTest`）——依赖 Android TLS 栈与设备 API，iOS 无对应；运行时仍保留诊断日志（`DiagLog.swift`）。
 
-- **iOS 新增**（无安卓基线）：
-  - 27 张 PEM 资源能否被 `Bundle.main.url(forResource:)` 成功定位（建议在 CI 中加 smoke test）；
-  - `PinningURLSessionDelegate` 的 chain-only-no-system-only 行为（建议在 CI 中用 mock server 加 XCTest UI 集成测试）。
+- **测试执行口径**：以上 91 条测试全部在 CI（macOS runner）的 `xcodebuild test` 步骤执行；**不包含**对真实音源站点的网络调用（全部为离线纯函数 / stub 注入），真实站点连通性与反爬时效属运行时人工验收范围，不在自动化测试承诺内。
 
 ## 9. 已知缺口与风险
 
 1. **未签名**：所有产物无 Apple Developer 签名，每 7 天需用户自签重装。
-2. **悦听反爬 UI**：当前为占位 `WKWebView` 容器，未接 be_captcha_token 注入的完整 UI 流程；后端 token 持久化已就位（Keychain）。
-3. **音频缓存**：安卓版用 ExoPlayer `CacheDataSource` 实现磁盘预缓存，iOS 暂未实现磁盘缓存（`AVPlayerItem` 每次重新下载），后续可加 `AVAssetResourceLoader` 拦截。
-4. **听书时长统计**：已实现基础累加，缺少与安卓一致的"日活/周活"维度。
-5. **网络重试**：仅 502/503/504 一次重试，连接超时未重试（与安卓保持一致）。
-6. **悦听 Cookie 同步**：WKWebView 内的 Cookie 同步到 URLSession 的 `HTTPCookieStorage` 已落代码，未在 CI 中做端到端验证。
-7. **SwiftData 迁移**：当前未声明版本化 `VersionedSchema`，后续需要按安卓 v1→v4 的迁移路径补全。
+2. **音频缓存**：安卓版用 ExoPlayer `CacheDataSource` 实现磁盘预缓存，iOS 暂未实现磁盘缓存（`AVPlayerItem` 每次重新下载）。
+3. **听书时长统计**：已实现基础累加，缺少与安卓一致的"日活/周活"维度。
+4. **重试范围**：仅 502/503/504 状态码重试（Msrc/Mekui 各自基线），连接超时等传输层错误不重试（与安卓一致）。
+5. **悦听反爬依赖人工验证**：验证码由用户在 WKWebView 内人工完成（设计如此，不自动破解）；站点验证页结构变化时需更新 `YtysxsVerifyWebView` 的捕获逻辑。
+6. **SwiftData 迁移**：当前未声明版本化 `VersionedSchema`，后续需要按安卓 v1→v4 的迁移路径补全。
+7. **多源付费内容**：ting15/ting08/-1、mekui ispass/积分等付费章节一律拦截并打标（`PaidChapterRegistry`），不做任何绕过。
 
 ## 10. 许可证
 

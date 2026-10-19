@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct DiscoverScreen: View {
+    @Environment(\.appContainer) private var appContainer
     @State private var viewModel = DiscoverViewModel()
     @State private var selectedSection = "recommend"
     let sections = [("recommend","推荐"),("new","最新"),("hot","热门"),("serial","连载"),("story","评书")]
@@ -38,6 +39,10 @@ struct DiscoverScreen: View {
             }
             .navigationTitle("发现")
             .task {
+                // P1：注入 AppContainer 的共享 APIClient（幂等），不再每请求新建
+                if let container = appContainer {
+                    viewModel.attach(apiClient: container.apiClient)
+                }
                 await viewModel.loadRank(section: selectedSection)
             }
         }

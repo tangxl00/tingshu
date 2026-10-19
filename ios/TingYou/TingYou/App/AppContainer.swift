@@ -16,6 +16,10 @@ final class AppContainer {
     let skipSettingsStore: SkipSettingsStore
     let sourceEnabledStore: SourceEnabledStore
     let shelfLayoutStore: ShelfLayoutStore
+    /// 悦听反爬 be_captcha_token 的 Keychain 存储（P0-4）：
+    /// SearchScreen 验证页与 SourceRouter 内的 YtysxsAdapter 共享同一实例，
+    /// 人工验证完成后适配器立即带上新 token 重试。
+    let ytysxsCookieStore: KeychainTokenStore
 
     init() {
         let schema = Schema([
@@ -28,11 +32,17 @@ final class AppContainer {
         modelContainer = try! ModelContainer(for: schema, configurations: [config])
 
         apiClient = APIClient()
-        playbackManager = PlaybackManager()
 
         let ctx = modelContainer.mainContext
         albumRepository = AlbumRepository(apiClient: apiClient, modelContext: ctx)
-        sourceRouter = SourceRouter(apiClient: apiClient)
+        ytysxsCookieStore = KeychainTokenStore()
+        sourceRouter = SourceRouter(
+            apiClient: apiClient,
+            albumRepository: albumRepository,
+            ytysxsAdapter: YtysxsAdapter(apiClient: apiClient, cookieStore: ytysxsCookieStore))
+        // P0-1：PlaybackManager 通过 AVAssetResourceLoaderDelegate 接管
+        // tingyou-chapter:// 占位 URI，播放时实时向 PlaybackRepository 解析真实直链。
+        playbackManager = PlaybackManager(playbackRepository: sourceRouter.playbackRepository)
         importService = ImportService(modelContext: ctx)
 
         themeStore = ThemeStore()

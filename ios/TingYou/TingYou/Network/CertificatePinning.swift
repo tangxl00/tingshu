@@ -1,8 +1,45 @@
 import Foundation
 import Security
 
+/// 出站域名白名单（P1-1）：与安卓 network_security_config.xml 的 domain 列表语义对等。
+/// includeSubdomains=true 的域按后缀放行（host == domain 或 host 以 ".domain" 结尾），
+/// 其余精确匹配；不在白名单内的 host 一律取消挑战（fail-closed）。
+enum PinnedDomainAllowlist {
+    /// includeSubdomains = true（后缀域）
+    static let suffixDomains: [String] = [
+        "tingyou.fm",     // 听友 FM API 与封面域
+        "tingyou8.vip",   // 听友 FM 运行时数据域（封面）
+        "guoguo.org.cn",  // 音频直链白名单后缀
+        "kuwo.cn",        // 书音FM 直链 302 跳转（音频+封面 img1-4）
+        "ctyun.cn",       // 天翼云 OBS 跳转目标（*.obs.ctyun.cn 各区域）
+    ]
+
+    /// includeSubdomains = false（精确域）
+    static let exactDomains: Set<String> = [
+        "file.hgeuz.cn",
+        "m.ting15.com",
+        "www.ting08.com",
+        "www.ytysxs.com",
+        "mp3.ytysxs.top",
+        "m.mekui.com",
+        "api.mekui.com",
+        "api.aikeu.com",
+        "mp3.aikeu.com",
+        "shuyinfm.oss-cn-hangzhou.aliyuncs.com",
+        "imge.kugou.com",
+    ]
+
+    /// host 是否在白名单内（对等安卓 includeSubdomains 匹配）
+    static func isAllowed(_ host: String) -> Bool {
+        let h = host.lowercased()
+        if exactDomains.contains(h) { return true }
+        return suffixDomains.contains { h == $0 || h.hasSuffix(".\($0)") }
+    }
+}
+
 /// iOS 27张锚点证书体系：URLSession delegate 实现证书校验/pinning。
-/// 无 trust-all；ATS 全禁明文；system ∪ 锚点加法配置。
+/// 无 trust-all；ATS 全禁明文；system ∪ 锚点加法配置；
+/// 域名白名单 fail-closed（不认识的出站域直接取消，与安卓 domain-config 边界对齐）。
 final class PinningURLSessionDelegate: NSObject, URLSessionDelegate {
 
     private let anchors: [SecCertificate]
@@ -59,8 +96,16 @@ final class PinningURLSessionDelegate: NSObject, URLSessionDelegate {
             return
         }
 
+        // 域名白名单 fail-closed（P1-1）
+        let host = challenge.protectionSpace.host
+        guard PinnedDomainAllowlist.isAllowed(host) else {
+            print("Blocked non-allowlisted host: \(host)")
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
         var trust: SecTrust?
-        var policy = SecPolicyCreateSSL(true, challenge.protectionSpace.host as CFString)
+        let policy = SecPolicyCreateSSL(true, host as CFString)
         SecTrustCreateWithCertificates(chain as CFArray, policy, &trust)
         guard let t = trust else {
             completionHandler(.cancelAuthenticationChallenge, nil)
@@ -80,7 +125,7 @@ final class PinningURLSessionDelegate: NSObject, URLSessionDelegate {
                 let subj = SecCertificateCopySubjectSummary(cert) as String? ?? "?"
                 return "[\(i)] \(subj)"
             }.joined(separator: "; ")
-            print("TLS pinning failed for \(challenge.protectionSpace.host): \(chainInfo)")
+            print("TLS pinning failed for \(host): \(chainInfo)")
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }

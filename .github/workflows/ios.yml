@@ -122,6 +122,30 @@ jobs:
           ls -la
           du -h TingYou-unsigned-1.3.3-16.zip
 
+      - name: Verify Info.plist keys in archive
+        if: success()
+        working-directory: ios/TingYou
+        run: |
+          set -euo pipefail
+          PLIST="$DERIVED_DATA/archive/TingYou.xcarchive/Products/Applications/TingYou.app/Info.plist"
+          if [ ! -f "$PLIST" ]; then
+            echo "::error::Archived Info.plist not found at $PLIST"
+            exit 1
+          fi
+          echo "--- Archived Info.plist ---"
+          plutil -p "$PLIST" | grep -iE "UIBackgroundModes|NSAppTransportSecurity|NSAllowsArbitraryLoads|UIRequiredDeviceCapabilities|CFBundleShortVersionString|CFBundleVersion" || true
+          BG=$(plutil -extract UIBackgroundModes json -o - "$PLIST")
+          if [[ "$BG" != *'"audio"'* ]]; then
+            echo "::error::UIBackgroundModes is missing 'audio' in archived Info.plist"
+            exit 1
+          fi
+          ATS=$(plutil -extract NSAppTransportSecurity.NSAllowsArbitraryLoads raw -o - "$PLIST")
+          if [[ "$ATS" != "false" ]]; then
+            echo "::error::NSAppTransportSecurity.NSAllowsArbitraryLoads is not false in archived Info.plist"
+            exit 1
+          fi
+          echo "Info.plist keys verified: UIBackgroundModes=audio, ATS configured."
+
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4

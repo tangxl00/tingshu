@@ -15,6 +15,9 @@ enum SourceRegistry {
         let referer: String
         let searchPOST: Bool
         let extraLHeader: Bool
+        /// 搜索结果 HTML 切片边界（与安卓 SourceRegistry 对齐；mekui 为 JSON API，留空）
+        let searchStart: String
+        let searchEnd: String
         let fetchHosts: [String]
         let imgHosts: [String]
         let audioExact: [String]
@@ -25,6 +28,7 @@ enum SourceRegistry {
         id: "ting15", name: "听十五",
         siteBase: "https://m.ting15.com", referer: "https://m.ting15.com/",
         searchPOST: false, extraLHeader: false,
+        searchStart: "class=\"clist\"", searchEnd: "class=\"cpage\"",
         fetchHosts: ["m.ting15.com"],
         imgHosts: ["img-book-oss.guoguo.org.cn", "img-south-oss.guoguo.org.cn"],
         audioExact: ["oss-links.guoguo.org.cn", "cloud.guoguo.org.cn"],
@@ -35,6 +39,7 @@ enum SourceRegistry {
         id: "ting08", name: "听吧",
         siteBase: "https://www.ting08.com", referer: "https://www.ting08.com/",
         searchPOST: true, extraLHeader: true,
+        searchStart: "class=\"category-list\"", searchEnd: "<aside",
         fetchHosts: ["www.ting08.com"],
         imgHosts: ["img-book-oss.guoguo.org.cn", "img-south-oss.guoguo.org.cn"],
         audioExact: ["oss-links.guoguo.org.cn", "cloud.guoguo.org.cn"],
@@ -45,6 +50,7 @@ enum SourceRegistry {
         id: "mekui", name: "书音FM",
         siteBase: "https://m.mekui.com", referer: "https://m.mekui.com/",
         searchPOST: false, extraLHeader: false,
+        searchStart: "", searchEnd: "", // JSON API，不走 HTML 切片
         fetchHosts: ["m.mekui.com", "api.mekui.com"],
         imgHosts: ["shuyinfm.oss-cn-hangzhou.aliyuncs.com", "img1.kuwo.cn", "img2.kuwo.cn", "img3.kuwo.cn", "img4.kuwo.cn", "imge.kugou.com"],
         audioExact: ["api.aikeu.com", "mp3.aikeu.com"],

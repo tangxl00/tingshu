@@ -64,7 +64,11 @@ final class PlayerViewModel {
 
     func playChapter(index: Int) {
         guard index < chapters.count else { return }
-        // manager would need to support indexed chapter jumping
+        // P0-1 接线：跳章由 PlaybackManager 执行真实章节加载
+        // （AVAssetResourceLoaderDelegate 惰性解析直链后自动播放）。
+        manager?.playChapter(at: index)
+        currentChapterIdx = index
+        sync()
     }
 
     func toggleFavorite() {
