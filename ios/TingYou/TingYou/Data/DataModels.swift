@@ -25,6 +25,14 @@ final class FavoriteModel {
         self.lastChapterIdx = lastChapterIdx; self.detailPath = detailPath
         self.createdAt = createdAt
     }
+    func toAlbum() -> Album {
+        Album(albumId: albumId, title: title, author: author, teller: teller,
+              coverUrl: coverUrl, intro: nil, category: nil, categoryId: nil,
+              type: nil, typeId: nil, status: status, chapterCount: chapterCount,
+              updatedAt: nil, playCount: nil, available: nil, source: src,
+              detailPath: detailPath)
+    }
+
 }
 
 @Model
@@ -50,6 +58,14 @@ final class HistoryModel {
         self.durationMs = durationMs; self.detailPath = detailPath
         self.updatedAt = updatedAt
     }
+    func toAlbum() -> Album {
+        Album(albumId: albumId, title: albumTitle, author: nil, teller: nil,
+              coverUrl: coverUrl, intro: nil, category: nil, categoryId: nil,
+              type: nil, typeId: nil, status: nil, chapterCount: nil,
+              updatedAt: updatedAt, playCount: nil, available: nil, source: src,
+              detailPath: detailPath)
+    }
+
 }
 
 @Model
