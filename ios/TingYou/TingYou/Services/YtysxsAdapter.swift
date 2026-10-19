@@ -184,7 +184,7 @@ final class YtysxsAdapter: Sendable {
     func playUrl(chapter: YtysxsChapter) throws -> String {
         let url = chapter.audioUrl
         if url.isEmpty { throw URLError(.badURL) }
-        guard let httpUrl = URL(string: url), let scheme = httpUrl.scheme()?.lowercased(),
+        guard let httpUrl = URL(string: url), let scheme = httpUrl.scheme?.lowercased(),
               scheme == "https", let host = httpUrl.host()?.lowercased() else {
             throw URLError(.badURL) // 仅允许 HTTPS 音频地址
         }

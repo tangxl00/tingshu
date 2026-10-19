@@ -21,7 +21,7 @@ final class MsrcAdapter: Sendable {
     private let backoffDelaysMs: [Int64]
 
     init(apiClient: APIClient,
-         paidChapters: PaidChapterRegistry = PaidChapterRegistry(),
+         paidChapters: PaidChapterRegistry = PaidChapterRegistry.shared,
          backoffDelaysMs: [Int64] = [3_000, 8_000]) {
         self.apiClient = apiClient
         self.paidChapters = paidChapters
