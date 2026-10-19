@@ -47,7 +47,7 @@ struct ChapterListSheet: View {
                         Spacer()
                         if i == currentIdx {
                             Image(systemName: "waveform")
-                                .foregroundStyle(.accent)
+                                .foregroundStyle(Color.accentColor)
                         }
                     }
                 }
