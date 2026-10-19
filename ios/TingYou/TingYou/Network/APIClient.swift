@@ -58,23 +58,25 @@ actor APIClient {
     func execute(_ request: URLRequest, retry: RetryConfig = .standard) async throws -> (Data, HTTPURLResponse) {
         var lastError: Error = URLError(.badServerResponse)
         for attempt in 0...retry.maxRetries {
+            let data: Data
+            let resp: URLResponse
             do {
-                let (data, resp) = try await session.data(for: request)
-                guard let http = resp as? HTTPURLResponse else {
-                    throw URLError(.badServerResponse)
-                }
-                if HttpRetryPolicy.isRetryable(http.statusCode) && attempt < retry.maxRetries {
-                    try await Task.sleep(nanoseconds: UInt64(retry.backoff(forAttempt: attempt) * 1_000_000_000))
-                    continue
-                }
-                guard http.statusCode == 200 else {
-                    throw URLError(.badServerResponse)
-                }
-                return (data, http)
+                (data, resp) = try await session.data(for: request)
             } catch {
+                // 传输层错误（URLError）：按策略退避重试（与安卓 IOException 语义一致）
                 lastError = error
                 if attempt >= retry.maxRetries { throw error }
+                try await Task.sleep(nanoseconds: UInt64(retry.backoff(forAttempt: attempt) * 1_000_000_000))
+                continue
             }
+            guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            if http.statusCode == 200 { return (data, http) }
+            if HttpRetryPolicy.isRetryable(http.statusCode) && attempt < retry.maxRetries {
+                try await Task.sleep(nanoseconds: UInt64(retry.backoff(forAttempt: attempt) * 1_000_000_000))
+                continue
+            }
+            // 非可重试状态（404/500 等）或重试预算耗尽：直接失败，绝不再发请求
+            throw URLError(.badServerResponse)
         }
         throw lastError
     }

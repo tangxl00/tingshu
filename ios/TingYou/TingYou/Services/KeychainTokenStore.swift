@@ -48,7 +48,11 @@ final class KeychainTokenStore {
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]) { _, new in new }
         SecItemDelete(baseQuery as CFDictionary)
-        SecItemAdd(addQuery as CFDictionary, nil)
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus != errSecSuccess {
+            // 诊断输出：模拟器/未签名环境常见 errSecMissingEntitlement(-34018)
+            print("[KeychainTokenStore] SecItemAdd failed: \(addStatus) (service=\(service))")
+        }
         defaults.set(Date().timeIntervalSince1970, forKey: savedAtKey)
         defaults.set(maxAgeSec, forKey: maxAgeKey)
     }

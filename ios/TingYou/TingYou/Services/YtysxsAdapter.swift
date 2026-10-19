@@ -73,7 +73,7 @@ final class YtysxsAdapter: Sendable {
     static let reAntibot = try! NSRegularExpression(
         pattern: "搜索驗證|搜索验证|安全检查|安全验证|cf-turnstile|be_captcha_token")
     static let reTracksUrl = try! NSRegularExpression(
-        pattern: #"data-tracks-url="([^"]*audioigniter_playlist_id=(\d+)[^"]*)""#)
+        pattern: #"data-tracks-url="([^"]*(?:audioigniter/v1/playlist/(\d+)|audioigniter_playlist_id=(\d+))[^"]*)""#)
     static let reBookTitle = try! NSRegularExpression(
         pattern: #"<h1[^>]*class="entry-title"[^>]*>([\s\S]*?)</h1>"#)
     static let reBookCover = try! NSRegularExpression(
@@ -149,7 +149,9 @@ final class YtysxsAdapter: Sendable {
         reTracksUrl.enumerateMatches(in: html, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
             guard let m = m else { return }
             let url = group(m, 1, in: html)
-            guard let pid = Int64(group(m, 2, in: html)), seen.insert(pid).inserted else { return }
+            // 两种站点形态：…/audioigniter/v1/playlist/<pid>（路径）与 …?audioigniter_playlist_id=<pid>（查询）
+            let pid = Int64(group(m, 2, in: html)) ?? Int64(group(m, 3, in: html))
+            guard let pid = pid, seen.insert(pid).inserted else { return }
             playlists.append(PlaylistRef(pid: pid, url: url))
         }
         return YtysxsDetail(title: title, cover: cover.isEmpty ? nil : cover,

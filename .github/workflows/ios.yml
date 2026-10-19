@@ -62,7 +62,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee build.log
 
-      - name: Test (unsigned)
+      - name: Test (ad-hoc signed simulator)
         if: success()
         working-directory: ios/TingYou
         run: |
@@ -81,9 +81,9 @@ jobs:
             -configuration Debug \
             -destination "$DEST" \
             -derivedDataPath "$DERIVED_DATA" \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=YES \
             test 2>&1 | tee test.log
 
       - name: Archive (unsigned .xcarchive)
