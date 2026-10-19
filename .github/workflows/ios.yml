@@ -104,7 +104,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             archive 2>&1 | tee archive.log
 
-      - name: Package .app
+      - name: Package .ipa (unsigned, Payload structure)
         if: success()
         working-directory: ios/TingYou
         run: |
@@ -115,25 +115,26 @@ jobs:
             ls -la "$DERIVED_DATA/archive/TingYou.xcarchive/Products/" || true
             exit 1
           fi
-          mkdir -p artifact
-          cp -R "$APP_PATH" artifact/TingYou.app
+          mkdir -p artifact/Payload
+          cp -R "$APP_PATH" artifact/Payload/TingYou.app
           cd artifact
-          zip -qr TingYou-unsigned-1.3.3-16.zip TingYou.app
+          zip -qr TingYou-unsigned-1.3.3-16.ipa Payload
           ls -la
-          du -h TingYou-unsigned-1.3.3-16.zip
+          du -h TingYou-unsigned-1.3.3-16.ipa
 
-      - name: Verify Info.plist keys in archive
+      - name: Verify Info.plist keys in archive (anti-drift assertions)
         if: success()
         working-directory: ios/TingYou
         run: |
           set -euo pipefail
-          PLIST="$DERIVED_DATA/archive/TingYou.xcarchive/Products/Applications/TingYou.app/Info.plist"
+          APP="$DERIVED_DATA/archive/TingYou.xcarchive/Products/Applications/TingYou.app"
+          PLIST="$APP/Info.plist"
           if [ ! -f "$PLIST" ]; then
             echo "::error::Archived Info.plist not found at $PLIST"
             exit 1
           fi
           echo "--- Archived Info.plist ---"
-          plutil -p "$PLIST" | grep -iE "UIBackgroundModes|NSAppTransportSecurity|NSAllowsArbitraryLoads|UIRequiredDeviceCapabilities|CFBundleShortVersionString|CFBundleVersion" || true
+          plutil -p "$PLIST" | grep -iE "UIBackgroundModes|NSAppTransportSecurity|NSAllowsArbitraryLoads|UIRequiredDeviceCapabilities|CFBundleShortVersionString|CFBundleVersion|CFBundleIcon|UILaunchScreen" || true
           BG=$(plutil -extract UIBackgroundModes json -o - "$PLIST")
           if [[ "$BG" != *'"audio"'* ]]; then
             echo "::error::UIBackgroundModes is missing 'audio' in archived Info.plist"
@@ -144,14 +145,31 @@ jobs:
             echo "::error::NSAppTransportSecurity.NSAllowsArbitraryLoads is not false in archived Info.plist"
             exit 1
           fi
-          echo "Info.plist keys verified: UIBackgroundModes=audio, ATS configured."
+          # 断言1：图标键（症状1防回归）——xcodegen info.properties 漂移会让 CFBundleIconName 消失
+          ICON_NAME=$(plutil -extract CFBundleIconName raw -o - "$PLIST" || echo "")
+          if [[ "$ICON_NAME" != "AppIcon" ]]; then
+            echo "::error::CFBundleIconName missing or != AppIcon in archived Info.plist (got: '$ICON_NAME')"
+            exit 1
+          fi
+          # 断言2：启动屏键（症状3防回归）——缺失会让 iOS 以兼容模式 letterbox 渲染
+          if ! plutil -extract UILaunchScreen json -o /dev/null "$PLIST" 2>/dev/null; then
+            echo "::error::UILaunchScreen key missing in archived Info.plist"
+            exit 1
+          fi
+          # 断言3：Assets.car 实际存在于 .app 内（图标真的被编译进 asset catalog）
+          if [ ! -f "$APP/Assets.car" ]; then
+            echo "::error::Assets.car not found in .app bundle — asset catalog was not compiled in"
+            find "$APP" -maxdepth 2 -name "*.car" -o -name "*.xcassets" || true
+            exit 1
+          fi
+          echo "Info.plist keys verified: UIBackgroundModes=audio, ATS=false, CFBundleIconName=AppIcon, UILaunchScreen present, Assets.car present."
 
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TingYou-unsigned-${{ github.sha }}
-          path: ios/TingYou/artifact/TingYou-unsigned-1.3.3-16.zip
+          path: ios/TingYou/artifact/TingYou-unsigned-1.3.3-16.ipa
           if-no-files-found: error
           retention-days: 14
 
