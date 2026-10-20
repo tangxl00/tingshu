@@ -96,6 +96,72 @@ enum MsrcHtml {
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    // ---- build 21 · 反馈 2（Bug B）：HTML 实体解码 ----
+
+    private static let reNumericEntity = try! NSRegularExpression(pattern: #"&#(x[0-9A-Fa-f]+|\d+);"#)
+    private static let namedEntities: [String: String] = [
+        "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
+        "nbsp": " ", "mdash": "—", "ndash": "–", "hellip": "…",
+        "middot": "·", "ldquo": "“", "rdquo": "”", "lsquo": "‘", "rsquo": "’",
+    ]
+    private static let reNamedEntity = try! NSRegularExpression(pattern: #"&(amp|lt|gt|quot|apos|nbsp|mdash|ndash|hellip|middot|ldquo|rdquo|lsquo|rsquo);"#)
+
+    /// HTML 实体还原：命名实体（&amp; &quot; &nbsp; 等 14 个常用集）+
+    /// 十六进制 &#x4E2D; 与十进制 &#20013; 数字实体。
+    /// 只做一层替换（`&amp;#x4E2D;` 解为字面 `&#x4E2D;`，与浏览器行为一致）。
+    /// 未识别实体原样保留。纯函数可直接 XCTest。
+    static func decodeHTMLEntities(_ s: String) -> String {
+        guard s.contains("&") else { return s }
+        // 先数字后命名：&amp;#x4E2D; 解为字面 &#x4E2D;（数字先跑不会再碰新解出的实体）
+        return decodeNamedEntities(in: decodeNumericEntities(in: s))
+    }
+
+    /// 命名实体解码：单次扫描 + 从后往前替换（&amp; 解出的 & 不会被二次解码）。
+    private static func decodeNamedEntities(in s: String) -> String {
+        let ns = s as NSString
+        var ranges: [(NSRange, String)] = []
+        reNamedEntity.enumerateMatches(in: s, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+            guard let m else { return }
+            let name = ns.substring(with: m.range(at: 1))
+            if let value = namedEntities[name] {
+                ranges.append((m.range, value))
+            }
+        }
+        guard !ranges.isEmpty else { return s }
+        var result = s
+        for (range, replacement) in ranges.reversed() {
+            guard let swiftRange = Range(range, in: result) else { continue }
+            result.replaceSubrange(swiftRange, with: replacement)
+        }
+        return result
+    }
+
+    /// 数字实体解码：&#x4E2D; / &#20013; → 对应 Unicode 字符。
+    /// 用 enumerated matches 从后往前替换，避免下标漂移。
+    private static func decodeNumericEntities(in s: String) -> String {
+        let ns = s as NSString
+        var ranges: [(NSRange, String)] = []
+        reNumericEntity.enumerateMatches(in: s, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+            guard let m else { return }
+            let bodyNS = ns.substring(with: m.range(at: 1))
+            var code: UInt32?
+            if bodyNS.hasPrefix("x") || bodyNS.hasPrefix("X") {
+                code = UInt32(bodyNS.dropFirst(), radix: 16)
+            } else {
+                code = UInt32(bodyNS)
+            }
+            guard let code, let scalar = Unicode.Scalar(code) else { return }
+            ranges.append((m.range, String(Character(scalar))))
+        }
+        guard !ranges.isEmpty else { return s }
+        var result = s
+        for (range, replacement) in ranges.reversed() {
+            guard let swiftRange = Range(range, in: result) else { continue }
+            result.replaceSubrange(swiftRange, with: replacement)
+        }
+        return result
+    }
+
     static func sectionBetween(_ html: String, _ start: String, _ end: String) -> String {
         guard let startRange = html.range(of: start) else { return "" }
         var seg = String(html[startRange.lowerBound...])
@@ -125,14 +191,17 @@ enum MsrcHtml {
             let path = group(m, 1, in: seg)
             if path.isEmpty || !seen.insert(path).inserted { return }
             let cover = group(m, 2, in: seg)
-            let title = stripTags(group(m, 3, in: seg))
+            // build 21 · 反馈 2（Bug B）：标题/作者/播音出口统一做 HTML 实体还原
+            let title = decodeHTMLEntities(stripTags(group(m, 3, in: seg)))
             let dd = group(m, 4, in: seg)
             let parts = path.split(separator: "/").map(String.init)
             let bookId = parts.count == 2 ? parts[1].replacingOccurrences(of: ".html", with: "") : ""
+            let author = decodeHTMLEntities(stripTags(reSub(reAuthor, dd)))
+            let teller = decodeHTMLEntities(stripTags(reSub(reTeller, dd)))
             items.append(MsrcSearchItem(
                 title: title,
-                author: stripTags(reSub(reAuthor, dd)).isEmpty ? nil : stripTags(reSub(reAuthor, dd)),
-                teller: stripTags(reSub(reTeller, dd)).isEmpty ? nil : stripTags(reSub(reTeller, dd)),
+                author: author.isEmpty ? nil : author,
+                teller: teller.isEmpty ? nil : teller,
                 cover: cover.isEmpty ? nil : cover,
                 detailPath: path,
                 bookId: bookId

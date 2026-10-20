@@ -6,7 +6,7 @@ iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐
 
 - **Bundle ID**：`com.tingyou.app.ios`
 - **CFBundleShortVersionString**：`1.3.3`
-- **CFBundleVersion**：`20`（与安卓 versionCode 对齐）
+- **CFBundleVersion**：`21`（与安卓 versionCode 对齐）
 - **最低系统**：iOS 17.0（SwiftData 依赖）
 - **签名状态**：**未签名**——本仓库与 CI 产物均不签名，需用户自行用爱思助手 / AltStore / Sideloadly 免费自签安装（7 天需重签）
 - **ATS**：全禁明文 HTTP（`NSAllowsArbitraryLoads = false`）
@@ -32,7 +32,7 @@ ios/TingYou/
 │   ├── UI/                         # SwiftUI 视图（含 YtysxsVerifyWebView 反爬人工验证容器）
 │   ├── Utils/                      # 工具（分页 / 诊断日志 / 扩展）
 │   └── Resources/Certs/            # 27 张 .pem 锚点证书
-└── TingYouTests/                   # XCTest（136 条测试函数，17 个测试类，见 §8）
+└── TingYouTests/                   # XCTest（178 条测试函数，19 个测试类，见 §8）
 ```
 
 ## 3. 本地构建
@@ -77,7 +77,7 @@ CI 步骤：
 1. macOS-14 runner + Xcode 15.4
 2. `xcodegen generate` 生成 `.xcodeproj`
 3. `xcodebuild build` 编译
-4. `xcodebuild test` 跑 XCTest（91 条）
+4. `xcodebuild test` 跑 XCTest（178 条）
 5. `xcodebuild archive` 产出未签名 `.xcarchive`
 6. **`plutil` 验证 archive 产物 Info.plist**：`UIBackgroundModes` 必含 `audio`、`NSAppTransportSecurity.NSAllowsArbitraryLoads` 必须为 `false`，缺失即 CI 失败（防 plist 漂移回归）
 7. 把 `TingYou.app` 打包为 zip，作为 artifact 上传
@@ -148,21 +148,24 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 | # | 功能 | 状态 | 说明 |
 |---|------|------|------|
 | a | 书架（含菜单） | ✅ | SwiftUI `ShelfScreen`，收藏/历史/导入分 Tab |
-| b | 发现页 | ✅ | `DiscoverScreen`，分类/排行/筛选；复用容器内 `APIClient`（`DiscoverViewModel.attach` 幂等注入） |
+| b | 发现页 | ✅ | `DiscoverScreen`；build 21：音源切换跟随（@AppStorage 持久化，tingyou 榜单 + ting15/ting08 原始分类页 `/<分类>/index{n}.html`）、二级分类折叠默认收起、不支持源（悦听/书音FM）如实占位「该源暂不支持发现页」、搜索框历史记忆（去重置顶上限 20）；复用容器内 `APIClient`（`DiscoverViewModel.attach` 幂等注入） |
 | c | 我的页 | ✅ | `MineScreen`，含音源管理入口、听书时长统计、设置 |
-| d | 播放器 | ✅ | `AVPlayer` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，后台/锁屏控制/倍速/进度/睡眠定时/片头片尾跳过；播放直链经 `AVAssetResourceLoaderDelegate` 接管 `tingyou-chapter://` 占位 URI 惰性解析（`PlaybackRepository` 按源路由真实地址），不再把占位 URI 直接喂给 `AVPlayerItem` |
+| d | 播放器 | ✅ | `AVPlayer` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，后台/锁屏控制/倍速/进度/睡眠定时/片头片尾跳过；播放直链经 `AVAssetResourceLoaderDelegate` 接管 `tingyou-chapter://` 占位 URI 惰性解析（`PlaybackRepository` 按源路由真实地址），不再把占位 URI 直接喂给 `AVPlayerItem`；build 21：定时/设置弹窗补挂（`.sheet` 复用 applySleepTimer 三模式 + 播放模式三档顺序/单曲循环/列表循环，chapterFinishedAction 纯函数决策）、分享改 SwiftUI 原生 `ShareLink` |
 | e | 多音源 | ✅ | 搜索/详情/章节/播放四链路全部真实路由：tingyou（JSON API）、ting15 / ting08（`MsrcAdapter`：HTML 解析 + 两步 token，付费 -1 打标、频控 -2 退避 [3s, 8s]）、悦听（`YtysxsAdapter`：WordPress + AudioIgniter，直链白名单自检）、书音FM（`MekuiAdapter`：ecmsapi + wapseries MD5 签名，黄金值测试锁定）；`AlbumScreen` 章节列表按 `album.source` 路由加载并支持点击播放 |
 | f | 悦听反爬 | ✅ | `YtysxsVerifyWebView`（WKWebView 容器）人工验证流程完整落地：命中反爬特征抛 `AntibotException` → 弹验证页 → `httpCookieStore` 捕获 `be_captcha_token` → `KeychainTokenStore`（kSecClassGenericPassword，SecItemAdd/CopyMatching/Delete）持久化 24h → 验证完成自动重试原搜索；后续请求自动携带 Cookie。不自动破解验证码 |
 | g | 502/503/504 重试 | ✅ | `APIClient.execute` 统一重试入口：Msrc 1 次 / 1.5s（与安卓 MsrcHttp 一致）、Mekui 2 次 / [2.5s, 8s]（与安卓 MekuiHttp 一致）；非 200 且不可重试直接失败。端到端行为由 stub URLProtocol 测试锁定 |
 | h | 导入功能 | ✅ | m3u / 直链 / 本地文件路径，https-only 校验，自然排序，书名建议 |
 | i | 音源开关持久化 | ✅ | `SourceManageScreen` 开关写入 `SourceEnabledStore`（UserDefaults `source_enabled_` 前缀），重启后保持 |
+| j | 启动自动恢复上次播放 | ✅ | build 21：启动读最新 `HistoryModel`，`HistoryResumePlanner` 重建队列后 `prepareQueue` 载入迷你播放条（上次进度），**不自动出声**，用户点播放才播；无历史则维持首启现状 |
 
 ## 8. 测试对账
 
 - **安卓基线**：276 条 `@Test`（43 个测试类）
-- **iOS 现有**：**136 条测试函数，17 个测试类**（与 `TingYouTests/*.swift` 内 `func test` 计数一致，可 grep 核对）：
+- **iOS 现有**：**178 条测试函数，19 个测试类**（与 `TingYouTests/*.swift` 内 `func test` 计数一致，可 grep 核对；136 条为 build 20 基线，build 21 新增 42 条）：
+  - `Build21FeedbackTests`：20 条（build 21 · 反馈 1：播放模式决策纯函数 6 + 持久化 1 + 展示名唯一 1；反馈 2：HTML 实体解码 6 含 parseSearch 出口黄金样本 + charset 解码 6 含 GBK 黄金字节流）
   - `CoverImageCacheTests`：9 条（build 19：封面会话挂 PinningURLSessionDelegate 断言 / 封面图源域名白名单互检 / 非白名单 host fail-closed·取图拒 nil / 防盗链 Referer 设置与省略 / 请求 URL 保全；build 20 必修 1：同一 guoguo URL 按 ting15/ting08 源各带准确 referer）
   - `DiscoverCacheTests`：5 条（build 18：发现页预加载缓存命中 / 磁盘缓存失效 / 预取调度；build 20 必修 6：中间态等待改 expectation）
+  - `DiscoverAndHistoryTests`：22 条（build 21 · 反馈 7：搜索历史保存/去重置顶/上限 20/单删/清空 6；反馈 4/6：发现页目录 7 含各源分类清单与 URL 注入拒绝 + 分类页解析黄金样本 3 + 多源路由/不支持源/翻页/失败回退 5；反馈 3：启动恢复不出声 1）
   - `DtoMappingTests`：8 条（snake_case JSON → DTO → 领域模型）
   - `HistoryAndFavoriteTests`：6 条（build 18：历史 upsert / 收藏增删查幂等；build 19：P1-1 同源收藏两本书均落库 / P1-2 乱序写历史最终为新章节且写入串行）
   - `HistoryResumeTests`：6 条（build 20 必修 2：恢复播放重建完整队列·定位 index/chapterId/标题/夹取 / 拉取失败与空列表降级单章 / locate 纯函数匹配优先级）

@@ -100,7 +100,10 @@ struct PlayerScreen: View {
                             }
                         }
                         .buttonStyle(.pressable)
-                        Button { shareAlbum() } label: {
+                        // build 21 · 反馈 1（Bug A）：分享改 SwiftUI 原生 ShareLink。
+                        // 旧实现从 rootViewController present UIActivityViewController，
+                        // 在 SwiftUI presentation 层级下（PlayerScreen 自身处于 sheet 内）会被吞掉。
+                        ShareLink(item: shareText) {
                             VStack(spacing: 2) {
                                 Image(systemName: "square.and.arrow.up").font(.title3)
                                 Text("分享").font(.caption2)
@@ -133,6 +136,30 @@ struct PlayerScreen: View {
                     currentIdx: pm?.currentChapterIdx ?? 0
                 ) { idx in
                     pm?.playChapter(at: idx)
+                }
+            }
+            // build 21 · 反馈 1（Bug A）：定时弹窗接线——showSleepTimer 此前只翻转 @State
+            // 从未挂 .sheet，逻辑复用 build 20 已修好的 applySleepTimer 三模式体系。
+            .sheet(isPresented: $showSleepTimer) {
+                SleepTimerSheet(
+                    config: Binding(
+                        get: { pm?.sleepConfig ?? SleepTimerConfig() },
+                        set: { c in pm?.applySleepTimer(config: c) }
+                    )
+                ) { c in
+                    pm?.applySleepTimer(config: c)
+                }
+            }
+            // build 21 · 反馈 1（Bug A）：设置面板接线——showSettings 同样只翻转未挂 .sheet。
+            // 最小面板：播放模式（顺序/单曲循环/列表循环），逻辑在 PlaybackManager.chapterFinishedAction。
+            .sheet(isPresented: $showSettings) {
+                PlayerSettingsSheet(
+                    playMode: Binding(
+                        get: { pm?.playMode ?? .sequence },
+                        set: { m in pm?.setPlayMode(m) }
+                    )
+                ) { m in
+                    pm?.setPlayMode(m)
                 }
             }
         }
@@ -174,12 +201,9 @@ struct PlayerScreen: View {
         return String(format: "%02d:%02d", m, s)
     }
 
-    private func shareAlbum() {
-        let text = "我在听《\(pm?.currentAlbumTitle ?? "")》，推荐给你"
-        let av = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootVC = windowScene.windows.first?.rootViewController {
-            rootVC.present(av, animated: true)
-        }
+    /// build 21 · 反馈 1：ShareLink 的分享文案。
+    private var shareText: String {
+        let title = pm?.currentAlbumTitle ?? ""
+        return title.isEmpty ? "推荐一个听书 App" : "我在听《\(title)》，推荐给你"
     }
 }

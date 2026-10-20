@@ -1,16 +1,8 @@
 import Foundation
 
-/// 发现页数据源出口（增强 5.1）：抽协议便于单测注入假数据源验证「优先读缓存」路径。
-protocol DiscoverDataLoading: Sendable {
-    func loadRank(section: String, page: Int) async throws -> PagedResult<Album>
-}
-
-/// AlbumRepository 天然满足发现页数据源出口（rank 即首页榜单加载）。
-extension AlbumRepository: DiscoverDataLoading {
-    func loadRank(section: String, page: Int) async throws -> PagedResult<Album> {
-        try await rank(section: section, page: page)
-    }
-}
+// build 21 · 反馈 4/6：DiscoverDataLoading 协议与 CombinedDiscoverLoader 组合实现
+// 已移至 DiscoverViewModel.swift 同文件维护（协议新增 discoverCategory 后，
+// AlbumRepository 单独遵循不再成立——tingyou 分类与 HTML 源分类走不同出口）。
 
 /// 发现页本地缓存出口（增强 5.1）：启动先渲染上次缓存、后台静默刷新替换。
 protocol DiscoverCacheStore: Sendable {

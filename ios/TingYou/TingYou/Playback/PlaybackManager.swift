@@ -78,6 +78,35 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     var currentChapterTitle: String = ""
     var currentAlbumTitle: String = ""
     var coverUrl: String? = nil
+    /// build 21 · 反馈 1：播放模式（顺序/单曲循环/列表循环），UserDefaults 持久化。
+    private(set) var playMode: PlayMode = PlayMode(rawValue: UserDefaults.standard.integer(forKey: "play_mode")) ?? .sequence
+    private static let playModeKey = "play_mode"
+
+    /// build 21 · 反馈 1：章节自然播完后的动作决策（纯函数供单测）。
+    /// 顺序播放到尾即停（与旧行为一致）；单曲循环重播本章；列表循环尾章后回第一章。
+    enum ChapterFinishedAction: Equatable {
+        case advance          // 进下一章
+        case stop             // 到尾即停（顺序模式）
+        case replayCurrent    // 重播本章（单曲循环）
+        case wrapToFirst      // 回第一章（列表循环到尾）
+    }
+
+    static func chapterFinishedAction(playMode: PlayMode, currentIdx: Int, chapterCount: Int) -> ChapterFinishedAction {
+        let isLast = currentIdx + 1 >= chapterCount
+        switch playMode {
+        case .sequence:
+            return isLast ? .stop : .advance
+        case .repeatOne:
+            return .replayCurrent
+        case .repeatAll:
+            return isLast ? .wrapToFirst : .advance
+        }
+    }
+
+    func setPlayMode(_ mode: PlayMode) {
+        playMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: Self.playModeKey)
+    }
 
     init(playbackRepository: PlaybackRepository? = nil) {
         self.playbackRepository = playbackRepository
@@ -342,7 +371,22 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             sleepConfig.mode = .off
             return
         }
-        nextChapter()
+        // build 21 · 反馈 1：按播放模式决定播完后的动作（决策逻辑抽成纯函数供单测）
+        switch Self.chapterFinishedAction(playMode: playMode,
+                                          currentIdx: currentChapterIdx,
+                                          chapterCount: currentChapters.count) {
+        case .advance:
+            nextChapter()
+        case .stop:
+            isPlaying = false // 到尾即停（保持章节不动，用户可手动续播）
+        case .replayCurrent:
+            pause()
+            loadCurrentChapter(startPosMs: 0, autoPlay: true)
+        case .wrapToFirst:
+            pause()
+            currentChapterIdx = 0
+            loadCurrentChapter(startPosMs: 0, autoPlay: true)
+        }
     }
 
     private func checkOutroSkip() {

@@ -59,6 +59,24 @@ final class MsrcAdapter: Sendable {
         return MsrcHtml.parseSearch(cfg: cfg, html: html)
     }
 
+    // MARK: - 分类页（build 21 · 反馈 4/6：发现页按原始音源分类拉取）
+
+    /// 分类页抓取：/<分类>/index{page}.html，DOM 与搜索结果页同模板，复用 parseSearch。
+    /// hasMore 判定：页面分页区存在下一页链接（/<分类>/index{page+1}.html）。
+    /// 返回 null items 由调用方决定如何呈现（此处照常返回空列表 + hasMore=false）。
+    func category(src: String, categoryId: String, page: Int) async throws -> (items: [MsrcHtml.MsrcSearchItem], hasMore: Bool) {
+        let cfg = try cfgOf(src)
+        guard let url = DiscoverCatalog.categoryPageURL(cfg: cfg, categoryId: categoryId, page: page) else {
+            throw URLError(.badURL) // 分类 id 非法（只允许小写字母数字，防路径注入）
+        }
+        let html = try await apiClient.fetchHTML(url, headers: ["Referer": cfg.referer])
+        let items = MsrcHtml.parseSearch(cfg: cfg, html: html)
+        // 分页探测：存在 /<分类>/index{page+1}.html 链接即还有下一页（两站实测均为该形态）
+        let nextLink = "/\(categoryId)/index\(page + 1).html"
+        let hasMore = html.contains("href=\"\(nextLink)\"")
+        return (items, hasMore)
+    }
+
     // MARK: - 详情（专辑 + 章节一次抓取，宽容解析）
 
     func detail(src: String, detailPath: String) async throws -> MsrcHtml.MsrcDetail {

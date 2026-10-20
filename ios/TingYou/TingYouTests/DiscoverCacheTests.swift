@@ -9,6 +9,7 @@ final class DiscoverCacheTests: XCTestCase {
     // MARK: - 假件
 
     /// 假数据源：可配置延迟，用于观测「缓存先行渲染 → 后台刷新替换」的中间态。
+    /// build 21：协议新增 discoverCategory（发现页多源），假件同步补齐（rank 路径不受影响）。
     final class FakeDiscoverSource: DiscoverDataLoading, @unchecked Sendable {
         private let lock = NSLock()
         private(set) var loadCount = 0
@@ -20,6 +21,11 @@ final class DiscoverCacheTests: XCTestCase {
             lock.lock(); defer { lock.unlock() }
             loadCount += 1
             return result
+        }
+
+        func discoverCategory(src: String, categoryId: String, page: Int) async throws -> (albums: [Album], hasMore: Bool) {
+            if delayNanos > 0 { try await Task.sleep(nanoseconds: delayNanos) }
+            return (result.items, result.hasMore)
         }
     }
 
@@ -46,6 +52,7 @@ final class DiscoverCacheTests: XCTestCase {
 
     struct FailingSource: DiscoverDataLoading {
         func loadRank(section: String, page: Int) async throws -> PagedResult<Album> { throw Boom() }
+        func discoverCategory(src: String, categoryId: String, page: Int) async throws -> (albums: [Album], hasMore: Bool) { throw Boom() }
     }
 
     // MARK: - 用例
@@ -58,7 +65,7 @@ final class DiscoverCacheTests: XCTestCase {
         source.result = PagedResult(items: [freshAlbum], hasMore: false)
         source.delayNanos = 80_000_000 // 80ms，留出观测中间态的窗口
         let cache = FakeCache()
-        cache.storage["recommend"] = [cachedAlbum]
+        cache.storage["tingyou|recommend"] = [cachedAlbum]
 
         let vm = DiscoverViewModel()
         vm.attach(loader: source, cache: cache)
@@ -80,7 +87,7 @@ final class DiscoverCacheTests: XCTestCase {
 
         // 终态：被新数据替换，并写回缓存
         XCTAssertEqual(vm.albums.map(\.title), ["新数据书"])
-        XCTAssertEqual(cache.storage["recommend"]?.map(\.title), ["新数据书"], "新数据应写回缓存")
+        XCTAssertEqual(cache.storage["tingyou|recommend"]?.map(\.title), ["新数据书"], "新数据应写回缓存")
         XCTAssertEqual(source.loadCount, 1)
     }
 
@@ -96,14 +103,14 @@ final class DiscoverCacheTests: XCTestCase {
         await vm.loadRank(section: "hot")
 
         XCTAssertEqual(vm.albums.map(\.title), ["网络书"])
-        XCTAssertEqual(cache.storage["hot"]?.map(\.title), ["网络书"])
+        XCTAssertEqual(cache.storage["tingyou|hot"]?.map(\.title), ["网络书"])
     }
 
     /// 网络失败时保留缓存内容不清屏。
     func testLoadRankKeepsCachedDataWhenRefreshFails() async {
         let failing = FailingSource()
         let cache = FakeCache()
-        cache.storage["recommend"] = [makeAlbum(id: 9, title: "缓存书")]
+        cache.storage["tingyou|recommend"] = [makeAlbum(id: 9, title: "缓存书")]
 
         let vm = DiscoverViewModel()
         vm.attach(loader: failing, cache: cache)

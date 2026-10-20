@@ -1,23 +1,57 @@
 import Foundation
 import SwiftData
 
+/// 发现页数据出口：tingyou rank API 与多源分类数据统一抽象。
+/// build 21 · 反馈 4/6：发现页数据跟随所选音源切换，分类按原始音源结构拉取。
+protocol DiscoverDataLoading: Sendable {
+    func loadRank(section: String, page: Int) async throws -> PagedResult<Album>
+    func discoverCategory(src: String, categoryId: String, page: Int) async throws -> (albums: [Album], hasMore: Bool)
+}
+
+/// AlbumRepository（tingyou rank）+ SourceRouter（分类路由）组合实现。
+/// router 为 nil 时仅 tingyou 榜单可用（单测注入假 router 覆盖多源路径）。
+struct CombinedDiscoverLoader: DiscoverDataLoading {
+    let repo: AlbumRepository
+    let router: SourceRouter?
+
+    func loadRank(section: String, page: Int) async throws -> PagedResult<Album> {
+        try await repo.rank(section: section, page: page)
+    }
+
+    func discoverCategory(src: String, categoryId: String, page: Int) async throws -> (albums: [Album], hasMore: Bool) {
+        guard let router else { throw URLError(.unsupportedURL) }
+        return try await router.discoverCategory(src: src, categoryId: categoryId, page: page)
+    }
+}
+
 /// 发现页 ViewModel（P1 修复：APIClient 经 attach 注入后全程复用单例，
 /// 不再在每次 loadRank / loadMore 中新建 APIClient 与 AlbumRepository；
-/// 增强 5.1：分区第 1 页数据本地缓存——启动先渲染上次缓存，后台静默刷新替换）。
+/// 增强 5.1：分区第 1 页数据本地缓存——启动先渲染上次缓存，后台静默刷新替换；
+/// build 21 · 反馈 4/6：加载目标扩展为「音源 + 分类」二维，按源路由数据出口）。
 @Observable
 final class DiscoverViewModel {
     var albums: [Album] = []
     var hasMore = false
+    /// 最近一次加载是否失败（UI 显示错误与重试）
+    var loadError: String?
     private var currentPage = 1
-    private var currentSection = "recommend"
+    private var currentCacheKey = "tingyou|recommend"
+    private var currentTarget: LoadTarget = .tingyouRank(section: "recommend")
     private var isLoading = false
     private var repo: (any DiscoverDataLoading)?
     private var cache: (any DiscoverCacheStore)?
 
+    /// 加载目标（build 21）：tingyou 榜单 section 或某源某分类。
+    enum LoadTarget: Equatable {
+        case tingyouRank(section: String)
+        case category(src: String, categoryId: String)
+    }
+
     /// 幂等注入共享客户端（AppContainer.apiClient）与本地缓存。
     /// 默认使用磁盘缓存；单测可注入假实现验证「优先读缓存」路径。
-    func attach(apiClient: APIClient, cache: (any DiscoverCacheStore)? = DiskDiscoverCache()) {
-        attach(loader: AlbumRepository(apiClient: apiClient), cache: cache)
+    func attach(apiClient: APIClient, sourceRouter: SourceRouter? = nil, cache: (any DiscoverCacheStore)? = DiskDiscoverCache()) {
+        attach(loader: CombinedDiscoverLoader(
+            repo: AlbumRepository(apiClient: apiClient), router: sourceRouter), cache: cache)
     }
 
     /// 测试入口：直接注入假数据源（TingYouTests/DiscoverCacheTests）。
@@ -27,46 +61,82 @@ final class DiscoverViewModel {
         self.cache = cache
     }
 
-    func loadRank(section: String) async {
+    /// 缓存键：按「音源|分类」分区（旧版只有 section 一个维度， tingyou 沿用旧键兼容历史缓存）。
+    private static func cacheKey(for target: LoadTarget) -> String {
+        switch target {
+        case .tingyouRank(let section): return "tingyou|\(section)"
+        case .category(let src, let cat): return "\(src)|\(cat)"
+        }
+    }
+
+    /// 统一加载入口（第 1 页）。源不支持（ mekui/ytysxs 抛 unsupportedURL）时置 loadError。
+    func load(target: LoadTarget) async {
         guard let repo = repo, !isLoading else { return }
         isLoading = true
-        currentSection = section
+        currentTarget = target
+        currentCacheKey = Self.cacheKey(for: target)
         currentPage = 1
+        loadError = nil
 
         // 增强 5.1：列表为空时先渲染上次缓存（打开秒显），失败也保留缓存内容
-        if albums.isEmpty, let cached = cache?.loadSection(section), !cached.isEmpty {
+        if albums.isEmpty, let cached = cache?.loadSection(currentCacheKey), !cached.isEmpty {
             albums = cached
         }
 
         do {
-            let result = try await repo.loadRank(section: section, page: 1)
-            // 等待期间分区若已变化则丢弃过期结果（防御性保护）
-            guard currentSection == section else {
+            let result = try await fetch(page: 1)
+            // 等待期间目标若已变化则丢弃过期结果（防御性保护）
+            guard currentTarget == target else {
                 isLoading = false
                 return
             }
             albums = result.items
             hasMore = result.hasMore
             if !result.items.isEmpty {
-                try? cache?.saveSection(section, albums: result.items)
+                try? cache?.saveSection(currentCacheKey, albums: result.items)
             }
         } catch {
+            // build 21 · 反馈 4：不支持的源 / 加载失败如实上报，不静默显示空列表
+            loadError = Self.describe(error)
             print("Discover load error: \(error)")
         }
         isLoading = false
     }
 
+    /// 兼容入口：tingyou 榜单（旧调用方 DiscoverScreen.task 之外的书架等处）。
+    func loadRank(section: String) async {
+        await load(target: .tingyouRank(section: section))
+    }
+
     func loadMore() async {
-        guard let repo = repo, !isLoading, hasMore else { return }
+        guard let repo = repo, !isLoading, hasMore, loadError == nil else { return }
         isLoading = true
         currentPage += 1
         do {
-            let result = try await repo.loadRank(section: currentSection, page: currentPage)
+            let result = try await fetch(page: currentPage)
             albums.append(contentsOf: result.items)
             hasMore = result.hasMore
         } catch {
+            currentPage -= 1 // 失败回退页码，允许重试同一页
             print("Discover loadMore error: \(error)")
         }
         isLoading = false
+    }
+
+    private func fetch(page: Int) async throws -> PagedResult<Album> {
+        switch currentTarget {
+        case .tingyouRank(let section):
+            return try await repo!.loadRank(section: section, page: page)
+        case .category(let src, let categoryId):
+            let r = try await repo!.discoverCategory(src: src, categoryId: categoryId, page: page)
+            return PagedResult(items: r.albums, hasMore: r.hasMore)
+        }
+    }
+
+    private static func describe(_ error: Error) -> String {
+        if let urlError = error as? URLError, urlError.code == .unsupportedURL {
+            return "该源暂不支持发现页"
+        }
+        return "加载失败：\(error.localizedDescription)"
     }
 }

@@ -131,6 +131,49 @@ actor APIClient {
 
     // MARK: - 通用抓取（供多音源适配器复用，出站白名单自检由调用方负责）
 
+    /// build 21 · 反馈 2（Bug B）：响应体按网页声明的字符集解码，不再静默 utf8 ?? ""。
+    /// 解码链：Content-Type 的 charset 参数 → utf-8 → gb18030（GBK 系老站）→ ISO-8859-1 兜底（永不失败）。
+    /// 静默返回空串会掩盖乱码与丢数据；本函数保证「尽力解出可读文本」。
+    static func decodeBody(_ data: Data, contentType: String?) -> String {
+        // 1) Content-Type 里声明的 charset 优先
+        var declared: String.Encoding? = nil
+        if let contentType,
+           let range = contentType.range(of: "charset=", options: .caseInsensitive) {
+            let raw = contentType[range.upperBound...]
+                .prefix { !$0.isWhitespace && $0 != ";" && $0 != "\"" }
+                .trimmingCharacters(in: .whitespaces)
+            declared = Self.encoding(forName: String(raw))
+        }
+        if let declared, let s = String(data: data, encoding: declared), !s.isEmpty {
+            return s
+        }
+        // 2) utf-8 → gb18030 → ISO-8859-1（逐级探测；gb18030 向下兼容 GBK/GB2312）
+        for enc in [String.Encoding.utf8, String.Encoding.gb18030] {
+            if let s = String(data: data, encoding: enc), !s.isEmpty { return s }
+        }
+        return String(data: data, encoding: .isoLatin1) ?? ""
+    }
+
+    /// charset 名称 → CFStringEncoding（常用集，未识别返回 nil 走探测链）。
+    private static func encoding(forName name: String) -> String.Encoding? {
+        let known: [String: String.Encoding] = [
+            "utf-8": .utf8, "utf8": .utf8,
+            "gb18030": .gb18030,
+            "gbk": .gb18030,
+            "gb2312": .gb18030,   // GB2312 是 GBK 子集，gb18030 可解
+            "big5": CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.big5.rawValue)),
+            "big5-hkscs": CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.big5.rawValue)),
+            "shift_jis": .shiftJIS,
+            "euc-jp": .japaneseEUC,
+            "iso-8859-1": .isoLatin1, "latin1": .isoLatin1, "ascii": .ascii,
+            "windows-1252": .windowsCP1252,
+            "windows-1251": .windowsCP1251,
+        ]
+        return known[name.lowercased()]
+    }
+
     /// 浏览器 UA 的 GET，返回字符串体。headers 可覆盖默认（Referer / Cookie / xt 等）。
     func fetchHTML(_ urlString: String, headers: [String: String] = [:], retry: RetryConfig = .standard) async throws -> String {
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
@@ -139,8 +182,8 @@ actor APIClient {
         if req.value(forHTTPHeaderField: "User-Agent") == nil {
             req.setValue(Self.browserUA, forHTTPHeaderField: "User-Agent")
         }
-        let (data, _) = try await execute(req, retry: retry)
-        return String(data: data, encoding: .utf8) ?? ""
+        let (data, http) = try await execute(req, retry: retry)
+        return Self.decodeBody(data, contentType: http.value(forHTTPHeaderField: "Content-Type"))
     }
 
     /// 表单 POST（自定义头），返回字符串体（api-getneoplay / ting08 搜索用）。
@@ -152,8 +195,8 @@ actor APIClient {
         req.setValue(Self.browserUA, forHTTPHeaderField: "User-Agent")
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
         req.httpBody = formBody(fields)
-        let (data, _) = try await execute(req, retry: retry)
-        return String(data: data, encoding: .utf8) ?? ""
+        let (data, http) = try await execute(req, retry: retry)
+        return Self.decodeBody(data, contentType: http.value(forHTTPHeaderField: "Content-Type"))
     }
 
     /// JSON GET（mekui ecmsapi 用：非 200 / 非 JSON 都抛错）。

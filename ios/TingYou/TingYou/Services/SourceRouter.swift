@@ -119,6 +119,23 @@ actor SourceRouter {
         try await playbackRepository.getPlayUrl(src: src, albumId: albumId, chapterIdx: chapterIdx)
     }
 
+    // MARK: - 发现页分类（build 21 · 反馈 4/6：按原始音源分类拉取）
+
+    /// 发现页分类数据：tingyou 走 rank API；ting15/ting08 走分类页 HTML 解析。
+    /// 不支持的源（mekui/ytysxs）抛 unsupportedURL，由 UI 层如实标注。
+    func discoverCategory(src: String, categoryId: String, page: Int) async throws -> (albums: [Album], hasMore: Bool) {
+        switch src {
+        case SourceRegistry.TINGYOU:
+            let result = try await albumRepository.rank(section: categoryId, page: page)
+            return (result.items, result.hasMore)
+        case SourceRegistry.TING15, SourceRegistry.TING08:
+            let result = try await msrcAdapter.category(src: src, categoryId: categoryId, page: page)
+            return (result.items.map { Self.albumFromMsrc($0, src: src) }, result.hasMore)
+        default:
+            throw URLError(.unsupportedURL) // 该源暂不支持发现页
+        }
+    }
+
     // MARK: - 映射辅助
 
     private static func albumFromMsrc(_ item: MsrcHtml.MsrcSearchItem, src: String) -> Album {
