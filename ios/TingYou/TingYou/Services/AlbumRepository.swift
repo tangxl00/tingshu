@@ -8,7 +8,10 @@ protocol PlaybackHistoryRecording: Sendable {
     func recordHistory(album: Album, chapter: Chapter, positionMs: Int64, durationMs: Int64) async
 }
 
-actor AlbumRepository {
+// build 19 返修：补上协议遵循声明——方法签名已匹配但类型未声明遵循，
+// AppContainer 里 `playbackManager.historyRecorder = albumRepository` 编译不过（CI run 39360876825 唯一错误）。
+// actor 隔离天然满足协议的 async 与 Sendable 要求。
+actor AlbumRepository: PlaybackHistoryRecording {
     private let apiClient: APIClient
     private let modelContext: ModelContext?
     private var cache: [String: Album] = [:]
