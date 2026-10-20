@@ -3,8 +3,12 @@ import SwiftData
 
 @Model
 final class FavoriteModel {
-    @Attribute(.unique) var src: String
-    @Attribute(.unique) var albumId: Int64
+    // build 19 P1-1：删除原 src / albumId 上的两个 @Attribute(.unique)——
+    // SwiftData 的 .unique 是逐属性独立唯一而非 (src, albumId) 组合唯一，
+    // 导致同一音源收藏第二本书触发约束冲突、save 抛错被吞而静默丢失。
+    // (src, albumId) 的逻辑唯一由 AlbumRepository.addFavorite 的 fetch 守卫保证。
+    var src: String
+    var albumId: Int64
     var title: String
     var author: String?
     var teller: String?

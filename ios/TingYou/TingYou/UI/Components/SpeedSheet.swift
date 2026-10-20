@@ -10,11 +10,17 @@ struct SpeedSheet: View {
         NavigationStack {
             List {
                 ForEach(presets, id: \.self) { s in
+                    let selected = abs(speed - s) < 0.01
                     Button("\(String(format: "%.1f", s))x") {
                         onSelect(s)
                         dismiss()
                     }
-                    .checkmark(abs(speed - s) < 0.01)
+                    .checkmark(selected)
+                    // 增强 4：按压反馈 + 选中高亮底色
+                    .buttonStyle(.pressable)
+                    .listRowBackground(
+                        Group { if selected { Color.accentColor.opacity(0.12) } }
+                    )
                 }
             }
             .navigationTitle("播放速度")
@@ -37,20 +43,27 @@ struct ChapterListSheet: View {
     var body: some View {
         NavigationStack {
             List(chapters.indices, id: \.self) { i in
+                let isCurrent = i == currentIdx
                 Button {
                     onSelect(i)
                     dismiss()
                 } label: {
                     HStack {
                         Text("\(chapters[i].index). \(chapters[i].title)")
-                            .foregroundStyle(i == currentIdx ? Color.accentColor : .primary)
+                            .foregroundStyle(isCurrent ? Color.accentColor : .primary)
                         Spacer()
-                        if i == currentIdx {
+                        if isCurrent {
                             Image(systemName: "waveform")
                                 .foregroundStyle(Color.accentColor)
                         }
                     }
+                    .contentShape(Rectangle())
                 }
+                // 增强 4：按压反馈 + 当前播放项高亮底色
+                .buttonStyle(.pressable)
+                .listRowBackground(
+                    Group { if isCurrent { Color.accentColor.opacity(0.12) } }
+                )
             }
             .navigationTitle("章节列表")
             .navigationBarTitleDisplayMode(.inline)

@@ -170,20 +170,25 @@ enum ImportOrganizer {
 
     static func titleFromUrl(_ url: String) -> String? {
         guard let u = URL(string: url) else { return nil }
-        let path = u.path
-        let name = (path as NSString).lastPathComponent
-        return name.isEmpty ? nil : name
+        // URL.path 在不同 OS/Foundation 实现下可能返回编码或解码形态，统一解码后取最后一段
+        let rawPath = u.path
+        let decoded = rawPath.removingPercentEncoding ?? rawPath
+        guard !decoded.isEmpty, decoded != "/" else { return nil }
+        let name = (decoded as NSString).lastPathComponent
+        guard !name.isEmpty, name != "/" else { return nil }
+        return name
     }
 
     static func isM3uUrl(_ url: String) -> Bool {
         guard let u = URL(string: url) else { return false }
-        let path = u.path.lowercased()
+        let rawPath = u.path
+        let path = (rawPath.removingPercentEncoding ?? rawPath).lowercased()
         return path.hasSuffix(".m3u") || path.hasSuffix(".m3u8")
     }
 
     static func hostOf(_ url: String) -> String? {
-        guard let u = URL(string: url) else { return nil }
-        return u.host?.lowercased()
+        guard let u = URL(string: url), let host = u.host, !host.isEmpty else { return nil }
+        return host.lowercased()
     }
 
     // ---------- ⑤ m3u 解析 ----------

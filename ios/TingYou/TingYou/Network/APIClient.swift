@@ -55,26 +55,31 @@ actor APIClient {
     // MARK: - 带重试的执行核心（P0-5：502/503/504 按策略退避重试）
 
     /// 统一执行入口：可重试状态码且还有次数 → 退避后重试；其余非 200 直接失败。
+    /// 状态码判定必须在 do-catch 之外：非 200 抛出的 URLError 若落在 catch 里会被当成
+    /// 传输错误重试 → 404 也被重发（testExecuteDoesNotRetryOn404 回归）。仅传输层错误重试。
     func execute(_ request: URLRequest, retry: RetryConfig = .standard) async throws -> (Data, HTTPURLResponse) {
         var lastError: Error = URLError(.badServerResponse)
         for attempt in 0...retry.maxRetries {
+            let data: Data
+            let http: HTTPURLResponse
             do {
-                let (data, resp) = try await session.data(for: request)
-                guard let http = resp as? HTTPURLResponse else {
-                    throw URLError(.badServerResponse)
-                }
-                if HttpRetryPolicy.isRetryable(http.statusCode) && attempt < retry.maxRetries {
-                    try await Task.sleep(nanoseconds: UInt64(retry.backoff(forAttempt: attempt) * 1_000_000_000))
-                    continue
-                }
-                guard http.statusCode == 200 else {
-                    throw URLError(.badServerResponse)
-                }
-                return (data, http)
+                let (raw, resp) = try await session.data(for: request)
+                guard let h = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                data = raw
+                http = h
             } catch {
                 lastError = error
                 if attempt >= retry.maxRetries { throw error }
+                continue
             }
+            if HttpRetryPolicy.isRetryable(http.statusCode) && attempt < retry.maxRetries {
+                try await Task.sleep(nanoseconds: UInt64(retry.backoff(forAttempt: attempt) * 1_000_000_000))
+                continue
+            }
+            guard http.statusCode == 200 else {
+                throw URLError(.badServerResponse)
+            }
+            return (data, http)
         }
         throw lastError
     }

@@ -14,11 +14,16 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private let player = AVPlayer()
     /// 真实播放地址解析器（P0-1：占位 URI 经 AVAssetResourceLoaderDelegate 惰性解析）
     private let playbackRepository: PlaybackRepository?
-    private var currentAlbum: Album?
+    /// Bug 2：对外只读暴露当前专辑（收藏/历史接线用，原为 private）
+    private(set) var currentAlbum: Album?
     var currentChapters: [Chapter] = []
-    private var currentChapterIdx: Int = 0
+    /// Bug 2：对外只读暴露当前章序号（章节列表当前项高亮用，避免按标题匹配）
+    private(set) var currentChapterIdx: Int = 0
     private var loaderTasks: [Int: Task<Void, Never>] = [:]
     private var loaderTaskSeq = 0
+    // build 19 P2-2：loaderTasks / loaderTaskSeq 被 loader 队列与 Task 闭包并发读写，
+    // Dictionary 并发写是未定义行为——统一经 NSLock 保护（只动容器，不改 seq 比对语义）。
+    private let loaderLock = NSLock()
     private var timeObserver: Any?
     private var itemObserver: NSKeyValueObservation?
     private var statusObserver: NSKeyValueObservation?
@@ -30,6 +35,33 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private let skipStore = SkipSettingsStore()
     private var outroSkipTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
+
+    // MARK: - Bug 2 播放历史落库 + 增强 5.3 下一章预取
+
+    /// 历史落库出口（AppContainer 注入 AlbumRepository；单测可注入假实现）
+    var historyRecorder: (any PlaybackHistoryRecording)? = nil
+    private static let historyThrottleMs: Int64 = 5_000
+    private var lastHistoryWriteMs: Int64 = 0
+    // build 19 P1-2：原实现 `Task { await recorder.recordHistory(...) }` 无序并发，
+    // 快速切章时旧章节的写任务可能后到后写，历史回跳旧章。
+    // 改为「串行排水 + 只保留最新」：写入任务严格串行，同一时刻只保留最新一次待写数据——
+    // 旧章节数据要么被新章节数据覆盖掉（从未落库），要么先于新数据写入（最终值=新章节）。
+    private struct PendingHistoryWrite: Sendable {
+        let album: Album
+        let chapter: Chapter
+        let positionMs: Int64
+        let durationMs: Int64
+    }
+    private var pendingHistoryWrite: PendingHistoryWrite?
+    private var historyDrainTask: Task<Void, Never>?
+    private let historyLock = NSLock()
+
+    /// 下一章直链预取任务（每次换章重建）
+    private var prefetchTask: Task<Void, Never>?
+    /// 已解析直链缓存：占位 URI → 真实直链；resourceLoader 命中即秒回，切章零等待
+    private var resolvedPlayUrls: [String: String] = [:]
+    private let resolveLock = NSLock()
+    private static let resolvedCacheLimit = 12
 
     var isPlaying: Bool = false
     var currentPositionMs: Int64 = 0
@@ -110,6 +142,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             self.currentPositionMs = Int64(time.seconds * 1000)
             self.updateNowPlaying()
             self.checkOutroSkip()
+            self.recordHistory() // Bug 2：进度节流落库（~5s 一次）
         }
     }
 
@@ -168,6 +201,10 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             listenStartMs = Int64(Date().timeIntervalSince1970 * 1000)
         }
         updateNowPlaying()
+        // Bug 2：起播/切章立即落一次历史（记录新章节起点）
+        recordHistory(force: true, positionMs: startPosMs)
+        // 增强 5.3：预取下一章直链（提前解析 + AVFoundation 预热），切章零等待
+        scheduleNextChapterPrefetch()
     }
 
     // MARK: - AVAssetResourceLoaderDelegate（P0-1 真实解析）
@@ -181,11 +218,23 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
               let parsed = PlayUri.parse(url.absoluteString) else {
             return false // 非本 scheme 的请求不拦截
         }
+        // 增强 5.3：预取命中 → 直接 redirect，省一次网络解析（切章零等待）
+        if let cached = resolvedPlayUrl(forKey: url.absoluteString),
+           let redirectURL = URL(string: cached) {
+            loadingRequest.redirect = URLRequest(url: redirectURL)
+            loadingRequest.response = HTTPURLResponse(
+                url: redirectURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)
+            loadingRequest.finishLoading()
+            return true
+        }
+        loaderLock.lock()
         let seq = loaderTaskSeq
         loaderTaskSeq += 1
+        loaderLock.unlock()
         // Swift 6 并发装箱：AVAssetResourceLoadingRequest 非 Sendable，
         // 显式声明跨隔离域传递（finishLoading 允许任意线程调用，AVFoundation 线程安全）
         let box = LoadingRequestBox(request: loadingRequest)
+        let cacheKey = url.absoluteString
         let task = Task { [weak self] in
             do {
                 guard let repository = self?.playbackRepository else {
@@ -194,6 +243,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 }
                 let playUrl = try await repository.getPlayUrl(
                     src: parsed.src, albumId: parsed.albumId, chapterIdx: parsed.chapterIdx)
+                // 解析结果顺手入缓存（同一章 seek/重开不再重复解析）
+                self?.storeResolved(key: cacheKey, url: playUrl)
                 guard let redirectURL = URL(string: playUrl) else {
                     box.request.finishLoading(with: URLError(.badURL))
                     return
@@ -205,10 +256,19 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             } catch {
                 box.request.finishLoading(with: error)
             }
-            self?.loaderTasks.removeValue(forKey: seq)
+            self?.removeLoaderTask(seq)
         }
+        loaderLock.lock()
         loaderTasks[seq] = task
+        loaderLock.unlock()
         return true // 已异步接管，等待 finishLoading
+    }
+
+    /// build 19 P2-2：loaderTasks 字典的并发访问统一经锁收口。
+    private func removeLoaderTask(_ seq: Int) {
+        loaderLock.lock()
+        defer { loaderLock.unlock() }
+        loaderTasks.removeValue(forKey: seq)
     }
 
     func resourceLoader(_ resourceLoader: AVAssetResourceLoader,
@@ -239,6 +299,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             if elapsed > 0 { listeningTimeStore.addSession(elapsed) }
             listenStartMs = 0
         }
+        // Bug 2：暂停立即落一次历史（保住最后进度）
+        recordHistory(force: true)
     }
 
     func togglePlayPause() {
@@ -320,6 +382,104 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     func setSkipSettings(intro: Int, outro: Int, src: String, albumId: Int64) {
         skipStore.setIntro(intro, src: src, albumId: albumId)
         skipStore.setOutro(outro, src: src, albumId: albumId)
+    }
+
+    // MARK: - Bug 2 历史落库 + 增强 5.3 预取实现
+
+    /// 历史落库：force=true 立即写（起播/切章/暂停）；否则按 ~5s 节流（进度观察器 1s 调用）
+    private func recordHistory(force: Bool = false, positionMs: Int64? = nil) {
+        guard let recorder = historyRecorder, let album = currentAlbum,
+              currentChapterIdx >= 0, currentChapterIdx < currentChapters.count else { return }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        if !force, now - lastHistoryWriteMs < Self.historyThrottleMs { return }
+        lastHistoryWriteMs = now
+        let ch = currentChapters[currentChapterIdx]
+        let pos = positionMs ?? currentPositionMs
+        let dur = durationMs
+        // build 19 P1-2：不再直接 spawn 无序 Task，改为入队串行排水（只保留最新）
+        enqueueHistory(PendingHistoryWrite(album: album, chapter: ch, positionMs: pos, durationMs: dur))
+    }
+
+    /// 历史写入入队：待写槽位只保留最新一次（旧章节未落库前被覆盖即丢弃），
+    /// 无排水任务时启动一个（同一时刻最多一个排水任务，写入严格串行）。
+    private func enqueueHistory(_ write: PendingHistoryWrite) {
+        historyLock.lock()
+        pendingHistoryWrite = write
+        let needDrain = historyDrainTask == nil
+        if needDrain {
+            historyDrainTask = Task { [weak self] in
+                await self?.drainHistoryQueue()
+            }
+        }
+        historyLock.unlock()
+    }
+
+    /// 串行排水循环：逐条取最新待写数据落库，取空后自退场。
+    private func drainHistoryQueue() async {
+        while true {
+            historyLock.lock()
+            let next = pendingHistoryWrite
+            pendingHistoryWrite = nil
+            if next == nil {
+                historyDrainTask = nil
+                historyLock.unlock()
+                return
+            }
+            historyLock.unlock()
+            if let recorder = historyRecorder, let w = next {
+                await recorder.recordHistory(album: w.album, chapter: w.chapter,
+                                             positionMs: w.positionMs, durationMs: w.durationMs)
+            }
+        }
+    }
+
+    /// 测试可观测：历史落库排水是否已空闲（无待写、无在途排水任务）。
+    var isHistoryWriteIdle: Bool {
+        historyLock.lock()
+        defer { historyLock.unlock() }
+        return pendingHistoryWrite == nil && historyDrainTask == nil
+    }
+
+    private func resolvedPlayUrl(forKey key: String) -> String? {
+        resolveLock.lock()
+        defer { resolveLock.unlock() }
+        return resolvedPlayUrls[key]
+    }
+
+    private func storeResolved(key: String, url: String) {
+        resolveLock.lock()
+        defer { resolveLock.unlock() }
+        resolvedPlayUrls[key] = url
+        // 大小控制：超过上限淘汰最早写入的条目
+        while resolvedPlayUrls.count > Self.resolvedCacheLimit, let first = resolvedPlayUrls.keys.first {
+            resolvedPlayUrls.removeValue(forKey: first)
+        }
+    }
+
+    /// 预取下一章直链：提前解析（markPaid:false 付费章静默跳过）+ AVFoundation 预热
+    /// （asset.load(.isPlayable) 提前完成 DNS/TLS/媒体头交互），切章零等待。
+    private func scheduleNextChapterPrefetch() {
+        prefetchTask?.cancel()
+        guard let album = currentAlbum,
+              currentChapterIdx + 1 < currentChapters.count,
+              let repository = playbackRepository else { return }
+        let next = currentChapters[currentChapterIdx + 1]
+        let key = PlayUri.build(src: album.source, albumId: album.albumId, chapterIdx: next.index)
+        prefetchTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            if self?.resolvedPlayUrl(forKey: key) != nil { return } // 已预取过
+            guard let resolved = try? await repository.getPlayUrl(
+                src: album.source, albumId: album.albumId, chapterIdx: next.index,
+                markPaid: false), // 静默预取：付费章不弹不打标，失败不影响播放
+                !resolved.isEmpty else { return }
+            guard !Task.isCancelled else { return }
+            self?.storeResolved(key: key, url: resolved)
+            // AVFoundation 预热（iOS 16+ async load；失败静默忽略）
+            if let warmURL = URL(string: resolved) {
+                let asset = AVURLAsset(url: warmURL)
+                _ = try? await asset.load(.isPlayable)
+            }
+        }
     }
 
     deinit {

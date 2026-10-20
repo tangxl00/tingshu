@@ -1,6 +1,6 @@
 import Foundation
 
-struct Album: Identifiable, Hashable, Sendable {
+struct Album: Identifiable, Hashable, Sendable, Codable {
     let albumId: Int64
     let title: String
     let author: String?

@@ -58,6 +58,9 @@ struct SearchScreen: View {
                     Label(searchSources.first(where: { $0.id == selectedSrc })?.name ?? "音源",
                           systemImage: "line.3.horizontal.decrease.circle")
                 }
+                // 增强 4：音源选择按钮按压反馈
+                .buttonStyle(.pressable)
+                .foregroundStyle(Color.accentColor)
             }
         }
         .navigationTitle("搜索")

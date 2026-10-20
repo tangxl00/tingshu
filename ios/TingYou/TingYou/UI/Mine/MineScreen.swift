@@ -41,7 +41,7 @@ struct MineScreen: View {
                     HStack {
                         Text("版本")
                         Spacer()
-                        Text("1.3.3 (17)")
+                        Text("1.3.3 (19)")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -60,18 +60,42 @@ struct MineScreen: View {
 }
 
 struct ThemePickerScreen: View {
-    @AppStorage("theme_mode") private var themeMode: Int = 2
+    @Environment(\.appContainer) private var container
+
+    private var themeMode: Int {
+        container?.themeStore.themeMode ?? ThemeStore.MODE_FOLLOW_SYSTEM
+    }
 
     var body: some View {
         List {
-            Button("浅色") { themeMode = 0 }
-                .checkmark(themeMode == 0)
-            Button("深色") { themeMode = 1 }
-                .checkmark(themeMode == 1)
-            Button("跟随系统") { themeMode = 2 }
-                .checkmark(themeMode == 2)
+            themeRow("浅色", mode: ThemeStore.MODE_LIGHT)
+            themeRow("深色", mode: ThemeStore.MODE_DARK)
+            themeRow("跟随系统", mode: ThemeStore.MODE_FOLLOW_SYSTEM)
         }
         .navigationTitle("外观模式")
+    }
+
+    /// 统一选择行：按压反馈（.pressable）+ 选中高亮底色，选中态与按压态可区分
+    private func themeRow(_ title: String, mode: Int) -> some View {
+        let selected = themeMode == mode
+        return Button {
+            container?.themeStore.setMode(mode)
+        } label: {
+            HStack {
+                Text(title)
+                    .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        .listRowBackground(
+            Group { if selected { Color.accentColor.opacity(0.12) } }
+        )
     }
 }
 

@@ -6,7 +6,7 @@ iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐
 
 - **Bundle ID**：`com.tingyou.app.ios`
 - **CFBundleShortVersionString**：`1.3.3`
-- **CFBundleVersion**：`16`（与安卓 versionCode 对齐）
+- **CFBundleVersion**：`19`（与安卓 versionCode 对齐）
 - **最低系统**：iOS 17.0（SwiftData 依赖）
 - **签名状态**：**未签名**——本仓库与 CI 产物均不签名，需用户自行用爱思助手 / AltStore / Sideloadly 免费自签安装（7 天需重签）
 - **ATS**：全禁明文 HTTP（`NSAllowsArbitraryLoads = false`）
@@ -32,7 +32,7 @@ ios/TingYou/
 │   ├── UI/                         # SwiftUI 视图（含 YtysxsVerifyWebView 反爬人工验证容器）
 │   ├── Utils/                      # 工具（分页 / 诊断日志 / 扩展）
 │   └── Resources/Certs/            # 27 张 .pem 锚点证书
-└── TingYouTests/                   # XCTest（91 条测试函数，9 个测试类，见 §8）
+└── TingYouTests/                   # XCTest（118 条测试函数，14 个测试类，见 §8）
 ```
 
 ## 3. 本地构建
@@ -160,15 +160,20 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 ## 8. 测试对账
 
 - **安卓基线**：276 条 `@Test`（43 个测试类）
-- **iOS 现有**：**91 条测试函数，9 个测试类**（与 `TingYouTests/*.swift` 内 `func test` 计数一致，可 grep 核对）：
+- **iOS 现有**：**118 条测试函数，14 个测试类**（与 `TingYouTests/*.swift` 内 `func test` 计数一致，可 grep 核对）：
+  - `CoverImageCacheTests`：8 条（build 19：封面会话挂 PinningURLSessionDelegate 断言 / 封面图源域名白名单互检 / 非白名单 host fail-closed·取图拒 nil / 防盗链 Referer 设置与省略 / 请求 URL 保全）
+  - `DiscoverCacheTests`：5 条（build 18：发现页预加载缓存命中 / 磁盘缓存失效 / 预取调度）
   - `DtoMappingTests`：8 条（snake_case JSON → DTO → 领域模型）
+  - `HistoryAndFavoriteTests`：6 条（build 18：历史 upsert / 收藏增删查幂等；build 19：P1-1 同源收藏两本书均落库 / P1-2 乱序写历史最终为新章节且写入串行）
   - `ImportOrganizerTests`：14 条（自然排序 / 章节标题 / 书名建议 / 直链 / m3u 解析）
   - `KeychainTokenStoreTests`：9 条（token 过期边界纯函数 / Keychain 存取闭环 / 过期自清理 / Cookie 头格式 / 24h 默认 Max-Age）
   - `MekuiAdapterTests`：8 条（wapseries MD5 签名黄金值 ×2 / 详情解析黄金样本 / 付费打标 / 缺章节降级）
-  - `MsrcHtmlTests`：16 条（ting15 / ting08 搜索解析黄金样本 / 详情解析 / 两步 token 播放页 meta / 播放响应 BOM·status 双形态·-1 付费·-2 频控 / encodeUriComponent %20 语义）
+  - `MsrcHtmlTests`：17 条（ting15 / ting08 搜索解析黄金样本 / 详情解析 / 两步 token 播放页 meta / 播放响应 BOM·status 双形态·-1 付费·-2 频控 / encodeUriComponent %20 语义与 ASCII 白名单）
   - `PlayUriTests`：5 条（占位 URI 构建 / 解析 / 旧 URI 兼容 / 非 ASCII URL 归一化）
   - `RetryAndPinningTests`：15 条（可重试状态码判定 / 安卓基线重试参数 / stub URLProtocol 端到端重试 3 条 / 域名白名单后缀·精确·大小写·fail-closed 5 条）
+  - `ShelfMappingTests`：3 条（build 18：书架领域模型 → SwiftData 实体映射）
   - `SourceRegistryTests`：6 条（源注册表 / fetch·img·audio 白名单互检）
+  - `ThemeStoreTests`：4 条（build 18：外观主题持久化与跟随系统）
   - `YtysxsAdapterTests`：10 条（反爬特征全关键词 / 搜索·详情·曲目解析黄金样本 / 直链白名单自检）
 
 - **未移植**（典型原因）：

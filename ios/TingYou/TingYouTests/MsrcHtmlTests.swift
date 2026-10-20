@@ -177,4 +177,18 @@ final class MsrcHtmlTests: XCTestCase {
         XCTAssertEqual(MsrcHtml.encodeUriComponent("a+b"), "a+b")
         XCTAssertFalse(MsrcHtml.encodeUriComponent("a b").contains("+"))
     }
+
+    func testEncodeUriComponentAsciiOnlyWhitelist() {
+        // 中文必须全部转义（安卓 encodeUriComponent 语义：白名单仅 ASCII）
+        XCTAssertEqual(MsrcHtml.encodeUriComponent("斗罗大陆"), "%E6%96%97%E7%BD%97%E5%A4%A7%E9%99%86")
+        XCTAssertEqual(MsrcHtml.encodeUriComponent("完美 世界"), "%E5%AE%8C%E7%BE%8E%20%E4%B8%96%E7%95%8C")
+        // 保留字符必须转义
+        XCTAssertEqual(MsrcHtml.encodeUriComponent("a&b=c/d?e#f"), "a%26b%3Dc%2Fd%3Fe%23f")
+        XCTAssertEqual(MsrcHtml.encodeUriComponent("100%"), "100%25")
+        // 安全符号原样保留
+        XCTAssertEqual(MsrcHtml.encodeUriComponent("id-_.!~*'()"), "id-_.!~*'()")
+        XCTAssertEqual(MsrcHtml.encodeUriComponent(""), "")
+        // 幂等性：已编码文本不应二次编码（% 与十六进制安全）
+        XCTAssertEqual(MsrcHtml.encodeUriComponent("%E6%96%97"), "%25E6%2596%2597")
+    }
 }

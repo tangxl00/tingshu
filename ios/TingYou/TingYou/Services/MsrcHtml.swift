@@ -70,11 +70,18 @@ enum MsrcHtml {
 
     // ---- 工具 ----
 
-    /// encodeURI 语义（路径段）：表单语义空格→+ 需还原为 %20
+    /// encodeURI 语义（路径段）：表单语义空格→+ 需还原为 %20。
+    /// 白名单必须是 ASCII 字母数字 + `-_.!~*'()+`：
+    /// `CharacterSet.alphanumerics` 包含全部 Unicode 字母，中文关键词会原样透传，
+    /// 拼出的搜索 URL 在服务端 400 → 搜索失败（安卓 encodeUriComponent 语义同为 ASCII）。
+    static let uriComponentAllowed: CharacterSet = {
+        var allowed = CharacterSet(charactersIn:
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()+")
+        return allowed
+    }()
+
     static func encodeUriComponent(_ s: String) -> String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-_.!~*'()")
-        return s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
+        s.addingPercentEncoding(withAllowedCharacters: uriComponentAllowed) ?? s
     }
 
     private static func reSub(_ re: NSRegularExpression, _ s: String) -> String {

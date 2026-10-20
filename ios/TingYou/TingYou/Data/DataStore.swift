@@ -1,13 +1,49 @@
 import Foundation
+import Observation
+import SwiftUI
 
+/// 外观模式唯一数据源。
+/// 修复（Bug 3）：原实现是普通类 + MineScreen 里另有一份 @AppStorage("theme_mode") 双入口，
+/// 且全工程无任何 .preferredColorScheme 消费——设置只存不用，切换外观无效果。
+/// 现改为 @Observable，UI 在根视图读取 themeMode 驱动 .preferredColorScheme，切换即时生效。
+@Observable
+@MainActor
 final class ThemeStore {
     static let MODE_LIGHT = 0
     static let MODE_DARK = 1
     static let MODE_FOLLOW_SYSTEM = 2
 
+    static let storageKey = "theme_mode"
+
+    private let defaults: UserDefaults
+
+    /// 当前模式（0 浅色 / 1 深色 / 2 跟随系统）
     var themeMode: Int {
-        get { UserDefaults.standard.integer(forKey: "theme_mode") }
-        set { UserDefaults.standard.set(newValue, forKey: "theme_mode") }
+        didSet {
+            guard oldValue != themeMode else { return }
+            defaults.set(themeMode, forKey: Self.storageKey)
+        }
+    }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        // 未设置时默认跟随系统（与原 @AppStorage 默认值 2 一致）
+        themeMode = defaults.object(forKey: Self.storageKey) == nil
+            ? Self.MODE_FOLLOW_SYSTEM
+            : defaults.integer(forKey: Self.storageKey)
+    }
+
+    func setMode(_ mode: Int) {
+        themeMode = min(max(mode, Self.MODE_LIGHT), Self.MODE_FOLLOW_SYSTEM)
+    }
+
+    /// 0/1/2 → ColorScheme 映射（nil = 跟随系统）；纯函数，根视图与单测共用
+    static func colorScheme(for mode: Int) -> ColorScheme? {
+        switch mode {
+        case MODE_LIGHT: return .light
+        case MODE_DARK: return .dark
+        default: return nil
+        }
     }
 }
 

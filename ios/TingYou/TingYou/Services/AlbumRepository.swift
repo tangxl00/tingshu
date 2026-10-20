@@ -1,6 +1,13 @@
 import Foundation
 import SwiftData
 
+/// 播放历史落库出口（Bug 2）：PlaybackManager 只依赖此协议，AppContainer 注入 AlbumRepository，
+/// 单测可注入假实现验证调用路径。
+protocol PlaybackHistoryRecording: Sendable {
+    /// 起播 / 切章 / 每 ~5s / 暂停时上报；按 (src, albumId) upsert，同一本书只保留一条。
+    func recordHistory(album: Album, chapter: Chapter, positionMs: Int64, durationMs: Int64) async
+}
+
 actor AlbumRepository {
     private let apiClient: APIClient
     private let modelContext: ModelContext?
@@ -10,6 +17,87 @@ actor AlbumRepository {
     init(apiClient: APIClient, modelContext: ModelContext? = nil) {
         self.apiClient = apiClient
         self.modelContext = modelContext
+    }
+
+    // MARK: - 播放历史 / 收藏落库（Bug 2）
+
+    /// mainContext 必须在主线程使用：所有 SwiftData 写入统一经 MainActor.run 执行。
+    /// 落库失败静默降级（历史/收藏是体验增强，不阻断播放）。
+    func recordHistory(album: Album, chapter: Chapter, positionMs: Int64, durationMs: Int64) async {
+        guard let ctx = modelContext else { return }
+        let src = album.source
+        let albumId = album.albumId
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let pos = max(0, positionMs)
+        let dur = max(0, durationMs)
+        await MainActor.run {
+            let fd = FetchDescriptor<HistoryModel>(
+                predicate: #Predicate { $0.src == src && $0.albumId == albumId })
+            if let h = (try? ctx.fetch(fd))?.first {
+                h.albumTitle = album.title
+                h.coverUrl = album.coverUrl
+                h.chapterIdx = chapter.index
+                h.chapterTitle = chapter.title
+                h.positionMs = pos
+                h.durationMs = dur
+                h.detailPath = album.detailPath
+                h.updatedAt = now
+            } else {
+                ctx.insert(HistoryModel(src: src, albumId: albumId, albumTitle: album.title,
+                                        coverUrl: album.coverUrl, chapterIdx: chapter.index,
+                                        chapterTitle: chapter.title, positionMs: pos, durationMs: dur,
+                                        detailPath: album.detailPath, updatedAt: now))
+            }
+            do { try ctx.save() } catch {
+                // build 19 P1-1：落库失败不允许静默——打印错误便于排查（历史为体验增强，仍不阻断播放）
+                print("recordHistory save failed [\(src)|\(albumId)]: \(error)")
+            }
+        }
+    }
+
+    /// 收藏状态查询（书架 @Query 之外的自查入口；PlayerScreen 收藏按钮初始化用）
+    func isFavorite(src: String, albumId: Int64) async -> Bool {
+        guard let ctx = modelContext else { return false }
+        return await MainActor.run {
+            let fd = FetchDescriptor<FavoriteModel>(
+                predicate: #Predicate { $0.src == src && $0.albumId == albumId })
+            return ((try? ctx.fetch(fd))?.first) != nil
+        }
+    }
+
+    /// 写入收藏（同一本书已收藏则幂等跳过）
+    func addFavorite(album: Album) async {
+        guard let ctx = modelContext else { return }
+        let src = album.source
+        let albumId = album.albumId
+        await MainActor.run {
+            let fd = FetchDescriptor<FavoriteModel>(
+                predicate: #Predicate { $0.src == src && $0.albumId == albumId })
+            guard ((try? ctx.fetch(fd))?.first) == nil else { return }
+            ctx.insert(FavoriteModel(src: src, albumId: albumId, title: album.title,
+                                      author: album.author, teller: album.teller,
+                                      coverUrl: album.coverUrl, chapterCount: album.chapterCount,
+                                      status: album.status, lastChapterIdx: nil,
+                                      detailPath: album.detailPath))
+            do { try ctx.save() } catch {
+                // build 19 P1-1：收藏写库失败不允许静默
+                print("addFavorite save failed [\(src)|\(albumId)]: \(error)")
+            }
+        }
+    }
+
+    /// 删除收藏
+    func removeFavorite(src: String, albumId: Int64) async {
+        guard let ctx = modelContext else { return }
+        await MainActor.run {
+            let fd = FetchDescriptor<FavoriteModel>(
+                predicate: #Predicate { $0.src == src && $0.albumId == albumId })
+            for m in (try? ctx.fetch(fd)) ?? [] { ctx.delete(m) }
+            do { try ctx.save() } catch {
+                // build 19 P1-1：删收藏失败不允许静默
+                print("removeFavorite save failed [\(src)|\(albumId)]: \(error)")
+            }
+        }
     }
 
     func rank(section: String, page: Int) async throws -> PagedResult<Album> {

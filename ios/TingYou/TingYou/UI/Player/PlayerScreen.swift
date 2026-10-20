@@ -76,30 +76,37 @@ struct PlayerScreen: View {
                                 Text("章节").font(.caption2)
                             }
                         }
+                        .buttonStyle(.pressable)
                         Button { showSleepTimer = true } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: "moon.fill").font(.title3)
                                 Text("定时").font(.caption2)
                             }
                         }
-                        Button { isFavorite.toggle() } label: {
+                        .buttonStyle(.pressable)
+                        // Bug 2：收藏真实落库（原为本地 @State 切换，重启即失）
+                        Button { toggleFavorite() } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: isFavorite ? "heart.fill" : "heart").font(.title3)
+                                    .foregroundStyle(isFavorite ? Color.pink : Color.secondary)
                                 Text("收藏").font(.caption2)
                             }
                         }
+                        .buttonStyle(.pressable)
                         Button { showSettings = true } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: "gearshape").font(.title3)
                                 Text("设置").font(.caption2)
                             }
                         }
+                        .buttonStyle(.pressable)
                         Button { shareAlbum() } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: "square.and.arrow.up").font(.title3)
                                 Text("分享").font(.caption2)
                             }
                         }
+                        .buttonStyle(.pressable)
                     }
                     .foregroundStyle(.secondary)
 
@@ -122,13 +129,41 @@ struct PlayerScreen: View {
             .sheet(isPresented: $showChapters) {
                 ChapterListSheet(
                     chapters: pm?.currentChapters ?? [],
-                    currentIdx: pm?.currentChapters.firstIndex(where: {
-                        $0.title == (pm?.currentChapterTitle ?? "")
-                    }) ?? 0
+                    // 用真实章序号定位当前项（原按标题匹配，同名章节会错位）
+                    currentIdx: pm?.currentChapterIdx ?? 0
                 ) { idx in
                     pm?.playChapter(at: idx)
                 }
             }
+        }
+        .task(id: favoriteKey) {
+            // Bug 2：收藏态从数据库初始化（原为固定 false）
+            await refreshFavorite()
+        }
+    }
+
+    /// 收藏定位键：当前专辑变化时重新查库
+    private var favoriteKey: String {
+        "\(pm?.currentAlbum?.source ?? "")|\(pm?.currentAlbum?.albumId ?? 0)"
+    }
+
+    private func refreshFavorite() async {
+        guard let album = pm?.currentAlbum,
+              let repo = container?.albumRepository else { return }
+        isFavorite = await repo.isFavorite(src: album.source, albumId: album.albumId)
+    }
+
+    private func toggleFavorite() {
+        guard let album = pm?.currentAlbum,
+              let repo = container?.albumRepository else { return }
+        Task {
+            if isFavorite {
+                await repo.removeFavorite(src: album.source, albumId: album.albumId)
+            } else {
+                await repo.addFavorite(album: album)
+            }
+            // 以库为准回读，避免并发态错位
+            isFavorite = await repo.isFavorite(src: album.source, albumId: album.albumId)
         }
     }
 

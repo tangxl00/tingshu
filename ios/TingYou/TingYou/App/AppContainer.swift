@@ -43,6 +43,8 @@ final class AppContainer {
         // P0-1：PlaybackManager 通过 AVAssetResourceLoaderDelegate 接管
         // tingyou-chapter:// 占位 URI，播放时实时向 PlaybackRepository 解析真实直链。
         playbackManager = PlaybackManager(playbackRepository: sourceRouter.playbackRepository)
+        // Bug 2：播放历史落库出口接线（起播/切章/5s 节流/暂停 → HistoryModel upsert）
+        playbackManager.historyRecorder = albumRepository
         importService = ImportService(modelContext: ctx)
 
         themeStore = ThemeStore()
