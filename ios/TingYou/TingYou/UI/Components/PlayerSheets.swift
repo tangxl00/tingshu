@@ -63,7 +63,8 @@ struct SleepTimerSheet: View {
     private var scheduledSection: some View {
         Section("定点时刻") {
             Picker("时刻", selection: $draftMinuteOfDay) {
-                ForEach(stride(from: 0, to: 24 * 60, by: 15), id: \.self) { total in
+                // CI 返修：StrideTo<Int> 不满足 RandomAccessCollection，包 Array 后再入 ForEach
+                ForEach(Array(stride(from: 0, to: 24 * 60, by: 15)), id: \.self) { total in
                     Text(String(format: "%02d:%02d", total / 60, total % 60)).tag(total)
                 }
             }
