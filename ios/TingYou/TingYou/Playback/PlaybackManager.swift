@@ -29,7 +29,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private var statusObserver: NSKeyValueObservation?
     private var _speed: Float = 1.0
     private var sleepTimer: Timer?
-    private var sleepConfig = SleepTimerConfig()
+    /// build 20 必修 4：定点睡眠接线单测断言用（对外只读）。
+    private(set) var sleepConfig = SleepTimerConfig()
     private var listenStartMs: Int64 = 0
     private let listeningTimeStore = ListeningTimeStore()
     private let skipStore = SkipSettingsStore()
@@ -354,28 +355,43 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         }
     }
 
+    /// build 20 必修 4：定点睡眠的目标时刻计算（抽成纯函数供单测）。
+    /// minuteOfDay 为当日分钟数（0..1439）；当日时刻未到 → 今天，已到（含恰好等于现在）→ 明天同一时刻。
+    /// Asia/Shanghai 与应用其余时区口径一致。
+    static func scheduledSleepTarget(minuteOfDay: Int, now: Date = Date(),
+                                     timeZone: TimeZone = TimeZone(identifier: "Asia/Shanghai")!) -> Date {
+        var cal = Calendar.current
+        cal.timeZone = timeZone
+        var comps = cal.dateComponents([.year, .month, .day], from: now)
+        comps.hour = minuteOfDay / 60
+        comps.minute = minuteOfDay % 60
+        let today = cal.date(from: comps) ?? now
+        if today > now { return today }
+        return cal.date(byAdding: .day, value: 1, to: today) ?? today.addingTimeInterval(86_400)
+    }
+
     func applySleepTimer(config: SleepTimerConfig) {
         sleepTimer?.invalidate()
         sleepConfig = config
         switch config.mode {
         case .off: break
+        case .endOfChapter:
+            // 章节播完即停：由章节结束回调处理，无需定时器
+            break
         case .countdown:
             sleepTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(config.minutes * 60), repeats: false) { [weak self] _ in
                 self?.pause()
                 self?.sleepConfig.mode = .off
             }
         case .scheduledTime:
-            let now = Date()
-            var cal = Calendar.current
-            cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
-            var comps = cal.dateComponents([.year, .month, .day], from: now)
-            comps.hour = config.minuteOfDay / 60
-            comps.minute = config.minuteOfDay % 60
-            if let target = cal.date(from: comps), target <= now {
-                // next day
+            // build 20 必修 4：原 case 计算完 target 后空置（"next day" 分支为空注释），
+            // 睡眠定时定点模式完全不生效。现补全：算出目标时刻（已过则顺延明天），
+            // 按剩余时长起一次定时器，到点暂停播放并复位模式。
+            let target = Self.scheduledSleepTarget(minuteOfDay: config.minuteOfDay)
+            sleepTimer = Timer.scheduledTimer(withTimeInterval: max(0, target.timeIntervalSinceNow), repeats: false) { [weak self] _ in
+                self?.pause()
+                self?.sleepConfig.mode = .off
             }
-            // simplified: use countdown approximation
-        default: break
         }
     }
 

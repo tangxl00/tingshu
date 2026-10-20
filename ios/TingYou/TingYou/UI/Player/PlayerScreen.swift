@@ -16,7 +16,7 @@ struct PlayerScreen: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    CoverImage(url: pm?.coverUrl, size: 280)
+                    CoverImage(url: pm?.coverUrl, size: 280, source: pm?.currentAlbum?.source)
                         .padding(.top)
 
                     VStack(spacing: 4) {

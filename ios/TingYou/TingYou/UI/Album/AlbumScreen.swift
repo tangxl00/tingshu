@@ -14,7 +14,7 @@ struct AlbumScreen: View {
         List {
             Section {
                 HStack(spacing: 12) {
-                    CoverImage(url: album.coverUrl, size: 90)
+                    CoverImage(url: album.coverUrl, size: 90, source: album.source)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(album.title).font(.headline).lineLimit(2)
                         if let author = album.author {

@@ -200,8 +200,11 @@ struct ShelfScreen: View {
         }
     }
 
+    /// build 20 必修 2：书架恢复播放重建完整章节队列。
+    /// 旧实现传 chapters: [chapter] 单章数组，恢复后上/下一章失效（播放队列只有一章）。
+    /// 现改为：用历史里的 src/albumId/detailPath 拉取完整章节列表后入队；
+    /// 拉取失败降级为旧的单章行为并打日志（不打断恢复）。
     private func resumeHistory(_ h: HistoryModel) {
-        // Build a minimal album and chapters to resume playback
         let album = Album(
             albumId: h.albumId, title: h.albumTitle, author: nil, teller: nil,
             coverUrl: h.coverUrl, intro: nil, category: nil, categoryId: nil,
@@ -209,35 +212,52 @@ struct ShelfScreen: View {
             updatedAt: nil, playCount: nil, available: true,
             source: h.src, detailPath: h.detailPath
         )
-        let chapter = Chapter(
-            chapterId: Int64(h.chapterIdx), index: h.chapterIdx,
-            title: h.chapterTitle, durationSec: nil
-        )
-        container?.playbackManager.playQueue(
-            album: album, chapters: [chapter], startIdx: h.chapterIdx, startPosMs: h.positionMs
-        )
-        onOpenPlayer()
+        let router = container?.sourceRouter
+        let planner = HistoryResumePlanner(fetchChapters: { src, albumId, detailPath in
+            guard let router else { throw HistoryResumePlanner.FetchUnavailableError() }
+            return try await router.chapters(src: src, albumId: albumId, detailPath: detailPath)
+        })
+        Task { @MainActor in
+            let outcome = await planner.plan(
+                src: h.src, albumId: h.albumId, detailPath: h.detailPath,
+                chapterIdx: h.chapterIdx, chapterTitle: h.chapterTitle
+            )
+            switch outcome {
+            case .fullQueue(let chapters, let startIdx):
+                container?.playbackManager.playQueue(
+                    album: album, chapters: chapters, startIdx: startIdx, startPosMs: h.positionMs
+                )
+            case .singleChapter(let chapter):
+                container?.playbackManager.playQueue(
+                    album: album, chapters: [chapter], startIdx: h.chapterIdx, startPosMs: h.positionMs
+                )
+            }
+            onOpenPlayer()
+        }
     }
 
     private func deleteFavorites(at offsets: IndexSet) {
         for idx in offsets {
             modelContext.delete(favorites[idx])
         }
-        try? modelContext.save()
+        // build 20 自查：删除收藏的落库不允许静默吞错（与 P1-1 修法一致）
+        do { try modelContext.save() } catch { print("deleteFavorites save failed: \(error)") }
     }
 
     private func deleteHistories(at offsets: IndexSet) {
         for idx in offsets {
             modelContext.delete(histories[idx])
         }
-        try? modelContext.save()
+        // build 20 自查：删除历史的落库不允许静默吞错
+        do { try modelContext.save() } catch { print("deleteHistories save failed: \(error)") }
     }
 
     private func clearAllHistory() {
         for h in histories {
             modelContext.delete(h)
         }
-        try? modelContext.save()
+        // build 20 自查：清空历史的落库不允许静默吞错
+        do { try modelContext.save() } catch { print("clearAllHistory save failed: \(error)") }
     }
 
     // MARK: - Local Import
@@ -335,7 +355,7 @@ struct HistoryRow: View {
     let history: HistoryModel
     var body: some View {
         HStack(spacing: 12) {
-            CoverImage(url: history.coverUrl, size: 60)
+            CoverImage(url: history.coverUrl, size: 60, source: history.src)
             VStack(alignment: .leading, spacing: 4) {
                 Text(history.albumTitle).lineLimit(1).font(.subheadline)
                 Text("\(history.chapterTitle)").lineLimit(1).font(.caption).foregroundStyle(.secondary)
@@ -356,7 +376,7 @@ struct HistoryGridItem: View {
     let history: HistoryModel
     var body: some View {
         VStack(spacing: 4) {
-            CoverImage(url: history.coverUrl, size: 100)
+            CoverImage(url: history.coverUrl, size: 100, source: history.src)
             Text(history.albumTitle).lineLimit(1).font(.caption)
             Text("\(history.chapterTitle)").lineLimit(1).font(.caption2).foregroundStyle(.secondary)
         }
@@ -367,7 +387,7 @@ struct FavoriteRow: View {
     let favorite: FavoriteModel
     var body: some View {
         HStack(spacing: 12) {
-            CoverImage(url: favorite.coverUrl, size: 60)
+            CoverImage(url: favorite.coverUrl, size: 60, source: favorite.src)
             VStack(alignment: .leading, spacing: 4) {
                 Text(favorite.title).lineLimit(1).font(.subheadline)
                 if let author = favorite.author {
@@ -384,7 +404,7 @@ struct FavoriteGridItem: View {
     let favorite: FavoriteModel
     var body: some View {
         VStack(spacing: 4) {
-            CoverImage(url: favorite.coverUrl, size: 100)
+            CoverImage(url: favorite.coverUrl, size: 100, source: favorite.src)
             Text(favorite.title).lineLimit(1).font(.caption)
         }
     }

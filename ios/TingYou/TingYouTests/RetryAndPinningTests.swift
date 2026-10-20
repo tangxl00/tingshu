@@ -49,6 +49,49 @@ final class RetryAndPinningTests: XCTestCase {
         XCTAssertEqual(cfg.backoff(forAttempt: 0), 1.0)
     }
 
+    // MARK: - build 20 必修 5：传输层错误重试退避
+
+    func testTransportBackoffLadderValues() {
+        let cfg = RetryConfig.standard
+        XCTAssertEqual(cfg.transportBackoffSecs, [0.5, 1.0, 2.0], "0.5s/1s/2s 指数退避阶梯")
+        XCTAssertEqual(cfg.transportBackoff(forAttempt: 0), 0.5)
+        XCTAssertEqual(cfg.transportBackoff(forAttempt: 1), 1.0)
+        XCTAssertEqual(cfg.transportBackoff(forAttempt: 2), 2.0)
+        XCTAssertEqual(cfg.transportBackoff(forAttempt: 5), 2.0, "阶梯用尽后取最后一档")
+    }
+
+    func testTransportErrorRetriesWithBackoffThenSucceeds() async throws {
+        // 判别力：旧实现传输层错误 continue 直跑、无等待——elapsed 断言在旧实现下必失败
+        var calls = 0
+        RetryStubURLProtocol.handler = { _ in
+            calls += 1
+            return (200, Data("ok".utf8))
+        }
+        RetryStubURLProtocol.errorOnce = URLError(.notConnectedToInternet)
+        let client = APIClient(session: RetryStubURLProtocol.makeSession())
+        let cfg = RetryConfig(maxRetries: 1, backoffSecs: [1.5], transportBackoffSecs: [0.3])
+        let request = URLRequest(url: URL(string: "https://m.ting15.com/")!)
+        let start = Date()
+        let (data, resp) = try await client.execute(request, retry: cfg)
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertEqual(resp.statusCode, 200)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "ok")
+        XCTAssertEqual(calls, 2, "传输层错误应重试一次后成功")
+        XCTAssertGreaterThanOrEqual(elapsed, 0.25, "重试前必须退避等待（0.3s 档），旧实现直跑不等待")
+        RetryStubURLProtocol.handler = nil
+    }
+
+    func testTransportErrorSucceedsImmediatelyWithoutDelay() async throws {
+        // 首发成功不引入任何退避延迟（对用户可感知的首次请求无感）
+        RetryStubURLProtocol.handler = { _ in (200, Data("ok".utf8)) }
+        let client = APIClient(session: RetryStubURLProtocol.makeSession())
+        let request = URLRequest(url: URL(string: "https://m.ting15.com/")!)
+        let start = Date()
+        _ = try await client.execute(request)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.25, "首发成功不应有任何退避延迟")
+        RetryStubURLProtocol.handler = nil
+    }
+
     // MARK: - APIClient.execute 端到端重试（stub 协议注入）
 
     func testExecuteRetriesOn502ThenSucceeds() async throws {
@@ -142,6 +185,8 @@ final class RetryAndPinningTests: XCTestCase {
 /// 注入 APIClient 的 URLProtocol stub：按 handler 返回 (statusCode, body)。
 final class RetryStubURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) -> (Int, Data))?
+    /// build 20 必修 5：下一次请求注入一次传输层错误（用后自动清空，模拟瞬时断网）
+    nonisolated(unsafe) static var errorOnce: Error?
 
     static func makeSession() -> URLSession {
         let cfg = URLSessionConfiguration.ephemeral
@@ -153,6 +198,11 @@ final class RetryStubURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        if let err = Self.errorOnce {
+            Self.errorOnce = nil
+            client?.urlProtocol(self, didFailWithError: err)
+            return
+        }
         guard let handler = Self.handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return

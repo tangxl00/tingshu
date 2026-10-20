@@ -23,7 +23,7 @@ struct MiniPlayerBar: View {
                 HStack(spacing: 10) {
                     // Cover (tap -> player)
                     Button(action: onTap) {
-                        CoverImage(url: pm?.coverUrl, size: 40)
+                        CoverImage(url: pm?.coverUrl, size: 40, source: pm?.currentAlbum?.source)
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)

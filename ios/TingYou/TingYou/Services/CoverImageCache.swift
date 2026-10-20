@@ -31,24 +31,27 @@ final class CoverImageCache: @unchecked Sendable {
         memory.countLimit = 200
     }
 
-    /// P2-3：构建封面请求——防盗链图源（guoguo.org.cn 等）带 Referer。
-    static func makeRequest(for url: URL) -> URLRequest {
+    /// P2-3 / build 20 必修 1：构建封面请求——防盗链图源（guoguo.org.cn 等）带 Referer。
+    /// 必修 1：带上来源上下文按确切源取 referer（ting15 / ting08 共用 guoguo 图床，
+    /// 各带各的）；source 为 nil（无上下文）时回落旧的按 host 全局查找。
+    static func makeRequest(for url: URL, source: String? = nil) -> URLRequest {
         var req = URLRequest(url: url)
-        if let host = url.host, let referer = SourceRegistry.imageRefererFor(host: host) {
+        if let host = url.host, let referer = SourceRegistry.imageRefererFor(host: host, source: source) {
             req.setValue(referer, forHTTPHeaderField: "Referer")
         }
         return req
     }
 
     /// 取图：内存 → URLCache（含磁盘）→ 网络；磁盘命中对调用方透明。
-    func image(for url: URL) async -> UIImage? {
+    /// source：封面所属专辑的音源（防盗链 Referer 按源取值）。
+    func image(for url: URL, source: String? = nil) async -> UIImage? {
         if let cached = memory.object(forKey: url as NSURL) {
             return cached
         }
         let response: URLResponse?
         let data: Data?
         do {
-            (data, response) = try await session.data(for: Self.makeRequest(for: url))
+            (data, response) = try await session.data(for: Self.makeRequest(for: url, source: source))
         } catch {
             return nil // 含白名单拒绝 / TLS 失败，静默回落占位图
         }

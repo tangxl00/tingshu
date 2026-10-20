@@ -182,7 +182,7 @@ struct AlbumRow: View {
     let album: Album
     var body: some View {
         HStack(spacing: 12) {
-            CoverImage(url: album.coverUrl, size: 70)
+            CoverImage(url: album.coverUrl, size: 70, source: album.source)
             VStack(alignment: .leading, spacing: 4) {
                 Text(album.title).lineLimit(2).font(.subheadline)
                 if let author = album.author {

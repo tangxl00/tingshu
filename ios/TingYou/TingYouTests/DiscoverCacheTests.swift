@@ -65,10 +65,15 @@ final class DiscoverCacheTests: XCTestCase {
 
         let task = Task { await vm.loadRank(section: "recommend") }
 
-        // 中间态：网络未返回前，列表应已渲染缓存数据（秒显）
-        for _ in 0..<2000 where vm.albums.isEmpty {
-            await Task.yield()
+        // build 20 必修 6：自旋等待改 expectation——慢机不再因固定迭代上限提前跳出误判。
+        // 等待「列表第一次非空」这件事本身，超时兜底 5s；非空即断言此刻内容是缓存数据。
+        let cacheRendered = expectation(description: "网络返回前列表应先渲染缓存数据")
+        let observer = Task {
+            while vm.albums.isEmpty { await Task.yield() }
+            cacheRendered.fulfill()
         }
+        await fulfillment(of: [cacheRendered], timeout: 5)
+        observer.cancel()
         XCTAssertEqual(vm.albums.map(\.title), ["缓存书"], "等待网络期间应先显示缓存数据")
 
         _ = await task.value

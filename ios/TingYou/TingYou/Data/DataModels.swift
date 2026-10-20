@@ -74,12 +74,16 @@ final class HistoryModel {
 
 @Model
 final class ImportedBookModel {
-    @Attribute(.unique) var id: Int64
+    // build 20 必修 3：删除 @Attribute(.unique) var id 并去掉 init 默认 id=0——
+    // 与 build 19 修的 FavoriteModel 同型问题：SwiftData 的 .unique 是逐属性唯一，
+    // 配合默认 id=0，第二本导入书必然触发约束冲突。
+    // id 唯一性改由写入侧（ImportService.importLinks fetch 最大 id + 1）保证。
+    var id: Int64
     var title: String
     var kind: String
     var createdAt: Int64
 
-    init(id: Int64 = 0, title: String, kind: String,
+    init(id: Int64, title: String, kind: String,
          createdAt: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) {
         self.id = id; self.title = title; self.kind = kind; self.createdAt = createdAt
     }

@@ -6,7 +6,7 @@ iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐
 
 - **Bundle ID**：`com.tingyou.app.ios`
 - **CFBundleShortVersionString**：`1.3.3`
-- **CFBundleVersion**：`19`（与安卓 versionCode 对齐）
+- **CFBundleVersion**：`20`（与安卓 versionCode 对齐）
 - **最低系统**：iOS 17.0（SwiftData 依赖）
 - **签名状态**：**未签名**——本仓库与 CI 产物均不签名，需用户自行用爱思助手 / AltStore / Sideloadly 免费自签安装（7 天需重签）
 - **ATS**：全禁明文 HTTP（`NSAllowsArbitraryLoads = false`）
@@ -32,7 +32,7 @@ ios/TingYou/
 │   ├── UI/                         # SwiftUI 视图（含 YtysxsVerifyWebView 反爬人工验证容器）
 │   ├── Utils/                      # 工具（分页 / 诊断日志 / 扩展）
 │   └── Resources/Certs/            # 27 张 .pem 锚点证书
-└── TingYouTests/                   # XCTest（118 条测试函数，14 个测试类，见 §8）
+└── TingYouTests/                   # XCTest（136 条测试函数，17 个测试类，见 §8）
 ```
 
 ## 3. 本地构建
@@ -160,18 +160,21 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 ## 8. 测试对账
 
 - **安卓基线**：276 条 `@Test`（43 个测试类）
-- **iOS 现有**：**118 条测试函数，14 个测试类**（与 `TingYouTests/*.swift` 内 `func test` 计数一致，可 grep 核对）：
-  - `CoverImageCacheTests`：8 条（build 19：封面会话挂 PinningURLSessionDelegate 断言 / 封面图源域名白名单互检 / 非白名单 host fail-closed·取图拒 nil / 防盗链 Referer 设置与省略 / 请求 URL 保全）
-  - `DiscoverCacheTests`：5 条（build 18：发现页预加载缓存命中 / 磁盘缓存失效 / 预取调度）
+- **iOS 现有**：**136 条测试函数，17 个测试类**（与 `TingYouTests/*.swift` 内 `func test` 计数一致，可 grep 核对）：
+  - `CoverImageCacheTests`：9 条（build 19：封面会话挂 PinningURLSessionDelegate 断言 / 封面图源域名白名单互检 / 非白名单 host fail-closed·取图拒 nil / 防盗链 Referer 设置与省略 / 请求 URL 保全；build 20 必修 1：同一 guoguo URL 按 ting15/ting08 源各带准确 referer）
+  - `DiscoverCacheTests`：5 条（build 18：发现页预加载缓存命中 / 磁盘缓存失效 / 预取调度；build 20 必修 6：中间态等待改 expectation）
   - `DtoMappingTests`：8 条（snake_case JSON → DTO → 领域模型）
   - `HistoryAndFavoriteTests`：6 条（build 18：历史 upsert / 收藏增删查幂等；build 19：P1-1 同源收藏两本书均落库 / P1-2 乱序写历史最终为新章节且写入串行）
+  - `HistoryResumeTests`：6 条（build 20 必修 2：恢复播放重建完整队列·定位 index/chapterId/标题/夹取 / 拉取失败与空列表降级单章 / locate 纯函数匹配优先级）
   - `ImportOrganizerTests`：14 条（自然排序 / 章节标题 / 书名建议 / 直链 / m3u 解析）
+  - `ImportServiceTests`：3 条（build 20 必修 3：两本导入书均落库且 id 递增互异 / 章节挂正确 bookId / 空链接建书 0 章）
   - `KeychainTokenStoreTests`：9 条（token 过期边界纯函数 / Keychain 存取闭环 / 过期自清理 / Cookie 头格式 / 24h 默认 Max-Age）
   - `MekuiAdapterTests`：8 条（wapseries MD5 签名黄金值 ×2 / 详情解析黄金样本 / 付费打标 / 缺章节降级）
   - `MsrcHtmlTests`：17 条（ting15 / ting08 搜索解析黄金样本 / 详情解析 / 两步 token 播放页 meta / 播放响应 BOM·status 双形态·-1 付费·-2 频控 / encodeUriComponent %20 语义与 ASCII 白名单）
   - `PlayUriTests`：5 条（占位 URI 构建 / 解析 / 旧 URI 兼容 / 非 ASCII URL 归一化）
-  - `RetryAndPinningTests`：15 条（可重试状态码判定 / 安卓基线重试参数 / stub URLProtocol 端到端重试 3 条 / 域名白名单后缀·精确·大小写·fail-closed 5 条）
+  - `RetryAndPinningTests`：18 条（可重试状态码判定 / 安卓基线重试参数 / stub URLProtocol 端到端重试 3 条 / 域名白名单后缀·精确·大小写·fail-closed 5 条；build 20 必修 5：传输层错误重试退避阶梯 / 重试前必须等待 / 首发成功零延迟）
   - `ShelfMappingTests`：3 条（build 18：书架领域模型 → SwiftData 实体映射）
+  - `SleepTimerTests`：5 条（build 20 必修 4：定点睡眠目标时刻今天/顺延明天/恰好等于/午夜边界 / applySleepTimer 接线）
   - `SourceRegistryTests`：6 条（源注册表 / fetch·img·audio 白名单互检）
   - `ThemeStoreTests`：4 条（build 18：外观主题持久化与跟随系统）
   - `YtysxsAdapterTests`：10 条（反爬特征全关键词 / 搜索·详情·曲目解析黄金样本 / 直链白名单自检）

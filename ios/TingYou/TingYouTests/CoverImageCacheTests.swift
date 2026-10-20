@@ -51,8 +51,30 @@ final class CoverImageCacheTests: XCTestCase {
 
     // MARK: - P2-3 防盗链 Referer
 
+    /// build 20 必修 1 判别测试：guoguo 图床被 ting15 / ting08 共用，
+    /// 同一封面 URL 按各自源带各自 referer——旧实现按字典序二选一，必有一条失败。
+    func testMakeRequestSetsRefererByExactSource() {
+        let url = URL(string: "https://img-book-oss.guoguo.org.cn/cover/1.jpg")!
+        let ting15 = CoverImageCache.makeRequest(for: url, source: SourceRegistry.TING15)
+        XCTAssertEqual(ting15.value(forHTTPHeaderField: "Referer"), "https://m.ting15.com/",
+                       "ting15 源的封面必须带 ting15 的 referer")
+        let ting08 = CoverImageCache.makeRequest(for: url, source: SourceRegistry.TING08)
+        XCTAssertEqual(ting08.value(forHTTPHeaderField: "Referer"), "https://www.ting08.com/",
+                       "ting08 源的封面必须带 ting08 的 referer")
+        // img-south-oss 子域同样按源取值
+        let south = URL(string: "https://img-south-oss.guoguo.org.cn/cover/2.jpg")!
+        XCTAssertEqual(
+            CoverImageCache.makeRequest(for: south, source: SourceRegistry.TING08)
+                .value(forHTTPHeaderField: "Referer"), "https://www.ting08.com/")
+        // 非该源图床的源上下文 → 回落全局查找（不误加别的 referer）
+        let tingyou = CoverImageCache.makeRequest(for: url, source: SourceRegistry.TINGYOU)
+        XCTAssertTrue(tingyou.value(forHTTPHeaderField: "Referer") == "https://m.ting15.com/"
+                      || tingyou.value(forHTTPHeaderField: "Referer") == "https://www.ting08.com/",
+                      "未知源上下文回落旧的按 host 查找")
+    }
+
     func testMakeRequestSetsRefererForGuoguoImgHost() {
-        // guoguo.org.cn 防盗链图源：必须带 Referer（ting15 / ting08 共用该图床，referer 取其一）
+        // 无源上下文（旧行为兜底）：guoguo 图源仍带 Referer（ting15 / ting08 共用该图床，取其一）
         let url = URL(string: "https://img-book-oss.guoguo.org.cn/cover/1.jpg")!
         let req = CoverImageCache.makeRequest(for: url)
         let referer = req.value(forHTTPHeaderField: "Referer")

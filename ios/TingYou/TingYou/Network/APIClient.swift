@@ -14,6 +14,9 @@ enum HttpRetryPolicy {
 struct RetryConfig: Sendable {
     let maxRetries: Int
     let backoffSecs: [TimeInterval]
+    /// build 20 必修 5：传输层错误（URLError，非状态码）重试的指数退避阶梯。
+    /// 首发不延迟——只有重试之间等待；阶梯用尽后取最后一档。
+    var transportBackoffSecs: [TimeInterval] = [0.5, 1.0, 2.0]
 
     static let msrc = RetryConfig(maxRetries: 1, backoffSecs: [1.5])
     static let mekui = RetryConfig(maxRetries: 2, backoffSecs: [2.5, 8.0])
@@ -22,6 +25,12 @@ struct RetryConfig: Sendable {
     func backoff(forAttempt attempt: Int) -> TimeInterval {
         guard !backoffSecs.isEmpty else { return 1.0 }
         return backoffSecs[min(attempt, backoffSecs.count - 1)]
+    }
+
+    /// 传输层错误重试的退避时长（attempt 为 0 基重试序号）。
+    func transportBackoff(forAttempt attempt: Int) -> TimeInterval {
+        guard !transportBackoffSecs.isEmpty else { return 0 }
+        return transportBackoffSecs[min(attempt, transportBackoffSecs.count - 1)]
     }
 }
 
@@ -70,6 +79,9 @@ actor APIClient {
             } catch {
                 lastError = error
                 if attempt >= retry.maxRetries { throw error }
+                // build 20 必修 5：传输层错误同样退避后重试（0.5s/1s/2s 阶梯），
+                // 不再 continue 直跑；首发请求不引入任何延迟。
+                try await Task.sleep(nanoseconds: UInt64(retry.transportBackoff(forAttempt: attempt) * 1_000_000_000))
                 continue
             }
             if HttpRetryPolicy.isRetryable(http.statusCode) && attempt < retry.maxRetries {

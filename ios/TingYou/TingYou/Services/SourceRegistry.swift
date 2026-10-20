@@ -84,6 +84,17 @@ enum SourceRegistry {
         msrcSources.values.first(where: { $0.imgHosts.contains(host) })?.referer
     }
 
+    /// build 20 必修 1：按确切源取封面防盗链 Referer。
+    /// guoguo.org.cn 图床被 ting15 / ting08 两个源共用，旧实现按字典序取第一个源的
+    /// referer，二选一不稳定；调用链带上源上下文后各自带自己的 referer。
+    /// 源未知 / 该源不使用此图床时，回落到旧的按 host 全局查找（保持旧行为兜底）。
+    static func imageRefererFor(host: String, source: String?) -> String? {
+        if let source, let cfg = msrcSources[source], cfg.imgHosts.contains(host) {
+            return cfg.referer
+        }
+        return imageRefererFor(host: host)
+    }
+
     static func audioHostAllowed(cfg: MsrcSourceConfig, host: String) -> Bool {
         cfg.audioExact.contains(host) || cfg.audioSuffixes.contains(where: { host.hasSuffix($0) })
     }
