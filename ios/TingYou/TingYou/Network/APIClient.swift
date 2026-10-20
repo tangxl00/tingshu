@@ -134,6 +134,11 @@ actor APIClient {
     /// build 21 · 反馈 2（Bug B）：响应体按网页声明的字符集解码，不再静默 utf8 ?? ""。
     /// 解码链：Content-Type 的 charset 参数 → utf-8 → gb18030（GBK 系老站）→ ISO-8859-1 兜底（永不失败）。
     /// 静默返回空串会掩盖乱码与丢数据；本函数保证「尽力解出可读文本」。
+    /// （Swift 的 String.Encoding 无 gb18030 静态成员，经 CF 桥接构造——与 big5 同模式。）
+    static let gb18030Encoding = String.Encoding(
+        rawValue: CFStringConvertEncodingToNSStringEncoding(
+            CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+
     static func decodeBody(_ data: Data, contentType: String?) -> String {
         // 1) Content-Type 里声明的 charset 优先
         var declared: String.Encoding? = nil
@@ -148,7 +153,7 @@ actor APIClient {
             return s
         }
         // 2) utf-8 → gb18030 → ISO-8859-1（逐级探测；gb18030 向下兼容 GBK/GB2312）
-        for enc in [String.Encoding.utf8, String.Encoding.gb18030] {
+        for enc in [String.Encoding.utf8, Self.gb18030Encoding] {
             if let s = String(data: data, encoding: enc), !s.isEmpty { return s }
         }
         return String(data: data, encoding: .isoLatin1) ?? ""
@@ -158,13 +163,13 @@ actor APIClient {
     private static func encoding(forName name: String) -> String.Encoding? {
         let known: [String: String.Encoding] = [
             "utf-8": .utf8, "utf8": .utf8,
-            "gb18030": .gb18030,
-            "gbk": .gb18030,
-            "gb2312": .gb18030,   // GB2312 是 GBK 子集，gb18030 可解
-            "big5": CFStringConvertEncodingToNSStringEncoding(
-                CFStringEncoding(CFStringEncodings.big5.rawValue)),
-            "big5-hkscs": CFStringConvertEncodingToNSStringEncoding(
-                CFStringEncoding(CFStringEncodings.big5.rawValue)),
+            "gb18030": gb18030Encoding,
+            "gbk": gb18030Encoding,
+            "gb2312": gb18030Encoding,   // GB2312 是 GBK 子集，gb18030 可解
+            "big5": String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.big5.rawValue))),
+            "big5-hkscs": String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
+                CFStringEncoding(CFStringEncodings.big5.rawValue))),
             "shift_jis": .shiftJIS,
             "euc-jp": .japaneseEUC,
             "iso-8859-1": .isoLatin1, "latin1": .isoLatin1, "ascii": .ascii,

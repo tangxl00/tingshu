@@ -79,7 +79,7 @@ struct ContentView: View {
         )
         let router = container.sourceRouter
         let planner = HistoryResumePlanner(fetchChapters: { src, albumId, detailPath in
-            guard let router else { throw HistoryResumePlanner.FetchUnavailableError() }
+            // sourceRouter 为非可选值（CI 编译错误修正：guard let 不成立），直接使用
             return try await router.chapters(src: src, albumId: albumId, detailPath: detailPath)
         })
         let outcome = await planner.plan(

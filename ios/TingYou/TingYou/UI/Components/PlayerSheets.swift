@@ -17,57 +17,74 @@ struct SleepTimerSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("模式") {
-                    modeRow(.off, title: "关闭", detail: "不启用定时")
-                    modeRow(.endOfChapter, title: "播完当前章", detail: "本章播放结束后停止")
-                    modeRow(.countdown, title: "倒计时", detail: "分钟后停止")
-                    modeRow(.scheduledTime, title: "定点", detail: "到指定时刻停止")
-                }
-                if draftMode == .countdown {
-                    Section("倒计时时长（分钟）") {
-                        ForEach(minutePresets, id: \.self) { m in
-                            let selected = draftMinutes == m
-                            Button("\(m) 分钟") {
-                                draftMinutes = m
-                            }
-                            .checkmark(selected)
-                            .buttonStyle(.pressable)
-                            .listRowBackground(Group { if selected { Color.accentColor.opacity(0.12) } })
-                        }
-                    }
-                }
-                if draftMode == .scheduledTime {
-                    Section("定点时刻") {
-                        Picker("时刻", selection: $draftMinuteOfDay) {
-                            ForEach(stride(from: 0, to: 24 * 60, by: 15), id: \.self) { total in
-                                Text(String(format: "%02d:%02d", total / 60, total % 60)).tag(total)
-                            }
-                        }
-                        .pickerStyle(.wheel)
-                    }
-                }
+                modeSection
+                if draftMode == .countdown { countdownSection }
+                if draftMode == .scheduledTime { scheduledSection }
             }
             .navigationTitle("定时关闭")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") {
-                        var c = config
-                        c.mode = draftMode
-                        c.minutes = draftMinutes
-                        c.minuteOfDay = draftMinuteOfDay
-                        config = c
-                        onApply(c)
-                        dismiss()
-                    }
+                    Button("完成", action: applyDraft)
                 }
             }
         }
-        .onAppear {
-            draftMode = config.mode
-            if config.minutes > 0 { draftMinutes = config.minutes }
-            if config.minuteOfDay > 0 { draftMinuteOfDay = config.minuteOfDay }
+        .onAppear(perform: loadDraftFromConfig)
+    }
+
+    /// build 21 CI 返修：原 List 单表达式过大导致类型检查超时——拆为三个小节属性 + 两个动作方法。
+    private var modeSection: some View {
+        Section("模式") {
+            modeRow(.off, title: "关闭", detail: "不启用定时")
+            modeRow(.endOfChapter, title: "播完当前章", detail: "本章播放结束后停止")
+            modeRow(.countdown, title: "倒计时", detail: "分钟后停止")
+            modeRow(.scheduledTime, title: "定点", detail: "到指定时刻停止")
         }
+    }
+
+    private var countdownSection: some View {
+        Section("倒计时时长（分钟）") {
+            ForEach(minutePresets, id: \.self) { m in
+                minuteRow(m)
+            }
+        }
+    }
+
+    private func minuteRow(_ m: Int) -> some View {
+        let selected = draftMinutes == m
+        return Button("\(m) 分钟") {
+            draftMinutes = m
+        }
+        .checkmark(selected)
+        .buttonStyle(.pressable)
+        .listRowBackground(Group { if selected { Color.accentColor.opacity(0.12) } })
+    }
+
+    private var scheduledSection: some View {
+        Section("定点时刻") {
+            Picker("时刻", selection: $draftMinuteOfDay) {
+                ForEach(stride(from: 0, to: 24 * 60, by: 15), id: \.self) { total in
+                    Text(String(format: "%02d:%02d", total / 60, total % 60)).tag(total)
+                }
+            }
+            .pickerStyle(.wheel)
+        }
+    }
+
+    private func applyDraft() {
+        var c = config
+        c.mode = draftMode
+        c.minutes = draftMinutes
+        c.minuteOfDay = draftMinuteOfDay
+        config = c
+        onApply(c)
+        dismiss()
+    }
+
+    private func loadDraftFromConfig() {
+        draftMode = config.mode
+        if config.minutes > 0 { draftMinutes = config.minutes }
+        if config.minuteOfDay > 0 { draftMinuteOfDay = config.minuteOfDay }
     }
 
     private func modeRow(_ mode: SleepTimerMode, title: String, detail: String) -> some View {
