@@ -33,8 +33,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private(set) var sleepConfig = SleepTimerConfig()
     private var listenStartMs: Int64 = 0
     private let listeningTimeStore = ListeningTimeStore()
-    private let skipStore = SkipSettingsStore()
-    private var outroSkipTimer: Timer?
+    private let skipStore: SkipSettingsStore
     private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Bug 2 播放历史落库 + 增强 5.3 下一章预取
@@ -82,6 +81,47 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private(set) var playMode: PlayMode = PlayMode(rawValue: UserDefaults.standard.integer(forKey: "play_mode")) ?? .sequence
     private static let playModeKey = "play_mode"
 
+    // MARK: - build 25 · 片头/片尾跳过（对齐安卓 v1.3.0 item 8）
+
+    /// 当前书片头跳过秒数（默认 0 = 关闭；设置面板 Binding 读）。
+    var introSkipSeconds: Int {
+        guard let album = currentAlbum else { return 0 }
+        return skipStore.intro(for: album.source, albumId: album.albumId)
+    }
+    /// 当前书片尾跳过秒数（默认 0 = 关闭）。
+    var outroSkipSeconds: Int {
+        guard let album = currentAlbum else { return 0 }
+        return skipStore.outro(for: album.source, albumId: album.albumId)
+    }
+
+    /// 起播位置决策（纯函数供单测）：恢复进度优先，其次片头跳过秒数。
+    /// 对齐安卓 PlaybackService.applyIntroSkip（新章起播 seek 到指定秒），
+    /// 但恢复播放场景保留用户上次进度，不被片头跳过覆盖。
+    static func chapterStartMs(startPosMs: Int64, introSec: Int) -> Int64 {
+        if startPosMs > 0 { return startPosMs }
+        return Int64(max(0, introSec)) * 1000
+    }
+
+    /// 片尾跳过判定（纯函数供单测）：剩余时长 ≤ 指定秒（且确实在播放中）时触发。
+    /// 对齐安卓 startOutroSkipWatcher：`remainingMs <= outroMs` 切下一章。
+    static func shouldSkipOutro(positionMs: Int64, durationMs: Int64, outroSec: Int) -> Bool {
+        guard outroSec > 0, durationMs > 0 else { return false }
+        let remaining = durationMs - positionMs
+        return remaining > 0 && remaining <= Int64(outroSec) * 1000
+    }
+
+    /// 设置当前书片头跳过秒数（对齐安卓 PlayerViewModel.setIntroSkip）。
+    func setIntroSkip(_ seconds: Int) {
+        guard let album = currentAlbum else { return }
+        skipStore.setIntro(seconds, src: album.source, albumId: album.albumId)
+    }
+
+    /// 设置当前书片尾跳过秒数（对齐安卓 PlayerViewModel.setOutroSkip）。
+    func setOutroSkip(_ seconds: Int) {
+        guard let album = currentAlbum else { return }
+        skipStore.setOutro(seconds, src: album.source, albumId: album.albumId)
+    }
+
     /// build 21 · 反馈 1：章节自然播完后的动作决策（纯函数供单测）。
     /// 顺序播放到尾即停（与旧行为一致）；单曲循环重播本章；列表循环尾章后回第一章。
     enum ChapterFinishedAction: Equatable {
@@ -108,8 +148,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         UserDefaults.standard.set(mode.rawValue, forKey: Self.playModeKey)
     }
 
-    init(playbackRepository: PlaybackRepository? = nil) {
+    init(playbackRepository: PlaybackRepository? = nil, skipStore: SkipSettingsStore = SkipSettingsStore()) {
         self.playbackRepository = playbackRepository
+        self.skipStore = skipStore
         super.init()
         _speed = UserDefaults.standard.float(forKey: "playback_speed")
         if _speed < 0.5 || _speed > 4.0 { _speed = 1.0 }
@@ -222,8 +263,14 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             }
         }
         player.replaceCurrentItem(with: item)
-        if startPosMs > 0 {
-            player.seek(to: CMTime(seconds: Double(startPosMs) / 1000.0, preferredTimescale: 1000))
+        // build 25（对齐安卓 v1.3.0 item 8 applyIntroSkip）：新章起播应用片头跳过秒数；
+        // 恢复播放（startPosMs > 0）保留用户上次进度，不被片头跳过覆盖。
+        let albumSource = currentAlbum?.source ?? "tingyou"
+        let albumId = currentAlbum?.albumId ?? 0
+        let startMs = Self.chapterStartMs(startPosMs: startPosMs,
+                                           introSec: skipStore.intro(for: albumSource, albumId: albumId))
+        if startMs > 0 {
+            player.seek(to: CMTime(seconds: Double(startMs) / 1000.0, preferredTimescale: 1000))
         }
         if autoPlay {
             player.rate = speed
@@ -231,8 +278,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             listenStartMs = Int64(Date().timeIntervalSince1970 * 1000)
         }
         updateNowPlaying()
-        // Bug 2：起播/切章立即落一次历史（记录新章节起点）
-        recordHistory(force: true, positionMs: startPosMs)
+        // Bug 2：起播/切章立即落一次历史（记录新章节起点；build 25：含片头跳过后的位置）
+        recordHistory(force: true, positionMs: startMs)
         // 增强 5.3：预取下一章直链（提前解析 + AVFoundation 预热），切章零等待
         scheduleNextChapterPrefetch()
     }
@@ -392,9 +439,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private func checkOutroSkip() {
         guard let album = currentAlbum else { return }
         let outro = skipStore.outro(for: album.source, albumId: album.albumId)
-        guard outro > 0, durationMs > 0 else { return }
-        let remaining = durationMs - currentPositionMs
-        if remaining > 0 && remaining <= Int64(outro) * 1000 {
+        // build 25：判定抽成纯函数 shouldSkipOutro（供单测）；
+        // 触发切下一章（与自动连播同入口 nextChapter，末章不越界——对齐安卓 seekToNextMediaItem）
+        if Self.shouldSkipOutro(positionMs: currentPositionMs, durationMs: durationMs, outroSec: outro) {
             nextChapter()
         }
     }
@@ -439,10 +486,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         }
     }
 
-    func setSkipSettings(intro: Int, outro: Int, src: String, albumId: Int64) {
-        skipStore.setIntro(intro, src: src, albumId: albumId)
-        skipStore.setOutro(outro, src: src, albumId: albumId)
-    }
+    // build 25：原 setSkipSettings(intro:outro:src:albumId:) 无调用方（UI 从未接线），
+    // 被 setIntroSkip / setOutroSkip（对齐安卓 VM 命名、按 currentAlbum 定位书）替代后删除。
 
     // MARK: - Bug 2 历史落库 + 增强 5.3 预取实现
 

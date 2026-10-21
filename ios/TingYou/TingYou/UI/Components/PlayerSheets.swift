@@ -108,12 +108,20 @@ struct SleepTimerSheet: View {
     }
 }
 
-/// build 21 · 反馈 1：播放器设置面板（最小集：播放模式）。
-/// 播放模式逻辑在 PlaybackManager（chapterFinishedAction 纯函数），
-/// 本面板只做选择 UI + setPlayMode 持久化接线。
+/// build 21 · 反馈 1：播放器设置面板（播放模式）。
+/// build 25（对齐安卓 v1.3.0 item 8）：新增片头/片尾跳过两行时长选择器
+/// （安卓 PlayerSettingsSheet + SkipSliderRow 等价移植：Slider 0–300 每 5 秒一档、
+/// 0 显示「关闭」、底部说明文案），按书持久化（SkipSettingsStore）。
 struct PlayerSettingsSheet: View {
     @Binding var playMode: PlayMode
+    /// 当前书片头跳过秒数（build 25）
+    let introSec: Int
+    /// 当前书片尾跳过秒数（build 25）
+    let outroSec: Int
     let onSelect: (PlayMode) -> Void
+    /// build 25：拖动结束回调（对齐安卓 onValueChangeFinished）
+    let onIntroChange: (Int) -> Void
+    let onOutroChange: (Int) -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -137,7 +145,16 @@ struct PlayerSettingsSheet: View {
                         .listRowBackground(Group { if selected { Color.accentColor.opacity(0.12) } })
                     }
                 }
+                // build 25（对齐安卓 PlayerSettingsSheet 面板形态）
+                Section("片头/片尾跳过") {
+                    SkipSliderRow(label: "片头跳过", valueSec: introSec, onValueChangeFinished: onIntroChange)
+                    SkipSliderRow(label: "片尾跳过", valueSec: outroSec, onValueChangeFinished: onOutroChange)
+                }
                 Section {
+                    Text("片头跳过：新章自动跳转到指定秒数；片尾跳过：播放到剩余时长时自动切下一章。\n（对本书生效，恢复播放时保留上次进度）")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    // build 21 · 反馈 1：播放模式说明（build 25 面板扩容后保留）
                     Text("顺序播放：播完最后一章后停止\n单曲循环：当前章播完后重播本章\n列表循环：最后一章播完后回到第一章")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -151,5 +168,41 @@ struct PlayerSettingsSheet: View {
                 }
             }
         }
+    }
+}
+
+/// build 25（对齐安卓 SkipSliderRow）：时长选择行——Slider 0–300 每 5 秒一档，
+/// 右侧实时显示「关闭」或「N 秒」，拖动结束才落值（不逐档写库）。
+private struct SkipSliderRow: View {
+    let label: String
+    let valueSec: Int
+    let onValueChangeFinished: (Int) -> Void
+    @State private var sliderValue: Double
+    /// 对齐安卓：valueRange 0f..300f、steps 59（0, 5, 10, …, 300 共 61 档）
+    private static let maxSlider = 300.0
+
+    init(label: String, valueSec: Int, onValueChangeFinished: @escaping (Int) -> Void) {
+        self.label = label
+        self.valueSec = valueSec
+        self.onValueChangeFinished = onValueChangeFinished
+        _sliderValue = State(initialValue: Double(valueSec))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                Spacer()
+                Text(sliderValue == 0 ? "关闭" : "\(Int(sliderValue)) 秒")
+                    .monospacedDigit()
+                    .foregroundStyle(Color.accentColor)
+            }
+            Slider(value: $sliderValue, in: 0...Self.maxSlider, step: 5) { editing in
+                if !editing {
+                    onValueChangeFinished(Int(sliderValue))
+                }
+            }
+        }
+        .padding(.vertical, 2)
     }
 }

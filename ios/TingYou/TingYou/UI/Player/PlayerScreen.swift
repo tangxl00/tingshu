@@ -69,6 +69,8 @@ struct PlayerScreen: View {
                             Text("\(String(format: "%.1f", pm?.speed ?? 1.0))x")
                                 .font(.caption).monospacedDigit()
                         }
+                        // build 25（顺手项）：补按压视觉反馈（章节/定时/收藏均有，速度按钮漏挂）
+                        .buttonStyle(.pressable)
                         Button { pm?.seekRelative(15000) } label: {
                             Image(systemName: "goforward.15").font(.title3)
                         }
@@ -160,16 +162,21 @@ struct PlayerScreen: View {
                         pm?.applySleepTimer(config: c)
                     }
                 case .settings:
-                    // build 21 · 反馈 1（Bug A）：设置面板接线——最小面板：播放模式
+                    // build 21 · 反馈 1（Bug A）：设置面板接线——播放模式
                     // （顺序/单曲循环/列表循环），逻辑在 PlaybackManager.chapterFinishedAction。
+                    // build 25（对齐安卓 v1.3.0 item 8）：新增片头/片尾跳过接线——
+                    // 读当前书秒数、拖动结束落值（按书持久化，换书自动刷新）。
                     PlayerSettingsSheet(
                         playMode: Binding(
                             get: { pm?.playMode ?? .sequence },
                             set: { m in pm?.setPlayMode(m) }
-                        )
-                    ) { m in
-                        pm?.setPlayMode(m)
-                    }
+                        ),
+                        introSec: pm?.introSkipSeconds ?? 0,
+                        outroSec: pm?.outroSkipSeconds ?? 0,
+                        onSelect: { m in pm?.setPlayMode(m) },
+                        onIntroChange: { sec in pm?.setIntroSkip(sec) },
+                        onOutroChange: { sec in pm?.setOutroSkip(sec) }
+                    )
                 }
             }
         }

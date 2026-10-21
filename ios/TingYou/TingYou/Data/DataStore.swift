@@ -88,18 +88,27 @@ final class ListeningTimeStore {
 final class SkipSettingsStore {
     private let kIntro = "skip_intro_"
     private let kOutro = "skip_outro_"
+    /// build 25：defaults 可注入（单测用 UserDefaults(suiteName:) 隔离，不污染真实跳过设置）。
+    private let defaults: UserDefaults
+
+    /// 对齐安卓 SkipSettingsStore.MAX_SECONDS：最多跳过 10 分钟。
+    static let maxSeconds = 600
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     func intro(for src: String, albumId: Int64) -> Int {
-        UserDefaults.standard.integer(forKey: "\(kIntro)\(src)_\(albumId)")
+        defaults.integer(forKey: "\(kIntro)\(src)_\(albumId)")
     }
     func setIntro(_ sec: Int, src: String, albumId: Int64) {
-        UserDefaults.standard.set(sec, forKey: "\(kIntro)\(src)_\(albumId)")
+        defaults.set(min(max(sec, 0), Self.maxSeconds), forKey: "\(kIntro)\(src)_\(albumId)")
     }
     func outro(for src: String, albumId: Int64) -> Int {
-        UserDefaults.standard.integer(forKey: "\(kOutro)\(src)_\(albumId)")
+        defaults.integer(forKey: "\(kOutro)\(src)_\(albumId)")
     }
     func setOutro(_ sec: Int, src: String, albumId: Int64) {
-        UserDefaults.standard.set(sec, forKey: "\(kOutro)\(src)_\(albumId)")
+        defaults.set(min(max(sec, 0), Self.maxSeconds), forKey: "\(kOutro)\(src)_\(albumId)")
     }
 }
 
