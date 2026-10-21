@@ -55,6 +55,21 @@ final class DiscoverCacheTests: XCTestCase {
         func discoverCategory(src: String, categoryId: String, page: Int) async throws -> (albums: [Album], hasMore: Bool) { throw Boom() }
     }
 
+    /// build 24：按页号可配置失败的假件（loadMore 失败反馈 / 重试恢复测试用）。
+    final class FlakyDiscoverSource: DiscoverDataLoading, @unchecked Sendable {
+        var failPages: Set<Int> = []
+        var result = PagedResult<Album>(items: [], hasMore: false)
+
+        func loadRank(section: String, page: Int) async throws -> PagedResult<Album> {
+            if failPages.contains(page) { throw Boom() }
+            return result
+        }
+        func discoverCategory(src: String, categoryId: String, page: Int) async throws -> (albums: [Album], hasMore: Bool) {
+            if failPages.contains(page) { throw Boom() }
+            return (result.items, result.hasMore)
+        }
+    }
+
     // MARK: - 用例
 
     /// 启动先渲染缓存数据，网络返回后被静默刷新替换。
@@ -148,6 +163,75 @@ final class DiscoverCacheTests: XCTestCase {
         // 总量已超限：读取不崩溃即可（最新文件可能已被淘汰）
         _ = disk.loadSection("recommend")
         try? FileManager.default.removeItem(at: dir)
+    }
+
+    // MARK: - build 24（存量 P2：loadMore 失败反馈 / 缓存孤儿清理）
+
+    /// loadMore 失败：置轻量反馈态、已加载列表不清空、hasMore 保留（可重试）。
+    func testLoadMoreFailureSetsFeedbackAndKeepsLoadedList() async {
+        let source = FlakyDiscoverSource()
+        source.result = PagedResult(items: [makeAlbum(id: 1, title: "第1页书")], hasMore: true)
+
+        let vm = DiscoverViewModel()
+        vm.attach(loader: source, cache: nil)
+        await vm.load(target: .tingyouRank(section: "recommend"))
+        XCTAssertEqual(vm.albums.count, 1)
+        XCTAssertTrue(vm.hasMore)
+
+        source.failPages = [2]
+        await vm.loadMore()
+
+        XCTAssertTrue(vm.loadMoreFailed, "loadMore 失败应置用户可见反馈态")
+        XCTAssertEqual(vm.albums.map(\.title), ["第1页书"], "loadMore 失败不应清空已加载列表")
+        XCTAssertTrue(vm.hasMore, "hasMore 保留才有重试入口")
+        XCTAssertNil(vm.loadError, "loadMore 失败不应整页报错（与 loadError 分离）")
+    }
+
+    /// loadMore 失败后重试：页码已回退（重试打同一页），成功后反馈态清除。
+    func testLoadMoreRetryRecoversAfterFailure() async {
+        let source = FlakyDiscoverSource()
+        source.result = PagedResult(items: [makeAlbum(id: 1, title: "第1页书")], hasMore: true)
+
+        let vm = DiscoverViewModel()
+        vm.attach(loader: source, cache: nil)
+        await vm.load(target: .tingyouRank(section: "recommend"))
+
+        source.failPages = [2]
+        await vm.loadMore()
+        XCTAssertTrue(vm.loadMoreFailed)
+
+        // 页码 3 仍失败：若失败时未回退页码，重试会打第 3 页而再次失败
+        source.failPages = [3]
+        source.result = PagedResult(items: [makeAlbum(id: 2, title: "第2页书")], hasMore: false)
+        await vm.loadMore()
+
+        XCTAssertFalse(vm.loadMoreFailed, "重试成功后反馈态应清除")
+        XCTAssertEqual(vm.albums.map(\.title), ["第1页书", "第2页书"], "重试成功应追加到已加载列表")
+        XCTAssertFalse(vm.hasMore)
+    }
+
+    /// 磁盘缓存孤儿清理：init 传入合法键前缀后，旧多源键文件被删，
+    /// 合法键文件与非 rank-*.json 形态文件保留。
+    func testDiskCachePrunesOrphanKeysOnInit() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiscoverCacheTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fm = FileManager.default
+
+        // 预置三种文件：合法键 / build 21 多源孤儿键 / 非 rank 形态
+        let validFile = dir.appendingPathComponent("rank-tingyou|recommend.json")
+        let orphanFile = dir.appendingPathComponent("rank-ting15|玄幻.json")
+        let metaFile = dir.appendingPathComponent(".metadata")
+        try Data("[]".utf8).write(to: validFile)
+        try Data("[]".utf8).write(to: orphanFile)
+        try Data("{}".utf8).write(to: metaFile)
+
+        _ = DiskDiscoverCache(directory: dir, validKeyPrefixes: ["tingyou|"])
+
+        XCTAssertTrue(fm.fileExists(atPath: validFile.path), "命中合法前缀的缓存文件应保留")
+        XCTAssertFalse(fm.fileExists(atPath: orphanFile.path), "旧多源键孤儿文件应被清理")
+        XCTAssertTrue(fm.fileExists(atPath: metaFile.path), "非 rank-*.json 形态的文件不应被清理")
+        try? fm.removeItem(at: dir)
     }
 
     // MARK: - 辅助

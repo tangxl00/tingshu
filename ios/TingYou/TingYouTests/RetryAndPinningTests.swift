@@ -146,14 +146,18 @@ final class RetryAndPinningTests: XCTestCase {
     // MARK: - build 22 r2 · 连接级错误自动重试（真机反馈「The network connection was lost.」）
 
     func testConnectionErrorCodeSetIsExactlyConnectionClass() {
-        // 判别力：集合恰为四类连接级错误——多纳一个（如 cancelled）或漏一个都会被断出来
+        // 判别力：集合恰为六类连接级错误——多纳一个（如 cancelled）或漏一个都会被断出来
+        // build 24（P2-1）：补入 DNS 瞬时错误 -1003 / -1006，集合从四类扩为六类
         XCTAssertEqual(RetryConfig.connectionErrorCodes, [
             .networkConnectionLost, .timedOut, .cannotConnectToHost, .notConnectedToInternet,
+            .cannotFindHost, .dnsLookupFailed,
         ])
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.networkConnectionLost)))
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.timedOut)))
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.cannotConnectToHost)))
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.notConnectedToInternet)))
+        XCTAssertTrue(RetryConfig.isConnectionError(URLError(.cannotFindHost)), "build 24：DNS 解析失败应纳入连接重试")
+        XCTAssertTrue(RetryConfig.isConnectionError(URLError(.dnsLookupFailed)), "build 24：DNS 查找失败应纳入连接重试")
         // 非连接级 URLError 与非 URLError 一律不重试
         XCTAssertFalse(RetryConfig.isConnectionError(URLError(.cancelled)))
         XCTAssertFalse(RetryConfig.isConnectionError(URLError(.badURL)))

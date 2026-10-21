@@ -34,6 +34,9 @@ final class DiscoverViewModel {
     var hasMore = false
     /// 最近一次加载是否失败（UI 显示错误与重试）
     var loadError: String?
+    /// build 24（存量 P2）：加载更多失败的用户可见反馈——轻量提示 + 重试入口，
+    /// 不弹窗打断；成功后自动清除。与 loadError 分离：loadMore 失败不该清空已加载列表。
+    var loadMoreFailed = false
     private var currentPage = 1
     private var currentCacheKey = "tingyou|recommend"
     private var currentTarget: LoadTarget = .tingyouRank(section: "recommend")
@@ -48,8 +51,9 @@ final class DiscoverViewModel {
     }
 
     /// 幂等注入共享客户端（AppContainer.apiClient）与本地缓存。
-    /// 默认使用磁盘缓存；单测可注入假实现验证「优先读缓存」路径。
-    func attach(apiClient: APIClient, sourceRouter: SourceRouter? = nil, cache: (any DiscoverCacheStore)? = DiskDiscoverCache()) {
+    /// 默认使用磁盘缓存（build 24：启动一次性清理多源时代孤儿键，仅保留固定主源前缀）；
+    /// 单测可注入假实现验证「优先读缓存」路径。
+    func attach(apiClient: APIClient, sourceRouter: SourceRouter? = nil, cache: (any DiscoverCacheStore)? = DiskDiscoverCache(validKeyPrefixes: ["tingyou|"])) {
         attach(loader: CombinedDiscoverLoader(
             repo: AlbumRepository(apiClient: apiClient), router: sourceRouter), cache: cache)
     }
@@ -70,6 +74,7 @@ final class DiscoverViewModel {
     }
 
     /// 统一加载入口（第 1 页）。源不支持（ mekui/ytysxs 抛 unsupportedURL）时置 loadError。
+    /// build 24：整页重载时同步清除加载更多的失败态。
     func load(target: LoadTarget) async {
         guard let repo = repo, !isLoading else { return }
         isLoading = true
@@ -77,6 +82,7 @@ final class DiscoverViewModel {
         currentCacheKey = Self.cacheKey(for: target)
         currentPage = 1
         loadError = nil
+        loadMoreFailed = false
 
         // 增强 5.1：列表为空时先渲染上次缓存（打开秒显），失败也保留缓存内容
         if albums.isEmpty, let cached = cache?.loadSection(currentCacheKey), !cached.isEmpty {
@@ -116,8 +122,12 @@ final class DiscoverViewModel {
             let result = try await fetch(page: currentPage)
             albums.append(contentsOf: result.items)
             hasMore = result.hasMore
+            loadMoreFailed = false
         } catch {
             currentPage -= 1 // 失败回退页码，允许重试同一页
+            // build 24（存量 P2）：失败置轻量反馈态（UI 尾部显示提示 + 重试入口），
+            // 不清空已加载列表、不弹窗打断
+            loadMoreFailed = true
             print("Discover loadMore error: \(error)")
         }
         isLoading = false

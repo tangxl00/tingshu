@@ -32,12 +32,18 @@ final class SpeedSheetBindingTests: XCTestCase {
 // MARK: - build 22 · 对齐安卓：聚合搜索按启用集过滤
 
 /// 假搜索路由：按源返回固定结果 / 抛指定错误，并记录被搜索的源（验证启用集过滤）。
-private final class FakeSearcher: SourceSearching {
+private final class FakeSearcher: SourceSearching, @unchecked Sendable {
     var results: [String: [Album]] = [:]
     var failures: [String: Error] = [:]
+    /// build 24：每源延迟（并行化测试用；并行下 searchedSources 完成顺序不定）
+    var delayNanos: UInt64 = 0
+    private let lock = NSLock()
     private(set) var searchedSources: [String] = []
 
     func search(src: String, keyword: String) async throws -> [Album] {
+        if delayNanos > 0 { try? await Task.sleep(nanoseconds: delayNanos) }
+        lock.lock()
+        defer { lock.unlock() }
         searchedSources.append(src)
         if let error = failures[src] { throw error }
         return results[src] ?? []
@@ -89,12 +95,42 @@ final class AggregateSearchTests: XCTestCase {
         let outcome = await AggregateSearcher(searcher: searcher, enabledStore: store)
             .search(keyword: "书")
 
-        XCTAssertEqual(searcher.searchedSources, [SourceRegistry.TINGYOU, SourceRegistry.TING15, SourceRegistry.YTYXSX],
-                       "关闭的源（ting08/mekui）不参与搜索，顺序 = searchSources 固定序")
+        XCTAssertEqual(Set(searcher.searchedSources), Set([SourceRegistry.TINGYOU, SourceRegistry.TING15, SourceRegistry.YTYXSX]),
+                       "关闭的源（ting08/mekui）不参与搜索；build 24 并行化后完成顺序不定，参与集合仍 = 启用集")
+        XCTAssertEqual(searcher.searchedSources.count, 3, "每个启用源恰好搜索一次")
+        XCTAssertEqual(outcome.searchedSources, [SourceRegistry.TINGYOU, SourceRegistry.TING15, SourceRegistry.YTYXSX],
+                       "outcome.searchedSources 仍为固定序（结果组装以固定序进行）")
         XCTAssertEqual(outcome.albums.map(\.title), ["听友书", "听十五书"],
                        "关闭源的结果不出现")
         XCTAssertTrue(outcome.failedSourceNames.isEmpty)
         XCTAssertFalse(outcome.allFailed)
+    }
+
+    /// build 24（P2-2 · 性能）：并行化后结果仍按固定序拼接，且最坏耗时 ≈ 最慢单源
+    /// 而非逐源求和。五源各延迟 0.2s（串行和 = 1.0s，并行预期 ≈ 0.2s + 调度开销），
+    /// 断言总耗时 < 0.55s（不足串行的 55%——给 CI 调度抖动留 2 倍最慢单源余量）。
+    func testParallelSearchKeepsFixedOrderAndOverlapsInTime() async {
+        let store = makeStore() // 默认全启用
+        let searcher = FakeSearcher()
+        searcher.delayNanos = 200_000_000
+        searcher.results = [
+            SourceRegistry.TINGYOU: [album(1, "听友书", src: SourceRegistry.TINGYOU)],
+            SourceRegistry.TING15: [album(2, "听十五书", src: SourceRegistry.TING15)],
+            SourceRegistry.TING08: [album(3, "听吧书", src: SourceRegistry.TING08)],
+            SourceRegistry.YTYXSX: [album(4, "悦听书", src: SourceRegistry.YTYXSX)],
+            SourceRegistry.MEKUI: [album(5, "书音书", src: SourceRegistry.MEKUI)],
+        ]
+
+        let start = Date()
+        let outcome = await AggregateSearcher(searcher: searcher, enabledStore: store)
+            .search(keyword: "书")
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(outcome.albums.map(\.title), ["听友书", "听十五书", "听吧书", "悦听书", "书音书"],
+                       "并行化后结果仍按 searchSources 固定序拼接")
+        XCTAssertEqual(outcome.searchedSources, SourceEnabledStore.searchSources)
+        XCTAssertLessThan(elapsed, 0.55,
+                          "并行总耗时应 ≈ 最慢单源（0.2s）而非串行求和（1.0s）；实测 \(elapsed)s")
     }
 
     /// 关一个源后，该源的结果从聚合中消失（启用开关真正控制搜索范围）。

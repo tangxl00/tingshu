@@ -306,7 +306,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         // AVPlayer 取消等待：不中断已发起的解析任务（结果幂等，finishLoading 后无效调用安全）
     }
 
-    /// 章节列表页直接跳章（PlayerViewModel.playChapter 接线）
+    /// 章节列表页直接跳章（PlayerScreen 的 ChapterListSheet 接线）
     func playChapter(at index: Int) {
         guard index >= 0, index < currentChapters.count else { return }
         pause()

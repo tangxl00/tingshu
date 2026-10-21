@@ -200,7 +200,17 @@ struct DiscoverScreen: View {
                             AlbumRow(album: album)
                         }
                     }
-                    if viewModel.hasMore {
+                    if viewModel.loadMoreFailed {
+                        // build 24（存量 P2）：加载更多失败的轻量反馈——不弹窗打断，
+                        // 列表尾部一行提示 + 重试入口（成功后回到自动加载态）
+                        HStack(spacing: 8) {
+                            Text("加载更多失败").font(.caption).foregroundStyle(.orange)
+                            Button("重试") { Task { await viewModel.loadMore() } }
+                                .font(.caption)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                    } else if viewModel.hasMore {
                         ProgressView()
                             .onAppear {
                                 Task { await viewModel.loadMore() }

@@ -39,18 +39,43 @@ struct AggregateSearcher {
     }
 
     func search(keyword: String) async -> AggregateSearchOutcome {
+        let sources = enabledSources
+        // build 24（P2-2 · 性能）：从固定序串行改为 withTaskGroup 并行请求全部启用源，
+        // 弱网总耗时 ≈ 最慢单源而非逐源求和。对外行为不变：
+        // - 结果仍按 searchSources 固定序拼接（回填数组按启动序遍历组装）
+        // - 单源失败收名、allFailed 语义、悦听 antibot 透传与串行版一致
+        //   （antibot 取固定序中最后一个命中——与串行覆盖语义相同）
+        let searcher = self.searcher
+        var results: [Result<[Album], Error>?] = Array(repeating: nil, count: sources.count)
+        await withTaskGroup(of: (Int, Result<[Album], Error>).self) { group in
+            for (idx, src) in sources.enumerated() {
+                group.addTask {
+                    do {
+                        return (idx, .success(try await searcher.search(src: src, keyword: keyword)))
+                    } catch {
+                        return (idx, .failure(error))
+                    }
+                }
+            }
+            for await (idx, result) in group {
+                results[idx] = result
+            }
+        }
         var albums: [Album] = []
         var failed: [String] = []
         var antibotKeyword: String?
-        let sources = enabledSources
-        for src in sources {
-            do {
-                let items = try await searcher.search(src: src, keyword: keyword)
+        for (idx, result) in results.enumerated() {
+            switch result {
+            case .success(let items)?:
                 albums.append(contentsOf: items)
-            } catch let error as AntibotException {
-                antibotKeyword = error.keyword.isEmpty ? keyword : error.keyword
-            } catch {
-                failed.append(SourceRegistry.displayName(src: src))
+            case .failure(let error)?:
+                if let antibot = error as? AntibotException {
+                    antibotKeyword = antibot.keyword.isEmpty ? keyword : antibot.keyword
+                } else {
+                    failed.append(SourceRegistry.displayName(src: sources[idx]))
+                }
+            case nil:
+                break // 不发生：group await 全部回填后才继续
             }
         }
         return AggregateSearchOutcome(

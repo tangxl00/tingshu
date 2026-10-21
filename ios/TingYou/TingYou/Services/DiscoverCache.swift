@@ -17,19 +17,25 @@ protocol DiscoverCacheStore: Sendable {
 /// 发现页磁盘缓存（JSON 文件落地 Caches/DiscoverCache/）：
 /// - 单文件按分区存储（recommend / new / hot / serial / story 各一份）；
 /// - 总量上限 2MB，超限按最旧修改时间淘汰；
+/// - build 24（存量 P2）：`validKeyPrefixes` 非空时 init 一次性清理孤儿缓存文件
+///   （build 21 多源键 `<src>|<section>` 在 build 22 固定主源后不再被读写，
+///   仅 2MB 超限才会按最旧淘汰——正常使用下永不清除，缓存目录膨胀）；
 /// - 不涉及网络与证书锚点会话（纯本地文件，与安全组件无交互）。
 final class DiskDiscoverCache: DiscoverCacheStore, @unchecked Sendable {
     private let dir: URL
     private let lock = NSLock()
     private let maxTotalBytes: Int
 
-    init(directory: URL? = nil, maxTotalBytes: Int = 2 * 1024 * 1024) {
+    init(directory: URL? = nil, maxTotalBytes: Int = 2 * 1024 * 1024, validKeyPrefixes: [String]? = nil) {
         let base = directory ?? FileManager.default
             .urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("DiscoverCache", isDirectory: true)
         self.dir = base
         self.maxTotalBytes = maxTotalBytes
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let prefixes = validKeyPrefixes, !prefixes.isEmpty {
+            pruneSections(keepingKeyPrefixes: prefixes)
+        }
     }
 
     func saveSection(_ section: String, albums: [Album]) throws {
@@ -53,6 +59,22 @@ final class DiskDiscoverCache: DiscoverCacheStore, @unchecked Sendable {
         let fm = FileManager.default
         for f in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] {
             try? fm.removeItem(at: f)
+        }
+    }
+
+    /// build 24（存量 P2）：一次性清理旧缓存键孤儿文件——只保留键命中任一合法前缀的
+    /// `rank-*.json`，其余（build 21 多源键如 `ting15|玄幻` 等）删除；
+    /// 非 rank-*.json 形态的文件（目录元数据等）不动。内部持锁，仅 init 调用。
+    private func pruneSections(keepingKeyPrefixes prefixes: [String]) {
+        lock.lock()
+        defer { lock.unlock() }
+        let fm = FileManager.default
+        for f in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] {
+            guard f.lastPathComponent.hasPrefix("rank-"), f.pathExtension == "json" else { continue }
+            let key = String(f.deletingPathExtension().lastPathComponent.dropFirst("rank-".count))
+            if !prefixes.contains(where: { key.hasPrefix($0) }) {
+                try? fm.removeItem(at: f)
+            }
         }
     }
 

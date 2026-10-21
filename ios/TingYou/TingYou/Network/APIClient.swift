@@ -35,12 +35,17 @@ struct RetryConfig: Sendable {
     /// - timedOut(-1001)：连接/请求超时——同属路径级瞬时故障，重试可能走新路径恢复
     /// - cannotConnectToHost(-1004)：无法建立连接——服务端诊断正常时多为路径抖动
     /// - notConnectedToInternet(-1009)：无网络——build 20 传输层重试已覆盖此语义，保留
+    /// - build 24（build 22 质检 P2-1）：DNS 瞬时错误补入——
+    ///   cannotFindHost(-1003)：域名解析失败（DNS 抖动时瞬时出现，重试可能命中新解析）
+    ///   dnsLookupFailed(-1006)：DNS 查找失败（同上，移动网络切换/LocalDNS 抖动典型）
     /// 其余 URLError（用户取消、badServerResponse 等）一律不重试、直接抛出。
     static let connectionErrorCodes: Set<URLError.Code> = [
         .networkConnectionLost,
         .timedOut,
         .cannotConnectToHost,
         .notConnectedToInternet,
+        .cannotFindHost,
+        .dnsLookupFailed,
     ]
 
     /// 该错误是否属于连接级（可自动重试）错误。
