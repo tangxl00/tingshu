@@ -1,10 +1,13 @@
 import SwiftUI
 
+/// 发现页（build 22 · 对齐安卓 v1.3.3）：
+/// 浏览模式固定展示主源（听友FM）的榜单/分类——音源切换菜单已移除，
+/// 「哪些源参与搜索」由「我的→音源管理」开关控制（对齐安卓 LibraryScreen）。
+/// 分类二级折叠保留（build 21 · 反馈 6，仅听友FM 分类）。
+/// 搜索框：聚合全部启用音源（AggregateSearcher，与搜索页同一套逻辑）。
 struct DiscoverScreen: View {
     @Environment(\.appContainer) private var appContainer
     @State private var viewModel = DiscoverViewModel()
-    /// build 21 · 反馈 4：发现页音源选择（全局持久化，默认听友FM）
-    @AppStorage("discover_selected_source") private var selectedSource = SourceRegistry.TINGYOU
     @State private var selectedCategoryId = "recommend"
     /// build 21 · 反馈 6：分类选择折叠面板（默认收起）
     @State private var categoryExpanded = false
@@ -25,9 +28,12 @@ struct DiscoverScreen: View {
     let onOpenAlbum: (Int64) -> Void
     let onOpenPlayer: () -> Void
 
-    /// 当前源的分类清单（按原始音源结构）
+    /// build 22：固定主源（听友FM）——发现页不再切源，对齐安卓 LibraryScreen
+    private static let mainSource = SourceRegistry.TINGYOU
+
+    /// 主源的分类清单（原始分类结构）
     private var categories: [DiscoverCategory] {
-        DiscoverCatalog.categories(for: selectedSource)
+        DiscoverCatalog.categories(for: Self.mainSource)
     }
 
     private var selectedCategory: DiscoverCategory? {
@@ -71,30 +77,6 @@ struct DiscoverScreen: View {
                 }
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
-            .toolbar {
-                // build 21 · 反馈 4：音源选择（与搜索页同级的全局选择）
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        ForEach(DiscoverCatalog.sourceOptions, id: \.id) { opt in
-                            Button {
-                                switchSource(opt.id)
-                            } label: {
-                                if selectedSource == opt.id {
-                                    Label(opt.name, systemImage: "checkmark")
-                                } else {
-                                    Text(opt.name)
-                                }
-                            }
-                        }
-                    } label: {
-                        Label(
-                            DiscoverCatalog.sourceOptions.first(where: { $0.id == selectedSource })?.name ?? "音源",
-                            systemImage: "line.3.horizontal.decrease.circle")
-                    }
-                    .buttonStyle(.pressable)
-                    .foregroundStyle(Color.accentColor)
-                }
-            }
         }
         // build 21 · Bug A 同类问题：发现页聚合搜索命中悦听反爬拦截时，
         // AntibotException 置位了 showAntibotSheet 但从未挂 .sheet（与播放器页同款遗漏）——补挂。
@@ -110,25 +92,10 @@ struct DiscoverScreen: View {
         }
     }
 
-    /// build 21 · 反馈 4：切换音源——分类回到该源第一个，列表重新加载
-    private func switchSource(_ src: String) {
-        guard src != selectedSource else { return }
-        selectedSource = src
-        let cats = DiscoverCatalog.categories(for: src)
-        selectedCategoryId = cats.first?.id ?? ""
-        viewModel.albums = []
-        viewModel.hasMore = false
-        Task { await loadCurrent() }
-    }
-
+    /// build 22：固定主源榜单加载（tingyou rank）
     private func loadCurrent() async {
         guard let cat = selectedCategory else { return }
-        switch selectedSource {
-        case SourceRegistry.TINGYOU:
-            await viewModel.load(target: .tingyouRank(section: cat.id))
-        default:
-            await viewModel.load(target: .category(src: selectedSource, categoryId: cat.id))
-        }
+        await viewModel.load(target: .tingyouRank(section: cat.id))
     }
 
     @ViewBuilder
@@ -184,99 +151,81 @@ struct DiscoverScreen: View {
     @ViewBuilder
     private var libraryContent: some View {
         // build 21 · 反馈 6：分类选择折叠面板（二级折叠、默认收起）。
-        // 各源原始分类平铺会占满首屏（ting08 有 15 个），折叠收起后只占一行。
-        if DiscoverCatalog.unsupportedSources.contains(selectedSource) {
-            VStack {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "eye.slash")
-                        .font(.title)
-                        .foregroundStyle(.secondary)
-                    Text("该源暂不支持发现页")
-                        .foregroundStyle(.secondary)
-                    Text("可在搜索页使用该音源搜索，或切换其他音源浏览发现内容")
+        // build 22：固定听友FM 分类（原始 5 个 rank section）。
+        VStack(spacing: 0) {
+            DisclosureGroup(isExpanded: $categoryExpanded) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        ForEach(categories) { cat in
+                            Button(cat.name) {
+                                selectedCategoryId = cat.id
+                                categoryExpanded = false
+                                Task { await loadCurrent() }
+                            }
+                            .fontWeight(selectedCategoryId == cat.id ? .bold : .regular)
+                            .foregroundStyle(selectedCategoryId == cat.id ? .primary : .secondary)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                }
+            } label: {
+                HStack {
+                    Text("分类：\(selectedCategory?.name ?? "全部")")
+                        .font(.subheadline)
+                    Spacer()
+                    Image(systemName: categoryExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
                 }
-                .padding()
-                Spacer()
+                .contentShape(Rectangle())
             }
-        } else {
-            VStack(spacing: 0) {
-                DisclosureGroup(isExpanded: $categoryExpanded) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 16) {
-                            ForEach(categories) { cat in
-                                Button(cat.name) {
-                                    selectedCategoryId = cat.id
-                                    categoryExpanded = false
-                                    Task { await loadCurrent() }
-                                }
-                                .fontWeight(selectedCategoryId == cat.id ? .bold : .regular)
-                                .foregroundStyle(selectedCategoryId == cat.id ? .primary : .secondary)
-                            }
-                        }
-                        .padding(.horizontal)
-                        .padding(.vertical, 6)
-                    }
-                } label: {
-                    HStack {
-                        Text("分类：\(selectedCategory?.name ?? "全部")")
-                            .font(.subheadline)
-                        Spacer()
-                        Image(systemName: categoryExpanded ? "chevron.up" : "chevron.down")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal)
-                .padding(.vertical, 4)
+            .buttonStyle(.plain)
+            .padding(.horizontal)
+            .padding(.vertical, 4)
 
-                if let error = viewModel.loadError {
-                    VStack(spacing: 12) {
-                        Spacer()
-                        Text(error).foregroundStyle(.secondary)
-                        Button("重试") { Task { await loadCurrent() } }
-                        Spacer()
+            if let error = viewModel.loadError {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Text(error).foregroundStyle(.secondary)
+                    Button("重试") { Task { await loadCurrent() } }
+                    Spacer()
+                }
+            } else {
+                List {
+                    ForEach(viewModel.albums) { album in
+                        NavigationLink {
+                            AlbumScreen(album: album)
+                        } label: {
+                            AlbumRow(album: album)
+                        }
                     }
-                } else {
-                    List {
-                        ForEach(viewModel.albums) { album in
-                            NavigationLink {
-                                AlbumScreen(album: album)
-                            } label: {
-                                AlbumRow(album: album)
+                    if viewModel.hasMore {
+                        ProgressView()
+                            .onAppear {
+                                Task { await viewModel.loadMore() }
                             }
-                        }
-                        if viewModel.hasMore {
-                            ProgressView()
-                                .onAppear {
-                                    Task { await viewModel.loadMore() }
-                                }
-                        }
                     }
-                    .listStyle(.plain)
                 }
+                .listStyle(.plain)
             }
-            .task {
-                if let container = appContainer {
-                    viewModel.attach(apiClient: container.apiClient,
-                                     sourceRouter: container.sourceRouter)
-                }
-                if viewModel.albums.isEmpty {
-                    await loadCurrent()
-                }
+        }
+        .task {
+            if let container = appContainer {
+                viewModel.attach(apiClient: container.apiClient,
+                                 sourceRouter: container.sourceRouter)
+            }
+            if viewModel.albums.isEmpty {
+                await loadCurrent()
             }
         }
     }
 
+    /// build 22 · 对齐安卓：聚合搜索读 SourceEnabledStore 启用集（与搜索页同一套 AggregateSearcher）。
     private func performSearch(initial: Bool) {
         let kw = keyword.trimmingCharacters(in: .whitespaces)
         guard !kw.isEmpty else { return }
-        guard let router = appContainer?.sourceRouter else { return }
+        guard let container = appContainer else { return }
 
         if initial {
             searchMode = true
@@ -288,30 +237,30 @@ struct DiscoverScreen: View {
         } else if !searchHasMore { return }
 
         Task {
-            // build 21 · 反馈 5（Bug C）：逐源容错——单源失败（如书音FM 403）不拖垮
-            // 全源聚合，失败源名如实透出；悦听 AntibotException 仍走人工验证闭环。
-            var allResults: [Album] = []
-            var failed: [String] = []
-            var antibotKeyword: String?
-            let sources = [SourceRegistry.TINGYOU, SourceRegistry.TING15, SourceRegistry.TING08, SourceRegistry.YTYXSX, SourceRegistry.MEKUI]
-            for src in sources {
-                do {
-                    let items = try await router.search(src: src, keyword: kw)
-                    allResults.append(contentsOf: items)
-                } catch let error as AntibotException {
-                    antibotKeyword = error.keyword.isEmpty ? kw : error.keyword
-                } catch {
-                    failed.append(SourceRegistry.displayName(src: src))
-                }
+            let searcher = AggregateSearcher(
+                searcher: container.sourceRouter,
+                enabledStore: container.sourceEnabledStore)
+            if searcher.enabledSources.isEmpty {
+                searchResults = []
+                failedSources = []
+                searchHasMore = false
+                isSearching = false
+                searchError = "没有可用的搜索源，请前往「我的→音源」启用至少一个"
+                return
             }
-            searchResults = allResults
-            failedSources = failed
+            let outcome = await searcher.search(keyword: kw)
+            searchResults = outcome.albums
+            failedSources = outcome.failedSourceNames
             searchHasMore = false // 多源聚合首页后不再翻页（与旧行为一致）
             isSearching = false
-            // build 21 · 反馈 7：发现页搜索成功也记入历史（至少一源有结果才算成功）
-            if !allResults.isEmpty { historyStore.add(kw) }
-            if let kw2 = antibotKeyword {
-                pendingKeyword = kw2
+            if outcome.allFailed {
+                searchError = "搜索失败：所有启用音源均不可用，请稍后重试"
+            } else if !outcome.albums.isEmpty {
+                // build 21 · 反馈 7：发现页搜索成功也记入历史（至少一源有结果才算成功）
+                historyStore.add(kw)
+            }
+            if let antibot = outcome.antibotKeyword {
+                pendingKeyword = antibot
                 showAntibotSheet = true
             }
         }

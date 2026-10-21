@@ -18,9 +18,36 @@ struct RetryConfig: Sendable {
     /// 首发不延迟——只有重试之间等待；阶梯用尽后取最后一档。
     var transportBackoffSecs: [TimeInterval] = [0.5, 1.0, 2.0]
 
+    /// build 22 r2 · 真机反馈「加载失败：The network connection was lost.」：
+    /// 连接级错误的自动重试上限，独立于状态码重试预算——固定最多 2 次重试（共 3 次尝试），
+    /// 退避用 transportBackoffSecs 前两档（0.5s / 1s）。
+    /// 不与频控退避（适配层 MsrcAdapter 3s/8s）叠加：频控等待发生在适配层、连接退避发生在
+    /// 请求层，两层顺序执行、线性相加，不叠成指数级放大。
+    var connectionMaxRetries: Int = 2
+
     static let msrc = RetryConfig(maxRetries: 1, backoffSecs: [1.5])
     static let mekui = RetryConfig(maxRetries: 2, backoffSecs: [2.5, 8.0])
     static let standard = RetryConfig(maxRetries: 1, backoffSecs: [1.5])
+
+    /// build 22 r2：连接级错误集合（诊断结论：真机到 ting08 服务器（182.237.1.188）
+    /// 的网络路径被运营商/路由层瞬时断开，-1005 是其典型报错）。
+    /// - networkConnectionLost(-1005)：连接被中途断开——本次修复的直接目标
+    /// - timedOut(-1001)：连接/请求超时——同属路径级瞬时故障，重试可能走新路径恢复
+    /// - cannotConnectToHost(-1004)：无法建立连接——服务端诊断正常时多为路径抖动
+    /// - notConnectedToInternet(-1009)：无网络——build 20 传输层重试已覆盖此语义，保留
+    /// 其余 URLError（用户取消、badServerResponse 等）一律不重试、直接抛出。
+    static let connectionErrorCodes: Set<URLError.Code> = [
+        .networkConnectionLost,
+        .timedOut,
+        .cannotConnectToHost,
+        .notConnectedToInternet,
+    ]
+
+    /// 该错误是否属于连接级（可自动重试）错误。
+    static func isConnectionError(_ error: Error) -> Bool {
+        guard let e = error as? URLError else { return false }
+        return connectionErrorCodes.contains(e.code)
+    }
 
     func backoff(forAttempt attempt: Int) -> TimeInterval {
         guard !backoffSecs.isEmpty else { return 1.0 }
@@ -31,6 +58,18 @@ struct RetryConfig: Sendable {
     func transportBackoff(forAttempt attempt: Int) -> TimeInterval {
         guard !transportBackoffSecs.isEmpty else { return 0 }
         return transportBackoffSecs[min(attempt, transportBackoffSecs.count - 1)]
+    }
+}
+
+/// build 22 r2：连接级重试耗尽后的可诊断错误。
+/// 真机原文案「加载失败：The network connection was lost.」让用户无法区分是网络问题
+/// 还是服务器问题；升级文案直接说明这是网络层中断且已自动重试过，UI 层经
+/// `localizedDescription` 渲染即可透出，无需改动各 ViewModel。
+struct ConnectionRetryExhaustedError: LocalizedError {
+    let underlying: URLError
+
+    var errorDescription: String? {
+        "网络连接中断（已自动重试仍失败），请检查网络后重试"
     }
 }
 
@@ -63,12 +102,20 @@ actor APIClient {
 
     // MARK: - 带重试的执行核心（P0-5：502/503/504 按策略退避重试）
 
-    /// 统一执行入口：可重试状态码且还有次数 → 退避后重试；其余非 200 直接失败。
-    /// 状态码判定必须在 do-catch 之外：非 200 抛出的 URLError 若落在 catch 里会被当成
-    /// 传输错误重试 → 404 也被重发（testExecuteDoesNotRetryOn404 回归）。仅传输层错误重试。
+    /// 统一执行入口（所有 fetchHTML / postFormForString / fetchJSON / fetchData 唯一出口）。
+    /// - 状态码重试：可重试状态码（502/503/504）且还在 config 预算内 → 退避后重试；
+    ///   其余非 200 直接失败。状态码判定必须在 do-catch 之外：非 200 抛出的 URLError 若
+    ///   落在 catch 里会被当成传输错误重试 → 404 也被重发（testExecuteDoesNotRetryOn404 回归）。
+    /// - build 22 r2 · 连接级错误自动重试：仅 URLError 的 -1005/-1001/-1004/-1009 四类
+    ///   连接级错误重试，固定最多 2 次（共 3 次尝试），退避 0.5s / 1s；其余错误直接抛出。
+    ///   重试即「新建连接」：连接被断开后 URLSession 连接池中的失效连接不会复用，
+    ///   重发请求即建立全新 TCP/TLS 连接（无需换 session）。
     func execute(_ request: URLRequest, retry: RetryConfig = .standard) async throws -> (Data, HTTPURLResponse) {
         var lastError: Error = URLError(.badServerResponse)
-        for attempt in 0...retry.maxRetries {
+        // 总尝试次数取状态码重试与连接重试预算的较大者：连接级错误固定最多 3 次尝试，
+        // 不受调用方 config 的状态码预算（msrc=1 / mekui=2）限制。
+        let attempts = max(retry.maxRetries, retry.connectionMaxRetries) + 1
+        for attempt in 0..<attempts {
             let data: Data
             let http: HTTPURLResponse
             do {
@@ -78,9 +125,16 @@ actor APIClient {
                 http = h
             } catch {
                 lastError = error
-                if attempt >= retry.maxRetries { throw error }
-                // build 20 必修 5：传输层错误同样退避后重试（0.5s/1s/2s 阶梯），
-                // 不再 continue 直跑；首发请求不引入任何延迟。
+                // build 22 r2：仅连接级错误重试；其余（用户取消、解析失败、
+                // 证书固定失败等）直接抛出，不重试。
+                guard RetryConfig.isConnectionError(error) else { throw error }
+                if attempt >= retry.connectionMaxRetries {
+                    // 重试耗尽：升级为可诊断文案（网络层问题，已自动重试过），
+                    // 不再裸抛「The network connection was lost.」。
+                    // isConnectionError 已保证此处是 URLError，?? 兜底仅为防御式写法。
+                    throw ConnectionRetryExhaustedError(
+                        underlying: error as? URLError ?? URLError(.networkConnectionLost))
+                }
                 try await Task.sleep(nanoseconds: UInt64(retry.transportBackoff(forAttempt: attempt) * 1_000_000_000))
                 continue
             }

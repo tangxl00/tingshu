@@ -12,7 +12,7 @@ struct SpeedSheet: View {
                 ForEach(presets, id: \.self) { s in
                     let selected = abs(speed - s) < 0.01
                     Button("\(String(format: "%.1f", s))x") {
-                        onSelect(s)
+                        select(s)
                         dismiss()
                     }
                     .checkmark(selected)
@@ -31,6 +31,14 @@ struct SpeedSheet: View {
                 }
             }
         }
+    }
+
+    /// build 22 · P1 修复：原按钮只调 onSelect 从不写 speed——而调用点传的 onSelect 是空闭包，
+    /// Binding 的 set 永远不触发，倍速点了没反应。先写 Binding 再回调，双保险。
+    /// （internal 供单测 @testable 调用：验证 Binding set 确实被触发；dismiss 留在按钮层，测试不触碰环境。）
+    func select(_ s: Float) {
+        speed = s
+        onSelect(s)
     }
 }
 

@@ -6,7 +6,7 @@ iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐
 
 - **Bundle ID**：`com.tingyou.app.ios`
 - **CFBundleShortVersionString**：`1.3.3`
-- **CFBundleVersion**：`21`（与安卓 versionCode 对齐）
+- **CFBundleVersion**：`22`（与安卓 versionCode 对齐）
 - **最低系统**：iOS 17.0（SwiftData 依赖）
 - **签名状态**：**未签名**——本仓库与 CI 产物均不签名，需用户自行用爱思助手 / AltStore / Sideloadly 免费自签安装（7 天需重签）
 - **ATS**：全禁明文 HTTP（`NSAllowsArbitraryLoads = false`）
@@ -32,7 +32,7 @@ ios/TingYou/
 │   ├── UI/                         # SwiftUI 视图（含 YtysxsVerifyWebView 反爬人工验证容器）
 │   ├── Utils/                      # 工具（分页 / 诊断日志 / 扩展）
 │   └── Resources/Certs/            # 27 张 .pem 锚点证书
-└── TingYouTests/                   # XCTest（178 条测试函数，19 个测试类，见 §8）
+└── TingYouTests/                   # XCTest（194 条测试函数（20 个测试文件、28 个测试类），见 §8）
 ```
 
 ## 3. 本地构建
@@ -77,7 +77,7 @@ CI 步骤：
 1. macOS-14 runner + Xcode 15.4
 2. `xcodegen generate` 生成 `.xcodeproj`
 3. `xcodebuild build` 编译
-4. `xcodebuild test` 跑 XCTest（178 条）
+4. `xcodebuild test` 跑 XCTest（194 条）
 5. `xcodebuild archive` 产出未签名 `.xcarchive`
 6. **`plutil` 验证 archive 产物 Info.plist**：`UIBackgroundModes` 必含 `audio`、`NSAppTransportSecurity.NSAllowsArbitraryLoads` 必须为 `false`，缺失即 CI 失败（防 plist 漂移回归）
 7. 把 `TingYou.app` 打包为 zip，作为 artifact 上传
@@ -148,21 +148,22 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 | # | 功能 | 状态 | 说明 |
 |---|------|------|------|
 | a | 书架（含菜单） | ✅ | SwiftUI `ShelfScreen`，收藏/历史/导入分 Tab |
-| b | 发现页 | ✅ | `DiscoverScreen`；build 21：音源切换跟随（@AppStorage 持久化，tingyou 榜单 + ting15/ting08 原始分类页 `/<分类>/index{n}.html`）、二级分类折叠默认收起、不支持源（悦听/书音FM）如实占位「该源暂不支持发现页」、搜索框历史记忆（去重置顶上限 20）；复用容器内 `APIClient`（`DiscoverViewModel.attach` 幂等注入） |
+| b | 发现页 | ✅ | `DiscoverScreen`；build 22：浏览固定主源听友FM（对齐安卓 LibraryScreen，移除音源切换菜单与 `discover_selected_source` 持久化），二级分类折叠默认收起（仅听友FM 分类）保留自 build 21；搜索框历史记忆（去重置顶上限 20）保留；复用容器内 `APIClient`（`DiscoverViewModel.attach` 幂等注入） |
 | c | 我的页 | ✅ | `MineScreen`，含音源管理入口、听书时长统计、设置 |
-| d | 播放器 | ✅ | `AVPlayer` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，后台/锁屏控制/倍速/进度/睡眠定时/片头片尾跳过；播放直链经 `AVAssetResourceLoaderDelegate` 接管 `tingyou-chapter://` 占位 URI 惰性解析（`PlaybackRepository` 按源路由真实地址），不再把占位 URI 直接喂给 `AVPlayerItem`；build 21：定时/设置弹窗补挂（`.sheet` 复用 applySleepTimer 三模式 + 播放模式三档顺序/单曲循环/列表循环，chapterFinishedAction 纯函数决策）、分享改 SwiftUI 原生 `ShareLink` |
-| e | 多音源 | ✅ | 搜索/详情/章节/播放四链路全部真实路由：tingyou（JSON API）、ting15 / ting08（`MsrcAdapter`：HTML 解析 + 两步 token，付费 -1 打标、频控 -2 退避 [3s, 8s]）、悦听（`YtysxsAdapter`：WordPress + AudioIgniter，直链白名单自检）、书音FM（`MekuiAdapter`：ecmsapi + wapseries MD5 签名，黄金值测试锁定）；`AlbumScreen` 章节列表按 `album.source` 路由加载并支持点击播放 |
+| d | 播放器 | ✅ | `AVPlayer` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，后台/锁屏控制/倍速/进度/睡眠定时/片头片尾跳过；播放直链经 `AVAssetResourceLoaderDelegate` 接管 `tingyou-chapter://` 占位 URI 惰性解析（`PlaybackRepository` 按源路由真实地址），不再把占位 URI 直接喂给 `AVPlayerItem`；build 21：定时/设置弹窗补挂（`.sheet` 复用 applySleepTimer 三模式 + 播放模式三档顺序/单曲循环/列表循环，chapterFinishedAction 纯函数决策）、分享改 SwiftUI 原生 `ShareLink`；build 22：倍速弹层 `SpeedSheet.select` 先写 Binding 再回调，修复选择后 `pm.speed` 不生效的死控件问题 |
+| e | 多音源 | ✅ | 搜索/详情/章节/播放四链路全部真实路由：tingyou（JSON API）、ting15 / ting08（`MsrcAdapter`：HTML 解析 + 两步 token，付费 -1 打标、频控 -2 退避 [3s, 8s]）、悦听（`YtysxsAdapter`：WordPress + AudioIgniter，直链白名单自检）、书音FM（`MekuiAdapter`：ecmsapi + wapseries MD5 签名，黄金值测试锁定）；`AlbumScreen` 章节列表按 `album.source` 路由加载并支持点击播放；build 22：搜索改为全部启用音源聚合（`AggregateSearcher` 固定序逐源、失败源名透出，`SearchScreen` 移除单源切换菜单，对齐安卓 SearchViewModel） |
 | f | 悦听反爬 | ✅ | `YtysxsVerifyWebView`（WKWebView 容器）人工验证流程完整落地：命中反爬特征抛 `AntibotException` → 弹验证页 → `httpCookieStore` 捕获 `be_captcha_token` → `KeychainTokenStore`（kSecClassGenericPassword，SecItemAdd/CopyMatching/Delete）持久化 24h → 验证完成自动重试原搜索；后续请求自动携带 Cookie。不自动破解验证码 |
-| g | 502/503/504 重试 | ✅ | `APIClient.execute` 统一重试入口：Msrc 1 次 / 1.5s（与安卓 MsrcHttp 一致）、Mekui 2 次 / [2.5s, 8s]（与安卓 MekuiHttp 一致）；非 200 且不可重试直接失败。端到端行为由 stub URLProtocol 测试锁定 |
+| g | 502/503/504 重试 | ✅ | `APIClient.execute` 统一重试入口：Msrc 1 次 / 1.5s（与安卓 MsrcHttp 一致）、Mekui 2 次 / [2.5s, 8s]（与安卓 MekuiHttp 一致）；非 200 且不可重试直接失败。端到端行为由 stub URLProtocol 测试锁定；build 22 r2：新增连接级错误自动重试——URLError 的 -1005/-1001/-1004/-1009 四类连接错误固定最多 2 次重试（共 3 次尝试）、退避 0.5s/1s，其余错误不重试；耗尽后报「网络连接中断（已自动重试仍失败），请检查网络后重试」（真机「The network connection was lost.」路径被断的对策） |
 | h | 导入功能 | ✅ | m3u / 直链 / 本地文件路径，https-only 校验，自然排序，书名建议 |
-| i | 音源开关持久化 | ✅ | `SourceManageScreen` 开关写入 `SourceEnabledStore`（UserDefaults `source_enabled_` 前缀），重启后保持 |
+| i | 音源开关持久化 | ✅ | `SourceManageScreen` 开关写入 `SourceEnabledStore`（UserDefaults `source_enabled_` 前缀），重启后保持；build 22：开关真正控制搜索聚合范围（`AggregateSearcher` 读 `enabledSearchSources()`，搜索页/发现页共用），关最后一个启用搜索源时拒绝并提示「至少保留一个音源」（对齐安卓 toggleSource），「导入」不参与搜索聚合、行内标注 |
 | j | 启动自动恢复上次播放 | ✅ | build 21：启动读最新 `HistoryModel`，`HistoryResumePlanner` 重建队列后 `prepareQueue` 载入迷你播放条（上次进度），**不自动出声**，用户点播放才播；无历史则维持首启现状 |
 
 ## 8. 测试对账
 
 - **安卓基线**：276 条 `@Test`（43 个测试类）
-- **iOS 现有**：**178 条测试函数，19 个测试类**（与 `TingYouTests/*.swift` 内 `func test` 计数一致，可 grep 核对；136 条为 build 20 基线，build 21 新增 42 条）：
+- **iOS 现有**：**194 条测试函数（20 个测试文件、28 个 XCTestCase 类）**（三口径可 grep 实数核对：文件数 `ls TingYouTests/*.swift | wc -l`、类数 grep `final class.*XCTestCase`、函数数 grep `func test`；136 条为 build 20 基线，build 21 新增 42，build 22 新增 16）：
   - `Build21FeedbackTests`：20 条（build 21 · 反馈 1：播放模式决策纯函数 6 + 持久化 1 + 展示名唯一 1；反馈 2：HTML 实体解码 6 含 parseSearch 出口黄金样本 + charset 解码 6 含 GBK 黄金字节流）
+  - `Build22AlignmentTests`：12 条（build 22 · 倍速：SpeedSheet select 写 Binding 后 speed 实际变化 2；聚合搜索：启用集过滤+固定序 1 / 关一个源少一个源结果 1 / 失败源名透出 1 / 悦听 antibot 关键词透传 1 / 仅剩单源全败 allFailed 1 / searchSources 不含导入 1；音源开关守卫：最后一个源不可关 1 / 重开后可关 1 / 导入不受保护 1 / toggleSource 翻转 1）
   - `CoverImageCacheTests`：9 条（build 19：封面会话挂 PinningURLSessionDelegate 断言 / 封面图源域名白名单互检 / 非白名单 host fail-closed·取图拒 nil / 防盗链 Referer 设置与省略 / 请求 URL 保全；build 20 必修 1：同一 guoguo URL 按 ting15/ting08 源各带准确 referer）
   - `DiscoverCacheTests`：5 条（build 18：发现页预加载缓存命中 / 磁盘缓存失效 / 预取调度；build 20 必修 6：中间态等待改 expectation）
   - `DiscoverAndHistoryTests`：22 条（build 21 · 反馈 7：搜索历史保存/去重置顶/上限 20/单删/清空 6；反馈 4/6：发现页目录 7 含各源分类清单与 URL 注入拒绝 + 分类页解析黄金样本 3 + 多源路由/不支持源/翻页/失败回退 5；反馈 3：启动恢复不出声 1）
@@ -175,7 +176,7 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
   - `MekuiAdapterTests`：8 条（wapseries MD5 签名黄金值 ×2 / 详情解析黄金样本 / 付费打标 / 缺章节降级）
   - `MsrcHtmlTests`：17 条（ting15 / ting08 搜索解析黄金样本 / 详情解析 / 两步 token 播放页 meta / 播放响应 BOM·status 双形态·-1 付费·-2 频控 / encodeUriComponent %20 语义与 ASCII 白名单）
   - `PlayUriTests`：5 条（占位 URI 构建 / 解析 / 旧 URI 兼容 / 非 ASCII URL 归一化）
-  - `RetryAndPinningTests`：18 条（可重试状态码判定 / 安卓基线重试参数 / stub URLProtocol 端到端重试 3 条 / 域名白名单后缀·精确·大小写·fail-closed 5 条；build 20 必修 5：传输层错误重试退避阶梯 / 重试前必须等待 / 首发成功零延迟）
+  - `RetryAndPinningTests`：22 条（可重试状态码判定 / 安卓基线重试参数 / stub URLProtocol 端到端重试 3 条 / 域名白名单后缀·精确·大小写·fail-closed 5 条；build 20 必修 5：传输层错误重试退避阶梯 / 重试前必须等待 / 首发成功零延迟；build 22 r2：连接级错误集合恰为四类且非 URLError 不重试 / 连接被断重试后成功 / 连续 3 次连接失败报升级文案 / 非连接级错误（取消）不重试）
   - `ShelfMappingTests`：3 条（build 18：书架领域模型 → SwiftData 实体映射）
   - `SleepTimerTests`：5 条（build 20 必修 4：定点睡眠目标时刻今天/顺延明天/恰好等于/午夜边界 / applySleepTimer 接线）
   - `SourceRegistryTests`：6 条（源注册表 / fetch·img·audio 白名单互检）

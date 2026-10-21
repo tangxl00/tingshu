@@ -127,7 +127,7 @@ struct PlayerScreen: View {
                 SpeedSheet(speed: Binding(
                     get: { pm?.speed ?? 1.0 },
                     set: { pm?.speed = $0 }
-                )) { _ in }
+                )) { s in pm?.speed = s }
             }
             .sheet(isPresented: $showChapters) {
                 ChapterListSheet(

@@ -143,6 +143,83 @@ final class RetryAndPinningTests: XCTestCase {
         RetryStubURLProtocol.handler = nil
     }
 
+    // MARK: - build 22 r2 · 连接级错误自动重试（真机反馈「The network connection was lost.」）
+
+    func testConnectionErrorCodeSetIsExactlyConnectionClass() {
+        // 判别力：集合恰为四类连接级错误——多纳一个（如 cancelled）或漏一个都会被断出来
+        XCTAssertEqual(RetryConfig.connectionErrorCodes, [
+            .networkConnectionLost, .timedOut, .cannotConnectToHost, .notConnectedToInternet,
+        ])
+        XCTAssertTrue(RetryConfig.isConnectionError(URLError(.networkConnectionLost)))
+        XCTAssertTrue(RetryConfig.isConnectionError(URLError(.timedOut)))
+        XCTAssertTrue(RetryConfig.isConnectionError(URLError(.cannotConnectToHost)))
+        XCTAssertTrue(RetryConfig.isConnectionError(URLError(.notConnectedToInternet)))
+        // 非连接级 URLError 与非 URLError 一律不重试
+        XCTAssertFalse(RetryConfig.isConnectionError(URLError(.cancelled)))
+        XCTAssertFalse(RetryConfig.isConnectionError(URLError(.badURL)))
+        XCTAssertFalse(RetryConfig.isConnectionError(AntibotException(keyword: "三体")))
+        // 固定重试预算：2 次重试（共 3 次尝试），三种 config 一致
+        XCTAssertEqual(RetryConfig.standard.connectionMaxRetries, 2)
+        XCTAssertEqual(RetryConfig.msrc.connectionMaxRetries, 2)
+        XCTAssertEqual(RetryConfig.mekui.connectionMaxRetries, 2)
+    }
+
+    func testConnectionLostRetriesThenSucceeds() async throws {
+        // 首发连接被断（-1005）→ 新建连接重试 → 成功；用户无感恢复。
+        // 计数用 callCounter（每次 startLoading 必调，含失败请求），口径无歧义。
+        var calls = 0
+        RetryStubURLProtocol.callCounter = { calls += 1 }
+        RetryStubURLProtocol.handler = { _ in (200, Data("ok".utf8)) }
+        RetryStubURLProtocol.errorOnce = URLError(.networkConnectionLost)
+        let client = APIClient(session: RetryStubURLProtocol.makeSession())
+        let cfg = RetryConfig(maxRetries: 1, backoffSecs: [1.5], transportBackoffSecs: [0.05])
+        let req = URLRequest(url: URL(string: "https://m.ting08.com/")!)
+        let (data, resp) = try await client.execute(req, retry: cfg)
+        XCTAssertEqual(resp.statusCode, 200)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "ok")
+        XCTAssertEqual(calls, 2, "连接被断后应新建连接重试一次后成功（共 2 次请求）")
+        RetryStubURLProtocol.callCounter = nil
+        RetryStubURLProtocol.handler = nil
+    }
+
+    func testConnectionRetryExhaustedSurfacesUpgradedMessage() async throws {
+        // 连续 3 次连接失败（0.5s/1s 退避耗尽）→ 抛升级文案，不再裸抛英文原文
+        RetryStubURLProtocol.errorAlways = URLError(.networkConnectionLost)
+        var calls = 0
+        RetryStubURLProtocol.callCounter = { calls += 1 }
+        let client = APIClient(session: RetryStubURLProtocol.makeSession())
+        let cfg = RetryConfig(maxRetries: 1, backoffSecs: [1.5], transportBackoffSecs: [0.05, 0.05])
+        let req = URLRequest(url: URL(string: "https://m.ting08.com/")!)
+        do {
+            _ = try await client.execute(req, retry: cfg)
+            XCTFail("3 次连接失败后应抛错")
+        } catch let err as ConnectionRetryExhaustedError {
+            XCTAssertEqual(calls, 3, "共 3 次尝试（首发 + 2 次重试）")
+            XCTAssertEqual(err.localizedDescription,
+                           "网络连接中断（已自动重试仍失败），请检查网络后重试",
+                           "耗尽后必须是可诊断的升级文案")
+        }
+        RetryStubURLProtocol.errorAlways = nil
+        RetryStubURLProtocol.callCounter = nil
+    }
+
+    func testNonConnectionErrorIsNotRetried() async throws {
+        // 非连接级错误（用户取消）不重试——不误伤既有闭环
+        var calls = 0
+        RetryStubURLProtocol.callCounter = { calls += 1 }
+        RetryStubURLProtocol.errorOnce = URLError(.cancelled)
+        let client = APIClient(session: RetryStubURLProtocol.makeSession())
+        let req = URLRequest(url: URL(string: "https://m.ting08.com/")!)
+        do {
+            _ = try await client.execute(req)
+            XCTFail("取消错误应直接抛出")
+        } catch let err as URLError {
+            XCTAssertEqual(err.code, .cancelled)
+        }
+        XCTAssertEqual(calls, 1, "非连接级错误只应请求一次，不得重试")
+        RetryStubURLProtocol.callCounter = nil
+    }
+
     // MARK: - PinnedDomainAllowlist（P1-1：与安卓 includeSubdomains 语义对等）
 
     func testAllowlistSuffixDomainMatchesSubdomains() {
@@ -187,6 +264,10 @@ final class RetryStubURLProtocol: URLProtocol {
     nonisolated(unsafe) static var handler: ((URLRequest) -> (Int, Data))?
     /// build 20 必修 5：下一次请求注入一次传输层错误（用后自动清空，模拟瞬时断网）
     nonisolated(unsafe) static var errorOnce: Error?
+    /// build 22 r2：每次请求都注入该错误（连接重试耗尽场景），测试后必须清空
+    nonisolated(unsafe) static var errorAlways: Error?
+    /// build 22 r2：请求计数回调（每次 startLoading 必调，含注入错误的请求）
+    nonisolated(unsafe) static var callCounter: (() -> Void)?
 
     static func makeSession() -> URLSession {
         let cfg = URLSessionConfiguration.ephemeral
@@ -198,8 +279,13 @@ final class RetryStubURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        Self.callCounter?()
         if let err = Self.errorOnce {
             Self.errorOnce = nil
+            client?.urlProtocol(self, didFailWithError: err)
+            return
+        }
+        if let err = Self.errorAlways {
             client?.urlProtocol(self, didFailWithError: err)
             return
         }

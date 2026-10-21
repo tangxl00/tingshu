@@ -105,14 +105,53 @@ final class SkipSettingsStore {
 
 final class SourceEnabledStore {
     private let kPrefix = "source_enabled_"
+    /// build 22：defaults 可注入（单测用 UserDefaults(suiteName:) 隔离，不污染真实开关状态）
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    /// build 22 · 对齐安卓 SEARCH_SOURCES：参与搜索聚合的音源（固定顺序）。
+    /// 「导入」（IMPORT）不在其列——不参与搜索聚合。
+    static let searchSources: [String] = [
+        SourceRegistry.TINGYOU,
+        SourceRegistry.TING15,
+        SourceRegistry.TING08,
+        SourceRegistry.YTYXSX,
+        SourceRegistry.MEKUI,
+    ]
 
     func isEnabled(_ src: String) -> Bool {
-        UserDefaults.standard.object(forKey: "\(kPrefix)\(src)") == nil
+        defaults.object(forKey: "\(kPrefix)\(src)") == nil
             ? true
-            : UserDefaults.standard.bool(forKey: "\(kPrefix)\(src)")
+            : defaults.bool(forKey: "\(kPrefix)\(src)")
     }
     func setEnabled(_ src: String, _ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "\(kPrefix)\(src)")
+        defaults.set(enabled, forKey: "\(kPrefix)\(src)")
+    }
+
+    /// 参与搜索聚合的启用音源（按 searchSources 固定顺序，过滤启用集）。
+    func enabledSearchSources() -> [String] {
+        Self.searchSources.filter { isEnabled($0) }
+    }
+
+    /// build 22 · 对齐安卓 toggleSource：带「至少保留一个」保护的定向设置。
+    /// 关闭最后一个启用的搜索源时拒绝（返回 false，状态不变）；「导入」不受此保护。
+    @discardableResult
+    func setEnabledGuarded(_ src: String, _ enabled: Bool) -> Bool {
+        if !enabled && Self.searchSources.contains(src) {
+            let otherEnabled = Self.searchSources.contains { $0 != src && isEnabled($0) }
+            if !otherEnabled { return false } // 最后一个启用源，禁止关闭
+        }
+        setEnabled(src, enabled)
+        return true
+    }
+
+    /// 翻转语义的切换（对齐安卓 toggleSource 按钮行为）。
+    @discardableResult
+    func toggleSource(_ src: String) -> Bool {
+        setEnabledGuarded(src, !isEnabled(src))
     }
 }
 
