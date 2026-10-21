@@ -4,10 +4,16 @@ import UIKit
 struct PlayerScreen: View {
     @Environment(\.appContainer) private var container
     @Environment(\.dismiss) private var dismiss
-    @State private var showSpeedSheet = false
-    @State private var showChapters = false
-    @State private var showSleepTimer = false
-    @State private var showSettings = false
+
+    /// build 23：弹窗呈现机制重构——四个 `.sheet(isPresented:)` 挂在同一视图链上是
+    /// SwiftUI 已知限制（只有最后挂载的可靠生效），真机表现为倍速/章节按钮点不出弹窗。
+    /// 官方推荐形态：单枚举驱动 `.sheet(item:)`，同一时刻最多呈现一个弹窗，行为确定。
+    enum PlayerSheet: Identifiable, Equatable {
+        case speed, chapters, sleepTimer, settings
+        var id: Self { self }
+    }
+
+    @State private var activeSheet: PlayerSheet?
     @State private var isFavorite = false
 
     private var pm: PlaybackManager? { container?.playbackManager }
@@ -59,7 +65,7 @@ struct PlayerScreen: View {
                         Button { pm?.seekRelative(-15000) } label: {
                             Image(systemName: "gobackward.15").font(.title3)
                         }
-                        Button { showSpeedSheet = true } label: {
+                        Button { activeSheet = .speed } label: {
                             Text("\(String(format: "%.1f", pm?.speed ?? 1.0))x")
                                 .font(.caption).monospacedDigit()
                         }
@@ -70,14 +76,14 @@ struct PlayerScreen: View {
                     .foregroundStyle(.secondary)
 
                     HStack(spacing: 32) {
-                        Button { showChapters = true } label: {
+                        Button { activeSheet = .chapters } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: "list.bullet").font(.title3)
                                 Text("章节").font(.caption2)
                             }
                         }
                         .buttonStyle(.pressable)
-                        Button { showSleepTimer = true } label: {
+                        Button { activeSheet = .sleepTimer } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: "moon.fill").font(.title3)
                                 Text("定时").font(.caption2)
@@ -93,7 +99,7 @@ struct PlayerScreen: View {
                             }
                         }
                         .buttonStyle(.pressable)
-                        Button { showSettings = true } label: {
+                        Button { activeSheet = .settings } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: "gearshape").font(.title3)
                                 Text("设置").font(.caption2)
@@ -123,43 +129,47 @@ struct PlayerScreen: View {
                     Button("完成") { dismiss() }
                 }
             }
-            .sheet(isPresented: $showSpeedSheet) {
-                SpeedSheet(speed: Binding(
-                    get: { pm?.speed ?? 1.0 },
-                    set: { pm?.speed = $0 }
-                )) { s in pm?.speed = s }
-            }
-            .sheet(isPresented: $showChapters) {
-                ChapterListSheet(
-                    chapters: pm?.currentChapters ?? [],
-                    // 用真实章序号定位当前项（原按标题匹配，同名章节会错位）
-                    currentIdx: pm?.currentChapterIdx ?? 0
-                ) { idx in
-                    pm?.playChapter(at: idx)
-                }
-            }
-            // build 21 · 反馈 1（Bug A）：定时弹窗接线——showSleepTimer 此前只翻转 @State
-            // 从未挂 .sheet，逻辑复用 build 20 已修好的 applySleepTimer 三模式体系。
-            .sheet(isPresented: $showSleepTimer) {
-                SleepTimerSheet(
-                    config: Binding(
-                        get: { pm?.sleepConfig ?? SleepTimerConfig() },
-                        set: { c in pm?.applySleepTimer(config: c) }
-                    )
-                ) { c in
-                    pm?.applySleepTimer(config: c)
-                }
-            }
-            // build 21 · 反馈 1（Bug A）：设置面板接线——showSettings 同样只翻转未挂 .sheet。
-            // 最小面板：播放模式（顺序/单曲循环/列表循环），逻辑在 PlaybackManager.chapterFinishedAction。
-            .sheet(isPresented: $showSettings) {
-                PlayerSettingsSheet(
-                    playMode: Binding(
-                        get: { pm?.playMode ?? .sequence },
-                        set: { m in pm?.setPlayMode(m) }
-                    )
-                ) { m in
-                    pm?.setPlayMode(m)
+            // build 23：四个 `.sheet(isPresented:)` 合并为单枚举驱动的 `.sheet(item:)`——
+            // 同一视图链上多个 sheet 修饰符只有最后挂载的可靠生效（SwiftUI 已知限制），
+            // build 22 真机表现为倍速/章节弹窗点不出来；`sheet(item:)` 是官方推荐形态。
+            // ShareLink 与 .task 保持不动（非弹窗呈现机制）。
+            .sheet(item: $activeSheet) { sheet in
+                switch sheet {
+                case .speed:
+                    SpeedSheet(speed: Binding(
+                        get: { pm?.speed ?? 1.0 },
+                        set: { pm?.speed = $0 }
+                    )) { s in pm?.speed = s }
+                case .chapters:
+                    ChapterListSheet(
+                        chapters: pm?.currentChapters ?? [],
+                        // 用真实章序号定位当前项（原按标题匹配，同名章节会错位）
+                        currentIdx: pm?.currentChapterIdx ?? 0
+                    ) { idx in
+                        pm?.playChapter(at: idx)
+                    }
+                case .sleepTimer:
+                    // build 21 · 反馈 1（Bug A）：定时弹窗接线——逻辑复用 build 20 已修好的
+                    // applySleepTimer 三模式体系。
+                    SleepTimerSheet(
+                        config: Binding(
+                            get: { pm?.sleepConfig ?? SleepTimerConfig() },
+                            set: { c in pm?.applySleepTimer(config: c) }
+                        )
+                    ) { c in
+                        pm?.applySleepTimer(config: c)
+                    }
+                case .settings:
+                    // build 21 · 反馈 1（Bug A）：设置面板接线——最小面板：播放模式
+                    // （顺序/单曲循环/列表循环），逻辑在 PlaybackManager.chapterFinishedAction。
+                    PlayerSettingsSheet(
+                        playMode: Binding(
+                            get: { pm?.playMode ?? .sequence },
+                            set: { m in pm?.setPlayMode(m) }
+                        )
+                    ) { m in
+                        pm?.setPlayMode(m)
+                    }
                 }
             }
         }
