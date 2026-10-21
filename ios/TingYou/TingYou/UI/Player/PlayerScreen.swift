@@ -135,48 +135,62 @@ struct PlayerScreen: View {
             // 同一视图链上多个 sheet 修饰符只有最后挂载的可靠生效（SwiftUI 已知限制），
             // build 22 真机表现为倍速/章节弹窗点不出来；`sheet(item:)` 是官方推荐形态。
             // ShareLink 与 .task 保持不动（非弹窗呈现机制）。
+            // build 26（倍速真机隔离设计）：弹窗内容闭包改为**呈现时非可选捕获**——
+            // 原四个 case 读写全走 pm?.xxx 可选链，pm 为 nil 时静默无操作（与真机现象
+            // 「面板弹出正常、选择后按钮数字与语速均不变」完全吻合，静态审查无法区分）。
+            // 捕获非可选引用后：pm 非 nil 则写入链路无静默失败可能；
+            // pm 为 nil 则直接显示诊断视图（用户截图即定位断点）。
             .sheet(item: $activeSheet) { sheet in
-                switch sheet {
-                case .speed:
-                    SpeedSheet(speed: Binding(
-                        get: { pm?.speed ?? 1.0 },
-                        set: { pm?.speed = $0 }
-                    )) { s in pm?.speed = s }
-                case .chapters:
-                    ChapterListSheet(
-                        chapters: pm?.currentChapters ?? [],
-                        // 用真实章序号定位当前项（原按标题匹配，同名章节会错位）
-                        currentIdx: pm?.currentChapterIdx ?? 0
-                    ) { idx in
-                        pm?.playChapter(at: idx)
+                Group {
+                    if let pm {
+                        switch sheet {
+                        case .speed:
+                            SpeedSheet(speed: Binding(
+                                get: { pm.speed },
+                                set: { pm.speed = $0 }
+                            )) { s in pm.speed = s }
+                        case .chapters:
+                            ChapterListSheet(
+                                chapters: pm.currentChapters,
+                                // 用真实章序号定位当前项（原按标题匹配，同名章节会错位）
+                                currentIdx: pm.currentChapterIdx
+                            ) { idx in
+                                pm.playChapter(at: idx)
+                            }
+                        case .sleepTimer:
+                            // build 21 · 反馈 1（Bug A）：定时弹窗接线——逻辑复用 build 20 已修好的
+                            // applySleepTimer 三模式体系。
+                            SleepTimerSheet(
+                                config: Binding(
+                                    get: { pm.sleepConfig },
+                                    set: { c in pm.applySleepTimer(config: c) }
+                                )
+                            ) { c in
+                                pm.applySleepTimer(config: c)
+                            }
+                        case .settings:
+                            // build 21 · 反馈 1（Bug A）：设置面板接线——播放模式
+                            // （顺序/单曲循环/列表循环），逻辑在 PlaybackManager.chapterFinishedAction。
+                            // build 25（对齐安卓 v1.3.0 item 8）：新增片头/片尾跳过接线——
+                            // 读当前书秒数、拖动结束落值（按书持久化，换书自动刷新）。
+                            PlayerSettingsSheet(
+                                playMode: Binding(
+                                    get: { pm.playMode },
+                                    set: { m in pm.setPlayMode(m) }
+                                ),
+                                introSec: pm.introSkipSeconds,
+                                outroSec: pm.outroSkipSeconds,
+                                onSelect: { m in pm.setPlayMode(m) },
+                                onIntroChange: { sec in pm.setIntroSkip(sec) },
+                                onOutroChange: { sec in pm.setOutroSkip(sec) }
+                            )
+                        }
+                    } else {
+                        // build 26 诊断占位：真机上若出现此视图 = pm 在弹窗上下文为 nil
+                        //（写入链路死亡的可选链分支被显式化），请截图反馈直接定位。
+                        ContentUnavailableView("播放器未就绪", systemImage: "exclamationmark.triangle",
+                            description: Text("诊断信息：播放管理器为空，请截图反馈"))
                     }
-                case .sleepTimer:
-                    // build 21 · 反馈 1（Bug A）：定时弹窗接线——逻辑复用 build 20 已修好的
-                    // applySleepTimer 三模式体系。
-                    SleepTimerSheet(
-                        config: Binding(
-                            get: { pm?.sleepConfig ?? SleepTimerConfig() },
-                            set: { c in pm?.applySleepTimer(config: c) }
-                        )
-                    ) { c in
-                        pm?.applySleepTimer(config: c)
-                    }
-                case .settings:
-                    // build 21 · 反馈 1（Bug A）：设置面板接线——播放模式
-                    // （顺序/单曲循环/列表循环），逻辑在 PlaybackManager.chapterFinishedAction。
-                    // build 25（对齐安卓 v1.3.0 item 8）：新增片头/片尾跳过接线——
-                    // 读当前书秒数、拖动结束落值（按书持久化，换书自动刷新）。
-                    PlayerSettingsSheet(
-                        playMode: Binding(
-                            get: { pm?.playMode ?? .sequence },
-                            set: { m in pm?.setPlayMode(m) }
-                        ),
-                        introSec: pm?.introSkipSeconds ?? 0,
-                        outroSec: pm?.outroSkipSeconds ?? 0,
-                        onSelect: { m in pm?.setPlayMode(m) },
-                        onIntroChange: { sec in pm?.setIntroSkip(sec) },
-                        onOutroChange: { sec in pm?.setOutroSkip(sec) }
-                    )
                 }
             }
         }
