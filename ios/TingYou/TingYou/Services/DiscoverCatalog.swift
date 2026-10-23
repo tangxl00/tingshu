@@ -74,6 +74,13 @@ enum DiscoverCatalog {
                 DiscoverCategory(id: "xiqu", name: "戏曲"),
                 DiscoverCategory(id: "cyy", name: "助眠音乐"),
             ]
+        case SourceRegistry.TING59:
+            // v1.4.1 · 59听书网 24 个原始分类（Ting59Categories.ALL，发现页浏览区音源选择用）
+            return Ting59Categories.ALL.map { DiscoverCategory(id: $0.id, name: $0.name) }
+        case SourceRegistry.BILI:
+            // v1.4.1 · B站 6 个分类（BiliCategories.ALL：关键词搜索口径，数据走
+            // SourceRouter.discoverCategory 的 BILI case）
+            return BiliCategories.ALL.map { DiscoverCategory(id: $0.key, name: $0.name) }
         default:
             return []
         }

@@ -51,9 +51,11 @@ final class DiscoverViewModel {
     }
 
     /// 幂等注入共享客户端（AppContainer.apiClient）与本地缓存。
-    /// 默认使用磁盘缓存（build 24：启动一次性清理多源时代孤儿键，仅保留固定主源前缀）；
+    /// 默认使用磁盘缓存（build 24：启动一次性清理多源时代孤儿键）；
+    /// v1.4.1：合法键前缀扩至 bili| / ting59|（浏览区新增两源的「src|cat」分区键，
+    /// 否则每次 attach 会把上一会话写入的这两源缓存当孤儿清掉）；
     /// 单测可注入假实现验证「优先读缓存」路径。
-    func attach(apiClient: APIClient, sourceRouter: SourceRouter? = nil, cache: (any DiscoverCacheStore)? = DiskDiscoverCache(validKeyPrefixes: ["tingyou|"])) {
+    func attach(apiClient: APIClient, sourceRouter: SourceRouter? = nil, cache: (any DiscoverCacheStore)? = DiskDiscoverCache(validKeyPrefixes: ["tingyou|", "bili|", "ting59|"])) {
         attach(loader: CombinedDiscoverLoader(
             repo: AlbumRepository(apiClient: apiClient), router: sourceRouter), cache: cache)
     }

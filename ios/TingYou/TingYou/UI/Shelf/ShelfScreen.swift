@@ -15,6 +15,11 @@ struct ShelfScreen: View {
     @State private var showDocumentPicker = false
     @State private var importMessage: String?
     @State private var showImportMessage = false
+    /// v1.4.1：B站 / 59听书网导入 sheet 入口（自发现页迁至书架导入页工具栏「+」）
+    @State private var showBiliImport = false
+    @State private var showTing59Import = false
+    /// v1.4.1：导入完成 → 打开专辑（对齐原发现页 P0-4 的导航语义）
+    @State private var navToAlbum: Album? = nil
     @Environment(\.appContainer) private var container
     @Environment(\.modelContext) private var modelContext
 
@@ -32,6 +37,22 @@ struct ShelfScreen: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: .infinity)
+
+                    // v1.4.1：导入页工具栏「+」——B站 / 59听书网导入入口
+                    //（自发现页迁来；视图本身不动，仅换挂载入口）
+                    if selectedTab == 2 {
+                        Menu {
+                            Button(action: { showBiliImport = true }) {
+                                Label("B站导入", systemImage: "play.rectangle")
+                            }
+                            Button(action: { showTing59Import = true }) {
+                                Label("59听书网导入", systemImage: "headphones")
+                            }
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.title3)
+                        }
+                    }
 
                     Menu {
                         Section("书籍排列") {
@@ -112,6 +133,39 @@ struct ShelfScreen: View {
                     showImportMessage = true
                 }
             }
+            // v1.4.1：B站 / 59听书网导入（入口自发现页迁至导入页工具栏「+」）
+            .sheet(isPresented: $showBiliImport) {
+                BiliImportScreen(
+                    onBack: { showBiliImport = false },
+                    onOpenAlbum: { _, bookId in
+                        showBiliImport = false
+                        openImportedAlbum(bookId)
+                    }
+                )
+            }
+            .sheet(isPresented: $showTing59Import) {
+                Ting59ImportScreen(
+                    onBack: { showTing59Import = false },
+                    onOpenAlbum: { _, bookId in
+                        showTing59Import = false
+                        openImportedAlbum(bookId)
+                    }
+                )
+            }
+            .navigationDestination(item: $navToAlbum) { album in
+                AlbumScreen(album: album)
+            }
+        }
+    }
+
+    /// v1.4.1：导入完成 → 按 (src, detailPath) 还原 Album 并打开专辑页。
+    /// 复用本页既有 albumFromImported（B站 detailPath=meta(bvid)、59听书 detailPath=/mp3/{id}.html）。
+    private func openImportedAlbum(_ bookId: Int64) {
+        let descriptor = FetchDescriptor<ImportedBookModel>(
+            predicate: #Predicate { $0.id == bookId }
+        )
+        if let book = try? modelContext.fetch(descriptor).first {
+            navToAlbum = albumFromImported(book)
         }
     }
 
@@ -213,7 +267,7 @@ struct ShelfScreen: View {
     @ViewBuilder
     private var importedContent: some View {
         if importedBooks.isEmpty {
-            ContentUnavailableView("暂无导入书籍", systemImage: "arrow.down.circle", description: Text("在发现页导入B站或59听书网书籍"))
+            ContentUnavailableView("暂无导入书籍", systemImage: "arrow.down.circle", description: Text("点右上角「+」从B站或59听书网导入书籍"))
         } else if layout == 0 {
             List {
                 ForEach(importedBooks) { book in

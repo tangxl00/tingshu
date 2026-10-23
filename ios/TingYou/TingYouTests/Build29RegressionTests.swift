@@ -97,7 +97,7 @@ final class Build29RegressionTests: XCTestCase {
         let plistPath = Bundle(for: type(of: self)).path(forResource: "Info", ofType: "plist")
         ?? Bundle.main.path(forResource: "Info", ofType: "plist")
         // 若取不到 Bundle 内路径，回退到直接文件读取（测试目标与主目标同 bundle 时可能不同）
-        XCTAssertTrue(true, "版本号静态断言：project.yml 中 MARKETING_VERSION=1.4.0 CURRENT_PROJECT_VERSION=29")
+        XCTAssertTrue(true, "版本号静态断言：project.yml 中 MARKETING_VERSION=1.4.1 CURRENT_PROJECT_VERSION=30")
     }
 
     // MARK: - 辅助

@@ -140,8 +140,14 @@ actor SourceRouter {
                 Chapter(chapterId: Int64($0.index), index: $0.index, title: $0.title, durationSec: nil)
             }
         case SourceRegistry.BILI:
-            // B站章节在导入时通过 videoInfo 获取并存入 ImportedChapterModel
-            throw URLError(.unsupportedURL)
+            // v1.4.1 · 发现页点书直达：detailPath 即 bvid，章节 = 分P列表。
+            // index 取 0 基（page - 1）：PlaybackRepository BILI 播放口径为
+            // page == chapterIdx + 1，且与导入页 ImportedChapterModel 的 chapterIdx（0 基）一致。
+            guard let bvid = detailPath, !bvid.isEmpty else { throw URLError(.badURL) }
+            let info = try await biliAdapter.videoInfo(bvid: bvid).get()
+            return info.pages.map {
+                Chapter(chapterId: $0.cid, index: $0.page - 1, title: $0.part, durationSec: nil)
+            }
         case SourceRegistry.TING59:
             guard let path = detailPath, !path.isEmpty else { throw URLError(.badURL) }
             let bookId = path.replacingOccurrences(of: "/mp3/", with: "").replacingOccurrences(of: ".html", with: "")
@@ -175,6 +181,12 @@ actor SourceRouter {
         case SourceRegistry.TING59:
             let result = try await ting59Adapter.category(categoryId: categoryId, page: page)
             return (result.books.map { Self.albumFromTing59($0) }, result.hasMore)
+        case SourceRegistry.BILI:
+            // v1.4.1 · B站「分类」实为该分类关键词的搜索（沿用原 BiliHomeScreen 的口径：
+            // 取 BiliCategories.ALL 对应分类的首个关键词调 searchAudiobooks）
+            let keyword = BiliCategories.ALL.first(where: { $0.key == categoryId })?.keywords.first ?? categoryId
+            let result = try await biliSearchApi.searchAudiobooks(keyword: keyword, page: page)
+            return (result.items.map { Self.albumFromBili($0) }, result.hasMore)
         default:
             throw URLError(.unsupportedURL) // 该源暂不支持发现页
         }
@@ -204,8 +216,22 @@ actor SourceRouter {
               source: SourceRegistry.MEKUI, detailPath: "/\(item.id)")
     }
 
+    /// v1.4.1：B站 Album 的稳定 albumId——由 bvid 计算（FNV-1a 64）。
+    /// 背景：recordHistory 按 (src, albumId) 去重，此前 albumId 恒为 0 会导致
+    /// 不同 B站 书共用同一条历史互相覆盖（续播错乱）；同时 Album.id = albumId，
+    /// 恒 0 会造成发现页/搜索列表 ForEach 重复 id。播放链路不消费该值
+    /// （PlaybackRepository BILI 以 detailPath=bvid 为准，章节解析亦同）。
+    static func biliAlbumId(from bvid: String) -> Int64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325 // FNV-1a offset basis
+        for byte in bvid.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3 // FNV-1a prime
+        }
+        return Int64(bitPattern: hash)
+    }
+
     private static func albumFromBili(_ item: BiliSearchApi.SearchResult) -> Album {
-        Album(albumId: 0, // B站搜索结果是视频，albumId 在导入阶段生成
+        Album(albumId: biliAlbumId(from: item.bvid), // v1.4.1：bvid 稳定哈希（原恒 0），见 biliAlbumId 注释
               title: item.title, author: item.author, teller: nil,
               coverUrl: item.coverUrl, intro: item.description,
               category: nil, categoryId: nil, type: nil, typeId: nil,

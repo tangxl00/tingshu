@@ -1,17 +1,15 @@
 import SwiftUI
-import SwiftData
 
-/// 发现页（build 22 · 对齐安卓 v1.3.3）：
-/// 浏览模式固定展示主源（听友FM）的榜单/分类——音源切换菜单已移除，
-/// 「哪些源参与搜索」由「我的→音源管理」开关控制（对齐安卓 LibraryScreen）。
-/// 分类二级折叠保留（build 21 · 反馈 6，仅听友FM 分类）。
+/// 发现页（build 22 · 对齐安卓 v1.3.3；v1.4.1 音源整合改造）：
+/// 浏览区支持音源选择（听友FM 主源 + B站 + 59听书网，后两者受「我的→音源管理」开关控制），
+/// 选中音源后分类 chips 与书籍列表切换为该源数据；点书经 NavigationLink 直达
+/// AlbumScreen（章节即载、点章即播），无任何导入/预览中间页。
+/// 「哪些源参与搜索」仍由「我的→音源管理」开关控制（AggregateSearcher）。
+/// 分类二级折叠保留（build 21 · 反馈 6）。
 /// 搜索框：聚合全部启用音源（AggregateSearcher，与搜索页同一套逻辑）。
 struct DiscoverScreen: View {
     @Environment(\.appContainer) private var appContainer
-    @Environment(\.modelContext) private var modelContext
     @State private var viewModel = DiscoverViewModel()
-    /// P0-4：导入完成后导航到专辑页
-    @State private var navToAlbum: Album? = nil
     @State private var selectedCategoryId = "recommend"
     /// build 21 · 反馈 6：分类选择折叠面板（默认收起）
     @State private var categoryExpanded = false
@@ -30,23 +28,36 @@ struct DiscoverScreen: View {
     private let historyStore = SearchHistoryStore()
     /// build 27：发现页搜索历史展示（页内变更即时刷新；形态参考 SearchScreen.historySection）
     @State private var history: [String] = []
-    /// build 29：B站 / 59听书网入口卡片 sheet 状态
-    @State private var showBiliHome = false
-    @State private var showTing59Home = false
-    @State private var showBiliImport = false
-    @State private var biliImportBvid: String? = nil
-    @State private var showTing59Import = false
-    @State private var ting59ImportBookId: String? = nil
+    /// v1.4.1：浏览区当前音源（听友FM / B站 / 59听书网），默认主源
+    @State private var browseSource = SourceRegistry.TINGYOU
 
     let onOpenAlbum: (Int64) -> Void
     let onOpenPlayer: () -> Void
 
-    /// build 22：固定主源（听友FM）——发现页不再切源，对齐安卓 LibraryScreen
-    private static let mainSource = SourceRegistry.TINGYOU
+    /// v1.4.1：浏览区可选音源——听友FM（主源，始终在列）+
+    /// B站 / 59听书网（「我的→音源管理」开关关闭时不出现在选择器中，默认开）。
+    private var browseSources: [(id: String, name: String)] {
+        var result: [(id: String, name: String)] = [
+            (SourceRegistry.TINGYOU, SourceRegistry.displayName(src: SourceRegistry.TINGYOU))
+        ]
+        if appContainer?.sourceEnabledStore.isEnabled(SourceRegistry.BILI) ?? true {
+            result.append((SourceRegistry.BILI, SourceRegistry.displayName(src: SourceRegistry.BILI)))
+        }
+        if appContainer?.sourceEnabledStore.isEnabled(SourceRegistry.TING59) ?? true {
+            result.append((SourceRegistry.TING59, SourceRegistry.displayName(src: SourceRegistry.TING59)))
+        }
+        return result
+    }
 
-    /// 主源的分类清单（原始分类结构）
+    /// 当前浏览音源显示名（源被开关下线后仍能显示原名，回落由 onAppear 处理）
+    private var browseSourceName: String {
+        browseSources.first(where: { $0.id == browseSource })?.name
+            ?? SourceRegistry.displayName(src: browseSource)
+    }
+
+    /// 当前音源的分类清单（原始分类结构）
     private var categories: [DiscoverCategory] {
-        DiscoverCatalog.categories(for: Self.mainSource)
+        DiscoverCatalog.categories(for: browseSource)
     }
 
     private var selectedCategory: DiscoverCategory? {
@@ -89,15 +100,19 @@ struct DiscoverScreen: View {
                     // build 27：搜索历史展示——关键词为空（未进入搜索模式）时显示「最近搜索」
                     // （SearchScreen 是死代码不可达，历史此前只写不读；现移到发现页可达）。
                     historySection
-                    // build 29：B站 / 59听书网独立入口卡片
-                    sourceEntryCards
                     libraryContent
                 }
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
-            .onAppear { history = historyStore.all }
-            .navigationDestination(item: $navToAlbum) { album in
-                AlbumScreen(album: album)
+            .onAppear {
+                history = historyStore.all
+                // v1.4.1：音源管理开关可能已变化——当前浏览源被关闭时回落主源
+                if browseSource != SourceRegistry.TINGYOU,
+                   !browseSources.contains(where: { $0.id == browseSource }) {
+                    browseSource = SourceRegistry.TINGYOU
+                    selectedCategoryId = DiscoverCatalog.categories(for: SourceRegistry.TINGYOU).first?.id ?? "recommend"
+                    Task { await loadCurrent() }
+                }
             }
         }
         // build 21 · Bug A 同类问题：发现页聚合搜索命中悦听反爬拦截时，
@@ -167,136 +182,25 @@ struct DiscoverScreen: View {
         }
     }
 
-    // MARK: - build 29 · 音源入口卡片
-
-    @ViewBuilder
-    private var sourceEntryCards: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("更多音源")
-                .font(.subheadline.bold())
-                .padding(.horizontal)
-            HStack(spacing: 12) {
-                Button {
-                    showBiliHome = true
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Image(systemName: "play.rectangle.fill")
-                                .foregroundStyle(.pink)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Text("B站")
-                            .font(.subheadline.bold())
-                        Text("搜索有声视频")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemGray6))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    showTing59Home = true
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Image(systemName: "headphones")
-                                .foregroundStyle(.indigo)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Text("59听书网")
-                            .font(.subheadline.bold())
-                        Text("搜索/分类收听")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.systemGray6))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal)
-        }
-        .padding(.vertical, 8)
-        .sheet(isPresented: $showBiliHome) {
-            BiliHomeScreen(
-                onBack: { showBiliHome = false },
-                onOpenImport: { bvid in
-                    biliImportBvid = bvid
-                    showBiliImport = true
-                }
-            )
-            .sheet(isPresented: $showBiliImport) {
-                BiliImportScreen(
-                    onBack: { showBiliImport = false },
-                    onOpenAlbum: { src, bookId in
-                        showBiliImport = false
-                        let descriptor = FetchDescriptor<ImportedBookModel>(
-                            predicate: #Predicate { $0.id == bookId }
-                        )
-                        if let book = try? modelContext.fetch(descriptor).first {
-                            navToAlbum = Album(
-                                albumId: bookId, title: book.title, author: nil, teller: nil,
-                                coverUrl: nil, intro: nil, category: nil, categoryId: nil,
-                                type: nil, typeId: nil, status: nil, chapterCount: nil,
-                                updatedAt: nil, playCount: nil, available: true,
-                                source: src, detailPath: book.meta
-                            )
-                        }
-                    },
-                    prefillBvid: biliImportBvid
-                )
-            }
-        }
-        .sheet(isPresented: $showTing59Home) {
-            Ting59HomeScreen(
-                onBack: { showTing59Home = false },
-                onOpenItem: { item in
-                    ting59ImportBookId = item.id
-                    showTing59Import = true
-                }
-            )
-            .sheet(isPresented: $showTing59Import) {
-                Ting59ImportScreen(
-                    onBack: { showTing59Import = false },
-                    onOpenAlbum: { src, bookId in
-                        showTing59Import = false
-                        let descriptor = FetchDescriptor<ImportedBookModel>(
-                            predicate: #Predicate { $0.id == bookId }
-                        )
-                        if let book = try? modelContext.fetch(descriptor).first {
-                            navToAlbum = Album(
-                                albumId: bookId, title: book.title, author: nil, teller: nil,
-                                coverUrl: nil, intro: nil, category: nil, categoryId: nil,
-                                type: nil, typeId: nil, status: nil, chapterCount: nil,
-                                updatedAt: nil, playCount: nil, available: true,
-                                source: src, detailPath: book.meta.map { "/mp3/\($0).html" }
-                            )
-                        }
-                    },
-                    prefillBookId: ting59ImportBookId
-                )
-            }
+    /// v1.4.1：按所选音源加载——听友FM 走 rank 榜单（沿用 DiscoverViewModel.tingyouRank）；
+    /// B站 / 59听书网走分类路由（LoadTarget.category → SourceRouter.discoverCategory），
+    /// 两源共用现有的翻页 / 加载更多 / 失败重试机制。
+    private func loadCurrent() async {
+        guard let cat = selectedCategory else { return }
+        if browseSource == SourceRegistry.TINGYOU {
+            await viewModel.load(target: .tingyouRank(section: cat.id))
+        } else {
+            await viewModel.load(target: .category(src: browseSource, categoryId: cat.id))
         }
     }
 
-    /// build 22：固定主源榜单加载（tingyou rank）
-    private func loadCurrent() async {
-        guard let cat = selectedCategory else { return }
-        await viewModel.load(target: .tingyouRank(section: cat.id))
+    /// v1.4.1：切换浏览音源——分类重置为该源第一个，列表重新加载
+    private func switchBrowseSource(_ src: String) {
+        guard src != browseSource else { return }
+        browseSource = src
+        selectedCategoryId = DiscoverCatalog.categories(for: src).first?.id ?? ""
+        categoryExpanded = false
+        Task { await loadCurrent() }
     }
 
     @ViewBuilder
@@ -352,7 +256,9 @@ struct DiscoverScreen: View {
     @ViewBuilder
     private var libraryContent: some View {
         // build 21 · 反馈 6：分类选择折叠面板（二级折叠、默认收起）。
-        // build 22：固定听友FM 分类（原始 5 个 rank section）。
+        // v1.4.1：分类面板标题行新增音源选择 Menu（音源：X ▾）——
+        // 听友FM（DiscoverCatalog 5 榜单分类）/ B站（BiliCategories.ALL 6 分类）/
+        // 59听书网（Ting59Categories.ALL 24 分类）；选中后下方分类与书籍列表切换为该源数据。
         VStack(spacing: 0) {
             DisclosureGroup(isExpanded: $categoryExpanded) {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -375,6 +281,28 @@ struct DiscoverScreen: View {
                     Text("分类：\(selectedCategory?.name ?? "全部")")
                         .font(.subheadline)
                     Spacer()
+                    Menu {
+                        ForEach(browseSources, id: \.id) { src in
+                            Button {
+                                switchBrowseSource(src.id)
+                            } label: {
+                                if src.id == browseSource {
+                                    Label(src.name, systemImage: "checkmark")
+                                } else {
+                                    Text(src.name)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("音源：\(browseSourceName)")
+                                .font(.subheadline)
+                            Image(systemName: "chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .fixedSize()
                     Image(systemName: categoryExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption)
                         .foregroundStyle(.secondary)
