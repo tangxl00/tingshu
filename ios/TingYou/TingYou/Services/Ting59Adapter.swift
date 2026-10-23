@@ -41,11 +41,8 @@ actor Ting59Adapter {
 
     // MARK: - 搜索
 
-    struct Ting59SearchResult: Sendable {
-        let list: [Ting59SearchItem]
-        let hasMore: Bool
-        let total: Int
-    }
+    /// 与 Ting59ListParsers 的同名结果类型统一，避免同名不同型的冲突
+    typealias Ting59SearchResult = Ting59ListParsers.Ting59SearchResult
 
     struct Ting59SearchItem: Sendable {
         let id: String
@@ -70,10 +67,8 @@ actor Ting59Adapter {
 
     // MARK: - 分类
 
-    struct Ting59CategoryResult: Sendable {
-        let books: [Ting59SearchItem]
-        let hasMore: Bool
-    }
+    /// 与 Ting59ListParsers 的同名结果类型统一，避免同名不同型的冲突
+    typealias Ting59CategoryResult = Ting59ListParsers.Ting59CategoryResult
 
     func category(categoryId: String, page: Int) async throws -> Ting59CategoryResult {
         let doc = try await fetchCategoryPage(categoryId: categoryId, page: page)
@@ -93,6 +88,7 @@ actor Ting59Adapter {
         let book: Ting59SearchItem
         let chapters: [Ting59Chapter]
         let description: String?
+        let coverUrl: String?
     }
 
     struct Ting59Chapter: Sendable {

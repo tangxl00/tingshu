@@ -400,6 +400,11 @@ actor BiliAdapter {
         return genBuvid3(random: &rng)
     }
 
+    /// 便捷入口：取系统随机种子生成 buvid3（运行时用）
+    static func genBuvid3() -> String {
+        genBuvid3(seed: UInt64.random(in: UInt64.min...UInt64.max))
+    }
+
     /// gaia 激活载荷
     static func buildGaiaPayload(mid: Int, buvid3: String, buvid4: String) -> String {
         "{\"mid\":\(mid),\"buvid3\":\"\(buvid3)\",\"buvid4\":\"\(buvid4)\"}"

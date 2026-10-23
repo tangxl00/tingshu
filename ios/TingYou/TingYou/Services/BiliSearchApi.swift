@@ -225,7 +225,8 @@ actor BiliSearchApi {
 
 // MARK: - 分类与过滤
 
-struct BiliCategory: Sendable {
+struct BiliCategory: Sendable, Identifiable {
+    var id: String { key }
     let key: String
     let name: String
     let keywords: [String]

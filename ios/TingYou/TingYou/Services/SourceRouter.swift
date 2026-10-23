@@ -12,7 +12,7 @@ actor SourceRouter {
     private let ytysxsAdapter: YtysxsAdapter
     private let mekuiAdapter: MekuiAdapter
     private let biliAdapter: BiliAdapter
-    private let biliSearchApi: BiliSearchApi
+    let biliSearchApi: BiliSearchApi
     private let ting59Adapter: Ting59Adapter
     let playbackRepository: PlaybackRepository
 
@@ -106,10 +106,11 @@ actor SourceRouter {
             let bookId = path.replacingOccurrences(of: "/mp3/", with: "").replacingOccurrences(of: ".html", with: "")
             let d = try await ting59Adapter.bookDetail(bookId: bookId)
             return Album(albumId: albumId, title: d.book.title, author: d.book.author,
-                         teller: d.book.narrator, coverUrl: d.book.coverUrl, intro: d.description,
+                         teller: d.book.narrator, coverUrl: d.coverUrl, intro: d.description,
                          category: d.book.category, categoryId: nil, type: nil, typeId: nil,
                          status: nil, chapterCount: d.chapters.count,
-                         updatedAt: d.book.updateTime, playCount: nil, available: true, source: src,
+                         // ting59 更新时间为中文日期串，无法无损转 Int64 时间戳，不做有损转换
+                         updatedAt: nil, playCount: nil, available: true, source: src,
                          detailPath: path)
         default:
             throw URLError(.unsupportedURL)
@@ -217,7 +218,9 @@ actor SourceRouter {
         Album(albumId: Int64(item.id) ?? 0, title: item.title, author: item.author,
               teller: item.narrator, coverUrl: nil, intro: nil,
               category: item.category, categoryId: nil, type: nil, typeId: nil,
-              status: nil, chapterCount: nil, updatedAt: item.updateTime,
+              status: nil, chapterCount: nil,
+              // ting59 更新时间为中文日期串，无法无损转 Int64 时间戳，不做有损转换
+              updatedAt: nil,
               playCount: nil, available: true, source: SourceRegistry.TING59,
               detailPath: item.detailUrl)
     }

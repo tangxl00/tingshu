@@ -82,7 +82,8 @@ enum Ting59DetailParser {
         return Ting59Adapter.Ting59BookDetail(
             book: book,
             chapters: chapters,
-            description: description
+            description: description,
+            coverUrl: coverUrl
         )
     }
 

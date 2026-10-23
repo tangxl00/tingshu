@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 /// 发现页（build 22 · 对齐安卓 v1.3.3）：
 /// 浏览模式固定展示主源（听友FM）的榜单/分类——音源切换菜单已移除，

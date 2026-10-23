@@ -202,8 +202,10 @@ struct Ting59ImportScreen: View {
 
     private func importTing59Book(preview: Ting59Preview) async throws -> Int64 {
         // P1-4：查重以站点 bookId（meta）为准，避免同名不同书或同书改名导致的问题
+        // #Predicate 宏不能捕获类型静态属性，先取局部常量
+        let kind = Ting59Source.KIND
         let existingDescriptor = FetchDescriptor<ImportedBookModel>(
-            predicate: #Predicate { $0.kind == Ting59Source.KIND }
+            predicate: #Predicate { $0.kind == kind }
         )
         let existing = (try? modelContext.fetch(existingDescriptor)) ?? []
         if let dup = existing.first(where: { $0.meta == preview.siteBookId }) {
