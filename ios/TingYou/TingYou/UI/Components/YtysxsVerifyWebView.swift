@@ -13,10 +13,17 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
     let keyword: String
     let cookieStore: KeychainTokenStore
     let onResult: (Bool) -> Void
+    /// build 27：加载状态回调（true = 加载中）——驱动 sheet 层进度与错误 UI
+    let onLoadingChange: (Bool) -> Void
+    /// build 27：加载失败回调（错误描述 + 重试闭包由 sheet 层组装）
+    let onLoadError: (String) -> Void
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
+        // build 27（空白页候选修复）：悦听站点对 WebView 默认 UA 的响应差异——
+        // 显式带上 Safari/WebKit 标识（保持 iOS 真实形态，不伪装桌面 UA）
+        config.applicationNameForUserAgent = "TingYou/1.3.3 Safari/605.1.15"
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         return webView
@@ -29,24 +36,40 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
             : "https://www.ytysxs.com/?s=\(MsrcHtml.encodeUriComponent(kw))"
         guard let url = URL(string: urlString), context.coordinator.loadedURL != urlString else { return }
         context.coordinator.loadedURL = urlString
-        uiView.load(URLRequest(url: url))
+        load(webView: uiView, url: url)
+    }
+
+    /// build 27：统一加载入口——置加载态后加载（重试由 sheet 层 .id 重建触发，不直接复用本方法）。
+    private func load(webView: WKWebView, url: URL) {
+        DispatchQueue.main.async { [onLoadingChange] in
+            onLoadingChange(true)
+        }
+        webView.load(URLRequest(url: url))
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(cookieStore: cookieStore, onResult: onResult)
+        Coordinator(cookieStore: cookieStore, onResult: onResult,
+                   onLoadingChange: onLoadingChange, onLoadError: onLoadError)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         let cookieStore: KeychainTokenStore
         let onResult: (Bool) -> Void
+        let onLoadingChange: (Bool) -> Void
+        let onLoadError: (String) -> Void
         var loadedURL: String?
 
-        init(cookieStore: KeychainTokenStore, onResult: @escaping (Bool) -> Void) {
+        init(cookieStore: KeychainTokenStore, onResult: @escaping (Bool) -> Void,
+             onLoadingChange: @escaping (Bool) -> Void, onLoadError: @escaping (String) -> Void) {
             self.cookieStore = cookieStore
             self.onResult = onResult
+            self.onLoadingChange = onLoadingChange
+            self.onLoadError = onLoadError
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            // build 27：主线程回包（WKNavigationDelegate 本就在主线程，防御性统一）
+            DispatchQueue.main.async { [onLoadingChange] in onLoadingChange(false) }
             // 验证完成后从 httpCookieStore 捕获 be_captcha_token（24h 有效）
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
                 guard let self = self else { return }
@@ -57,6 +80,24 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
                 }
             }
         }
+
+        /// build 27（空白页修复）：加载失败此前无任何 UI 反馈，静默成空白页——
+        /// 现回调错误描述到 sheet 层展示（含重试按钮），用户可恢复。
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            DispatchQueue.main.async { [onLoadingChange, onLoadError] in
+                onLoadingChange(false)
+                onLoadError((error as NSError).localizedDescription)
+            }
+        }
+
+        /// build 27：导航被取消（系统侧 w/ NSURLErrorCancelled）不算失败也不算成功——
+        /// 清加载态静默返回（重试场景常见，不能误报错误）。
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            DispatchQueue.main.async { [onLoadingChange, onLoadError] in
+                onLoadingChange(false)
+                onLoadError("网页进程已终止，请重试加载")
+            }
+        }
     }
 }
 
@@ -65,13 +106,63 @@ struct YtysxsVerifySheet: View {
     let keyword: String
     let cookieStore: KeychainTokenStore
     let onDone: (Bool) -> Void
+    /// build 27：加载状态（WebView 不可达时不再静默空白）
+    @State private var isLoading = true
+    /// build 27：加载失败描述（nil = 无失败）
+    @State private var loadErrorText: String?
+    /// build 27：重试触发（更新即让 WebView updateUIView 重新 load）
+    @State private var retryToken = 0
 
     var body: some View {
         NavigationStack {
-            YtysxsVerifyWebView(keyword: keyword, cookieStore: cookieStore) { captured in
-                if captured { onDone(true) }
+            ZStack {
+                YtysxsVerifyWebView(
+                    keyword: keyword,
+                    cookieStore: cookieStore,
+                    onResult: { captured in
+                        if captured { onDone(true) }
+                    },
+                    onLoadingChange: { loading in
+                        isLoading = loading
+                        if loading { loadErrorText = nil }
+                    },
+                    onLoadError: { text in
+                        loadErrorText = text
+                    }
+                )
+                .ignoresSafeArea(edges: .bottom)
+                .id(retryToken) // build 27：重试 = 整体重建 WebView（清空陈旧导航状态）
+
+                if isLoading && loadErrorText == nil {
+                    // build 27：加载中提示（原实现无任何反馈，慢网络下像空白页）
+                    ProgressView("正在加载验证页面…")
+                        .padding()
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+                if let text = loadErrorText {
+                    // build 27：加载失败提示 + 重试（原实现静默失败成空白页）
+                    VStack(spacing: 12) {
+                        Image(systemName: "wifi.exclamationmark")
+                            .font(.largeTitle)
+                            .foregroundStyle(.orange)
+                        Text("验证页加载失败")
+                            .font(.headline)
+                        Text(text)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("重试") {
+                            loadErrorText = nil
+                            isLoading = true
+                            retryToken += 1 // 触发 .id 变化重建 WebView 重新加载
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .padding()
+                }
             }
-            .ignoresSafeArea(edges: .bottom)
             .navigationTitle("完成安全验证")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

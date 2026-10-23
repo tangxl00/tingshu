@@ -54,6 +54,8 @@ final class SourceManageModel {
         Row(id: SourceRegistry.TING08, name: "听吧", note: nil),
         Row(id: SourceRegistry.YTYXSX, name: "悦听有声书", note: nil),
         Row(id: SourceRegistry.MEKUI, name: "书音FM", note: nil),
+        Row(id: SourceRegistry.BILI, name: "B站", note: nil),
+        Row(id: SourceRegistry.TING59, name: "59听书网", note: nil),
         Row(id: SourceRegistry.IMPORT, name: "导入", note: "不参与搜索"),
     ]
 

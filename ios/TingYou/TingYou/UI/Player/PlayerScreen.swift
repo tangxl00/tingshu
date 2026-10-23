@@ -173,14 +173,11 @@ struct PlayerScreen: View {
                             // （顺序/单曲循环/列表循环），逻辑在 PlaybackManager.chapterFinishedAction。
                             // build 25（对齐安卓 v1.3.0 item 8）：新增片头/片尾跳过接线——
                             // 读当前书秒数、拖动结束落值（按书持久化，换书自动刷新）。
+                            // build 27：设置面板删除播放模式入口（面板仅保留片头/片尾跳过）；
+                            // 播放模式枚举与决策逻辑保留在 PlaybackManager 不动。
                             PlayerSettingsSheet(
-                                playMode: Binding(
-                                    get: { pm.playMode },
-                                    set: { m in pm.setPlayMode(m) }
-                                ),
                                 introSec: pm.introSkipSeconds,
                                 outroSec: pm.outroSkipSeconds,
-                                onSelect: { m in pm.setPlayMode(m) },
                                 onIntroChange: { sec in pm.setIntroSkip(sec) },
                                 onOutroChange: { sec in pm.setOutroSkip(sec) }
                             )

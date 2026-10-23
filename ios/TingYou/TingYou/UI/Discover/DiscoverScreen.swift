@@ -7,7 +7,10 @@ import SwiftUI
 /// 搜索框：聚合全部启用音源（AggregateSearcher，与搜索页同一套逻辑）。
 struct DiscoverScreen: View {
     @Environment(\.appContainer) private var appContainer
+    @Environment(\.modelContext) private var modelContext
     @State private var viewModel = DiscoverViewModel()
+    /// P0-4：导入完成后导航到专辑页
+    @State private var navToAlbum: Album? = nil
     @State private var selectedCategoryId = "recommend"
     /// build 21 · 反馈 6：分类选择折叠面板（默认收起）
     @State private var categoryExpanded = false
@@ -24,6 +27,15 @@ struct DiscoverScreen: View {
     @State private var pendingKeyword = ""
     /// build 21 · 反馈 7：发现页搜索框同步写入搜索历史
     private let historyStore = SearchHistoryStore()
+    /// build 27：发现页搜索历史展示（页内变更即时刷新；形态参考 SearchScreen.historySection）
+    @State private var history: [String] = []
+    /// build 29：B站 / 59听书网入口卡片 sheet 状态
+    @State private var showBiliHome = false
+    @State private var showTing59Home = false
+    @State private var showBiliImport = false
+    @State private var biliImportBvid: String? = nil
+    @State private var showTing59Import = false
+    @State private var ting59ImportBookId: String? = nil
 
     let onOpenAlbum: (Int64) -> Void
     let onOpenPlayer: () -> Void
@@ -73,10 +85,19 @@ struct DiscoverScreen: View {
                 if searchMode && !keyword.isEmpty {
                     searchResultsContent
                 } else {
+                    // build 27：搜索历史展示——关键词为空（未进入搜索模式）时显示「最近搜索」
+                    // （SearchScreen 是死代码不可达，历史此前只写不读；现移到发现页可达）。
+                    historySection
+                    // build 29：B站 / 59听书网独立入口卡片
+                    sourceEntryCards
                     libraryContent
                 }
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
+            .onAppear { history = historyStore.all }
+            .navigationDestination(item: $navToAlbum) { album in
+                AlbumScreen(album: album)
+            }
         }
         // build 21 · Bug A 同类问题：发现页聚合搜索命中悦听反爬拦截时，
         // AntibotException 置位了 showAntibotSheet 但从未挂 .sheet（与播放器页同款遗漏）——补挂。
@@ -88,6 +109,185 @@ struct DiscoverScreen: View {
                 if verified {
                     performSearch(initial: true) // 验证通过后自动重试原搜索
                 }
+            }
+        }
+    }
+
+    // MARK: - 搜索历史（build 27：发现页可达展示）
+
+    /// 「最近搜索」区块：条目点选直接填入并搜索、单条删除（滑动）、一键清空。
+    /// 形态对齐 SearchScreen.historySection 既有实现（复用 SearchHistoryStore）。
+    @ViewBuilder
+    private var historySection: some View {
+        if !history.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("最近搜索")
+                        .font(.subheadline.bold())
+                    Spacer()
+                    Button("清空") {
+                        historyStore.clear()
+                        history = []
+                    }
+                    .font(.caption)
+                }
+                ForEach(history, id: \.self) { kw in
+                    // 行主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
+                    //（swipeActions 是 List 专属修饰符，VStack 布局下不生效，故用显式删除按钮）
+                    HStack {
+                        Button {
+                            keyword = kw
+                            performSearch(initial: true)
+                        } label: {
+                            HStack {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                                Text(kw)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.pressable)
+                        Button {
+                            historyStore.remove(kw)
+                            history = historyStore.all
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(Color(.systemGray3))
+                                .font(.caption)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - build 29 · 音源入口卡片
+
+    @ViewBuilder
+    private var sourceEntryCards: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("更多音源")
+                .font(.subheadline.bold())
+                .padding(.horizontal)
+            HStack(spacing: 12) {
+                Button {
+                    showBiliHome = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "play.rectangle.fill")
+                                .foregroundStyle(.pink)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("B站")
+                            .font(.subheadline.bold())
+                        Text("搜索有声视频")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGray6))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    showTing59Home = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "headphones")
+                                .foregroundStyle(.indigo)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("59听书网")
+                            .font(.subheadline.bold())
+                        Text("搜索/分类收听")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.systemGray6))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal)
+        }
+        .padding(.vertical, 8)
+        .sheet(isPresented: $showBiliHome) {
+            BiliHomeScreen(
+                onBack: { showBiliHome = false },
+                onOpenImport: { bvid in
+                    biliImportBvid = bvid
+                    showBiliImport = true
+                }
+            )
+            .sheet(isPresented: $showBiliImport) {
+                BiliImportScreen(
+                    onBack: { showBiliImport = false },
+                    onOpenAlbum: { src, bookId in
+                        showBiliImport = false
+                        let descriptor = FetchDescriptor<ImportedBookModel>(
+                            predicate: #Predicate { $0.id == bookId }
+                        )
+                        if let book = try? modelContext.fetch(descriptor).first {
+                            navToAlbum = Album(
+                                albumId: bookId, title: book.title, author: nil, teller: nil,
+                                coverUrl: nil, intro: nil, category: nil, categoryId: nil,
+                                type: nil, typeId: nil, status: nil, chapterCount: nil,
+                                updatedAt: nil, playCount: nil, available: true,
+                                source: src, detailPath: book.meta
+                            )
+                        }
+                    },
+                    prefillBvid: biliImportBvid
+                )
+            }
+        }
+        .sheet(isPresented: $showTing59Home) {
+            Ting59HomeScreen(
+                onBack: { showTing59Home = false },
+                onOpenItem: { item in
+                    ting59ImportBookId = item.id
+                    showTing59Import = true
+                }
+            )
+            .sheet(isPresented: $showTing59Import) {
+                Ting59ImportScreen(
+                    onBack: { showTing59Import = false },
+                    onOpenAlbum: { src, bookId in
+                        showTing59Import = false
+                        let descriptor = FetchDescriptor<ImportedBookModel>(
+                            predicate: #Predicate { $0.id == bookId }
+                        )
+                        if let book = try? modelContext.fetch(descriptor).first {
+                            navToAlbum = Album(
+                                albumId: bookId, title: book.title, author: nil, teller: nil,
+                                coverUrl: nil, intro: nil, category: nil, categoryId: nil,
+                                type: nil, typeId: nil, status: nil, chapterCount: nil,
+                                updatedAt: nil, playCount: nil, available: true,
+                                source: src, detailPath: book.meta.map { "/mp3/\($0).html" }
+                            )
+                        }
+                    },
+                    prefillBookId: ting59ImportBookId
+                )
             }
         }
     }
@@ -244,9 +444,16 @@ struct DiscoverScreen: View {
             failedSources = []
             searchPage = 1
             searchResults = []
+            // build 27：提交搜索时即记录（非空关键词即记，不依赖结果成败）——
+            // 被悦听反爬拦截或全源失败的搜索词同样落库（原「至少一源有结果才记」
+            // 会丢失被拦截场景的词，用户复搜无记忆）。
+            historyStore.add(kw)
+            history = historyStore.all
         } else if !searchHasMore { return }
 
-        Task {
+        // build 27（闪退修复）：Task 闭包内直接改 @State 属非主线程改状态（未定义行为，
+        // 录屏中验证流程触发崩溃疑似此因）——显式 @MainActor 隔离整块搜索状态更新。
+        Task { @MainActor in
             let searcher = AggregateSearcher(
                 searcher: container.sourceRouter,
                 enabledStore: container.sourceEnabledStore)
@@ -265,9 +472,6 @@ struct DiscoverScreen: View {
             isSearching = false
             if outcome.allFailed {
                 searchError = "搜索失败：所有启用音源均不可用，请稍后重试"
-            } else if !outcome.albums.isEmpty {
-                // build 21 · 反馈 7：发现页搜索成功也记入历史（至少一源有结果才算成功）
-                historyStore.add(kw)
             }
             if let antibot = outcome.antibotKeyword {
                 pendingKeyword = antibot

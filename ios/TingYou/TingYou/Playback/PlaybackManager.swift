@@ -70,9 +70,30 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         get { _speed }
         set {
             _speed = newValue
-            player.rate = newValue
+            // build 27：统一走 applyRate（倍速间歇性失效加固——见 applyRate 注释）
+            applyRate()
             UserDefaults.standard.set(newValue, forKey: "playback_speed")
         }
+    }
+
+    /// build 27（倍速间歇性失效加固）：统一速率重放入口。
+    /// AVPlayer 的实际播放速率会在系统事件后被静默重置回默认（1.0 或暂停）：
+    /// 播放条目替换（replaceCurrentItem / 自动切章新条目）、音频会话中断结束
+    /// （来电、耳机拔插）、缓冲卡顿恢复、status 重新 readyToPlay——
+    /// 用户在这类状态附近改倍速后，播放即呈现「选了没效果」的间歇性失效。
+    /// 修复：所有此类事件汇聚到本入口，按当前 speed 与播放态重放 player.rate；
+    /// 暂停态不强制起播（guard isPlaying）。
+    private func applyRate() {
+        guard isPlaying else { return }
+        player.rate = speed
+    }
+
+    /// build 27：音频会话中断结束是否应恢复播放并重放速率（纯函数供单测）。
+    /// AVAudioSession.interruptionOptions.shouldResume 语义：可恢复（多数音频场景 true）。
+    static func shouldResumeAfterInterruption(typeRaw: Int, optionsRaw: Int) -> Bool {
+        // ended：中断结束；shouldResume 位：系统建议恢复播放
+        typeRaw == AVAudioSession.InterruptionType.ended.rawValue
+            && (optionsRaw & Int(AVAudioSession.InterruptionOptions.shouldResume.rawValue)) != 0
     }
     var currentChapterTitle: String = ""
     var currentAlbumTitle: String = ""
@@ -159,6 +180,21 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         addPeriodicTimeObserver()
         NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)
             .sink { [weak self] _ in self?.onChapterFinished() }
+            .store(in: &cancellables)
+        // build 27（倍速加固）：音频会话中断结束（来电/耳机拔插）后，
+        // AVPlayer 可能不恢复或恢复到默认速率——统一 applyRate 重放当前 speed。
+        NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                guard let self = self,
+                      let info = note.userInfo,
+                      let typeRaw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      let optionsRaw = info[AVAudioSessionInterruptionOptionKey] as? UInt
+                else { return }
+                if Self.shouldResumeAfterInterruption(typeRaw: Int(typeRaw), optionsRaw: Int(optionsRaw)) {
+                    self.applyRate()
+                }
+            }
             .store(in: &cancellables)
     }
 
@@ -260,6 +296,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             if item.status == .readyToPlay {
                 self?.durationMs = Int64(item.duration.seconds * 1000)
                 self?.updateNowPlaying()
+                // build 27（倍速加固）：条目替换后 AVFoundation 将 rate 归零——
+                // 新条目就绪时按当前 speed 与播放态重放（暂停态不起播）。
+                self?.applyRate()
             }
         }
         player.replaceCurrentItem(with: item)
@@ -273,8 +312,10 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             player.seek(to: CMTime(seconds: Double(startMs) / 1000.0, preferredTimescale: 1000))
         }
         if autoPlay {
-            player.rate = speed
             isPlaying = true
+            // build 27：isPlaying 先置位，applyRate 内 guard 通过（条目尚在加载时
+            // 由 statusObserver readyToPlay 再重放一次，双保险）
+            applyRate()
             listenStartMs = Int64(Date().timeIntervalSince1970 * 1000)
         }
         updateNowPlaying()
@@ -319,7 +360,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                     return
                 }
                 let playUrl = try await repository.getPlayUrl(
-                    src: parsed.src, albumId: parsed.albumId, chapterIdx: parsed.chapterIdx)
+                    src: parsed.src, albumId: parsed.albumId, chapterIdx: parsed.chapterIdx,
+                    detailPath: self?.currentAlbum?.detailPath)
                 // 解析结果顺手入缓存（同一章 seek/重开不再重复解析）
                 self?.storeResolved(key: cacheKey, url: playUrl)
                 guard let redirectURL = URL(string: playUrl) else {
@@ -363,8 +405,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
 
     func play() {
         guard player.currentItem != nil else { return }
-        player.rate = speed
         isPlaying = true
+        // build 27：先置播放态再 applyRate（guard isPlaying 语义要求）
+        applyRate()
         listenStartMs = Int64(Date().timeIntervalSince1970 * 1000)
     }
 

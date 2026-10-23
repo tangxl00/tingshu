@@ -6,6 +6,8 @@ enum SourceRegistry {
     static let TING08 = "ting08"
     static let YTYXSX = "ytysxs"
     static let MEKUI = "mekui"
+    static let BILI = "bili"
+    static let TING59 = "ting59"
     static let IMPORT = "import"
 
     struct MsrcSourceConfig: Sendable {
@@ -66,12 +68,14 @@ enum SourceRegistry {
         case TINGYOU: return "听友FM"
         case IMPORT: return "导入"
         case YTYXSX: return "悦听有声书"
+        case BILI: return "B站"
+        case TING59: return "59听书网"
         default: return msrcSources[src]?.name ?? src
         }
     }
 
     static func isKnown(src: String) -> Bool {
-        src == TINGYOU || msrcSources[src] != nil || src == YTYXSX
+        src == TINGYOU || msrcSources[src] != nil || src == YTYXSX || src == BILI || src == TING59
     }
 
     static func configOf(src: String) -> MsrcSourceConfig? { msrcSources[src] }

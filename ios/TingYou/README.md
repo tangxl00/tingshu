@@ -6,7 +6,7 @@ iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐
 
 - **Bundle ID**：`com.tingyou.app.ios`
 - **CFBundleShortVersionString**：`1.3.3`
-- **CFBundleVersion**：`26`（与安卓 versionCode 对齐）
+- **CFBundleVersion**：`27`（与安卓 versionCode 对齐）
 - **最低系统**：iOS 17.0（SwiftData 依赖）
 - **签名状态**：**未签名**——本仓库与 CI 产物均不签名，需用户自行用爱思助手 / AltStore / Sideloadly 免费自签安装（7 天需重签）
 - **ATS**：全禁明文 HTTP（`NSAllowsArbitraryLoads = false`）
@@ -32,7 +32,7 @@ ios/TingYou/
 │   ├── UI/                         # SwiftUI 视图（含 YtysxsVerifyWebView 反爬人工验证容器）
 │   ├── Utils/                      # 工具（分页 / 诊断日志 / 扩展）
 │   └── Resources/Certs/            # 27 张 .pem 锚点证书
-└── TingYouTests/                   # XCTest（208 条测试函数（22 个测试文件、30 个测试类），见 §8）
+└── TingYouTests/                   # XCTest（212 条测试函数（23 个测试文件、31 个测试类），见 §8）
 ```
 
 ## 3. 本地构建
@@ -77,7 +77,7 @@ CI 步骤：
 1. macOS-14 runner + Xcode 15.4
 2. `xcodegen generate` 生成 `.xcodeproj`
 3. `xcodebuild build` 编译
-4. `xcodebuild test` 跑 XCTest（208 条）
+4. `xcodebuild test` 跑 XCTest（212 条）
 5. `xcodebuild archive` 产出未签名 `.xcarchive`
 6. **`plutil` 验证 archive 产物 Info.plist**：`UIBackgroundModes` 必含 `audio`、`NSAppTransportSecurity.NSAllowsArbitraryLoads` 必须为 `false`，缺失即 CI 失败（防 plist 漂移回归）
 7. 把 `TingYou.app` 打包为 zip，作为 artifact 上传
@@ -148,9 +148,9 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 | # | 功能 | 状态 | 说明 |
 |---|------|------|------|
 | a | 书架（含菜单） | ✅ | SwiftUI `ShelfScreen`，收藏/历史/导入分 Tab |
-| b | 发现页 | ✅ | `DiscoverScreen`；build 22：浏览固定主源听友FM（对齐安卓 LibraryScreen，移除音源切换菜单与 `discover_selected_source` 持久化），二级分类折叠默认收起（仅听友FM 分类）保留自 build 21；搜索框历史记忆（去重置顶上限 20）保留；复用容器内 `APIClient`（`DiscoverViewModel.attach` 幂等注入）；build 24：loadMore 失败置轻量反馈态（列表尾部「加载更多失败 + 重试」入口，不弹窗打断、不清空已加载列表，成功后自动清除）；磁盘缓存 init 一次性清理多源时代孤儿键文件（仅保留 `tingyou|` 前缀，防缓存目录膨胀） |
+| b | 发现页 | ✅ | `DiscoverScreen`；build 22：浏览固定主源听友FM（对齐安卓 LibraryScreen，移除音源切换菜单与 `discover_selected_source` 持久化），二级分类折叠默认收起（仅听友FM 分类）保留自 build 21；搜索框历史记忆（去重置顶上限 20）保留；复用容器内 `APIClient`（`DiscoverViewModel.attach` 幂等注入）；build 24：loadMore 失败置轻量反馈态（列表尾部「加载更多失败 + 重试」入口，不弹窗打断、不清空已加载列表，成功后自动清除）；磁盘缓存 init 一次性清理多源时代孤儿键文件（仅保留 `tingyou|` 前缀，防缓存目录膨胀）；build 27：搜索历史展示 + 提交即记录——空关键词显示「最近搜索」区块（条目点填即搜、单条删除、一键清空；SearchScreen 为不可达死代码，历史此前只写不读），提交搜索即记（非空即记，不依赖结果成败——被反爬拦截/全源失败的词同样落库）；搜索状态更新全路径 @MainActor |
 | c | 我的页 | ✅ | `MineScreen`，含音源管理入口、听书时长统计、设置 |
-| d | 播放器 | ✅ | `AVPlayer` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，后台/锁屏控制/倍速/进度/睡眠定时/片头片尾跳过；播放直链经 `AVAssetResourceLoaderDelegate` 接管 `tingyou-chapter://` 占位 URI 惰性解析（`PlaybackRepository` 按源路由真实地址），不再把占位 URI 直接喂给 `AVPlayerItem`；build 21：定时/设置弹窗补挂（`.sheet` 复用 applySleepTimer 三模式 + 播放模式三档顺序/单曲循环/列表循环，chapterFinishedAction 纯函数决策）、分享改 SwiftUI 原生 `ShareLink`；build 22：倍速弹层 `SpeedSheet.select` 先写 Binding 再回调，修复选择后 `pm.speed` 不生效的死控件问题；build 23：弹窗呈现机制重构——同一视图链四个 `.sheet(isPresented:)` 合并为单枚举驱动的 `.sheet(item:)`（SwiftUI 已知限制：同视图多 sheet 只有最后挂载的可靠生效，build 22 真机表现为倍速/章节弹窗点不出），四个按钮 action 改 `activeSheet = .speed/.chapters/.sleepTimer/.settings`；build 25（对齐安卓 v1.3.0 item 8）：片头/片尾跳过——设置面板新增两行时长选择器（Slider 0–300 每 5 秒一档、0 显示「关闭」），按书（src+albumId）持久化；片头在起播位置应用（恢复播放保留上次进度不被覆盖）、片尾由 1s 进度观察检测剩余时长切下一章（与自动连播同入口，末章不越界）；速度按钮补 `.pressable` 按压反馈；build 26（倍速真机隔离设计）：弹窗内容闭包改为呈现时非可选捕获 pm（原 `pm?.xxx` 可选链在 pm 为 nil 时静默无操作，与真机「面板正常但选择无效」现象吻合，静态审查无法区分），pm 为 nil 时弹窗显示诊断视图直接定位；SpeedSheet 选择后延迟 0.6s 关闭并常驻显示「当前：Xx」——面板值变而主界面不变 = 视图刷新断裂，面板值也不变 = 写入未执行 |
+| d | 播放器 | ✅ | `AVPlayer` + `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter`，后台/锁屏控制/倍速/进度/睡眠定时/片头片尾跳过；播放直链经 `AVAssetResourceLoaderDelegate` 接管 `tingyou-chapter://` 占位 URI 惰性解析（`PlaybackRepository` 按源路由真实地址），不再把占位 URI 直接喂给 `AVPlayerItem`；build 21：定时/设置弹窗补挂（`.sheet` 复用 applySleepTimer 三模式 + 播放模式三档顺序/单曲循环/列表循环，chapterFinishedAction 纯函数决策）、分享改 SwiftUI 原生 `ShareLink`；build 22：倍速弹层 `SpeedSheet.select` 先写 Binding 再回调，修复选择后 `pm.speed` 不生效的死控件问题；build 23：弹窗呈现机制重构——同一视图链四个 `.sheet(isPresented:)` 合并为单枚举驱动的 `.sheet(item:)`（SwiftUI 已知限制：同视图多 sheet 只有最后挂载的可靠生效，build 22 真机表现为倍速/章节弹窗点不出），四个按钮 action 改 `activeSheet = .speed/.chapters/.sleepTimer/.settings`；build 25（对齐安卓 v1.3.0 item 8）：片头/片尾跳过——设置面板新增两行时长选择器（Slider 0–300 每 5 秒一档、0 显示「关闭」），按书（src+albumId）持久化；片头在起播位置应用（恢复播放保留上次进度不被覆盖）、片尾由 1s 进度观察检测剩余时长切下一章（与自动连播同入口，末章不越界）；速度按钮补 `.pressable` 按压反馈；build 26（倍速真机隔离设计）：弹窗内容闭包改为呈现时非可选捕获 pm（原 `pm?.xxx` 可选链在 pm 为 nil 时静默无操作，与真机「面板正常但选择无效」现象吻合，静态审查无法区分），pm 为 nil 时弹窗显示诊断视图直接定位；SpeedSheet 选择后延迟 0.6s 关闭并常驻显示「当前：Xx」——面板值变而主界面不变 = 视图刷新断裂，面板值也不变 = 写入未执行；build 27（倍速间歇性失效加固）：统一 applyRate() 速率重放入口——speed setter / play / 条目 readyToPlay / 音频会话中断结束（shouldResumeAfterInterruption 纯函数决策）全部重放当前 speed（暂停态 guard 不起播）；设置面板删除播放模式分区（仅保留片头/片尾跳过） |
 | e | 多音源 | ✅ | 搜索/详情/章节/播放四链路全部真实路由：tingyou（JSON API）、ting15 / ting08（`MsrcAdapter`：HTML 解析 + 两步 token，付费 -1 打标、频控 -2 退避 [3s, 8s]）、悦听（`YtysxsAdapter`：WordPress + AudioIgniter，直链白名单自检）、书音FM（`MekuiAdapter`：ecmsapi + wapseries MD5 签名，黄金值测试锁定）；`AlbumScreen` 章节列表按 `album.source` 路由加载并支持点击播放；build 22：搜索改为全部启用音源聚合（`AggregateSearcher` 固定序、失败源名透出，`SearchScreen` 移除单源切换菜单，对齐安卓 SearchViewModel）；build 24：聚合搜索 `withTaskGroup` 并行请求全部启用源（结果仍按固定序拼接、失败收名/allFailed/悦听 antibot 语义不变，最坏耗时 ≈ 最慢单源而非各源求和） |
 | f | 悦听反爬 | ✅ | `YtysxsVerifyWebView`（WKWebView 容器）人工验证流程完整落地：命中反爬特征抛 `AntibotException` → 弹验证页 → `httpCookieStore` 捕获 `be_captcha_token` → `KeychainTokenStore`（kSecClassGenericPassword，SecItemAdd/CopyMatching/Delete）持久化 24h → 验证完成自动重试原搜索；后续请求自动携带 Cookie。不自动破解验证码 |
 | g | 502/503/504 重试 | ✅ | `APIClient.execute` 统一重试入口：Msrc 1 次 / 1.5s（与安卓 MsrcHttp 一致）、Mekui 2 次 / [2.5s, 8s]（与安卓 MekuiHttp 一致）；非 200 且不可重试直接失败。端到端行为由 stub URLProtocol 测试锁定；build 22 r2：新增连接级错误自动重试——URLError 的 -1005/-1001/-1004/-1009 四类连接错误固定最多 2 次重试（共 3 次尝试）、退避 0.5s/1s，其余错误不重试；耗尽后报「网络连接中断（已自动重试仍失败），请检查网络后重试」（真机「The network connection was lost.」路径被断的对策）；build 24：连接错误集补入 -1003 cannotFindHost / -1006 dnsLookupFailed（DNS 瞬时错误同样自动重试，共六类，退避与上限不变） |
@@ -161,7 +161,7 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 ## 8. 测试对账
 
 - **安卓基线**：276 条 `@Test`（43 个测试类）
-- **iOS 现有**：**208 条测试函数（22 个测试文件、30 个 XCTestCase 类）**（三口径可 grep 实数核对：文件数 `ls TingYouTests/*.swift | wc -l`、类数 grep `final class.*XCTestCase`、函数数 grep `func test`；136 条为 build 20 基线，build 21 新增 42，build 22 新增 16，build 23 新增 3，build 24 新增 4，build 25 新增 7；build 26 为弹窗写入路径运行时隔离改造，无新增测试函数——SpeedSheet 写入语义仍由既有 `SpeedSheetBindingTests` 2 条锁定）：
+- **iOS 现有**：**208 条测试函数（22 个测试文件、30 个 XCTestCase 类）**（三口径可 grep 实数核对：文件数 `ls TingYouTests/*.swift | wc -l`、类数 grep `final class.*XCTestCase`、函数数 grep `func test`；136 条为 build 20 基线，build 21 新增 42，build 22 新增 16，build 23 新增 3，build 24 新增 4，build 25 新增 7，build 27 新增 4；build 26 为弹窗写入路径运行时隔离改造，无新增测试函数——SpeedSheet 写入语义仍由既有 `SpeedSheetBindingTests` 2 条锁定）：
   - `Build21FeedbackTests`：20 条（build 21 · 反馈 1：播放模式决策纯函数 6 + 持久化 1 + 展示名唯一 1；反馈 2：HTML 实体解码 6 含 parseSearch 出口黄金样本 + charset 解码 6 含 GBK 黄金字节流）
   - `Build22AlignmentTests`：13 条（build 22 · 倍速：SpeedSheet select 写 Binding 后 speed 实际变化 2；聚合搜索：启用集过滤+固定序 1 / 关一个源少一个源结果 1 / 失败源名透出 1 / 悦听 antibot 关键词透传 1 / 仅剩单源全败 allFailed 1 / searchSources 不含导入 1；音源开关守卫：最后一个源不可关 1 / 重开后可关 1 / 导入不受保护 1 / toggleSource 翻转 1；build 24 并行化：并行执行下结果仍固定序且总耗时 < 0.55s·串行需 1.0s 1）
   - `CoverImageCacheTests`：9 条（build 19：封面会话挂 PinningURLSessionDelegate 断言 / 封面图源域名白名单互检 / 非白名单 host fail-closed·取图拒 nil / 防盗链 Referer 设置与省略 / 请求 URL 保全；build 20 必修 1：同一 guoguo URL 按 ting15/ting08 源各带准确 referer）
@@ -180,6 +180,7 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
   - `RetryAndPinningTests`：22 条（可重试状态码判定 / 安卓基线重试参数 / stub URLProtocol 端到端重试 3 条 / 域名白名单后缀·精确·大小写·fail-closed 5 条；build 20 必修 5：传输层错误重试退避阶梯 / 重试前必须等待 / 首发成功零延迟；build 22 r2：连接级错误集合恰为六类（build 24 补入 -1003/-1006）且非 URLError 不重试 / 连接被断重试后成功 / 连续 3 次连接失败报升级文案 / 非连接级错误（取消）不重试）
   - `ShelfMappingTests`：3 条（build 18：书架领域模型 → SwiftData 实体映射）
   - `SkipSettingsTests`：7 条（build 25 · 对齐安卓 v1.3.0 item 8：起播位置决策纯函数 2 含恢复进度优先 / prepareQueue 集成断言起播历史位置含片头秒 1 / 片尾判定边界 1 含恰好等于与末尾不触发 / 末章切章不越界 1 / 按书持久化隔离与写入 clamp 600 1 / 设置入口写当前书与换书刷新 1）
+  - `Build27Tests`：4 条（build 27 · 倍速加固：音频会话中断恢复决策纯函数 3——结束+建议恢复/开始/结束无建议；搜索历史提交即记录语义 1——三种成败的词一视同仁）
   - `SleepTimerTests`：5 条（build 20 必修 4：定点睡眠目标时刻今天/顺延明天/恰好等于/午夜边界 / applySleepTimer 接线）
   - `SourceRegistryTests`：6 条（源注册表 / fetch·img·audio 白名单互检）
   - `ThemeStoreTests`：4 条（build 18：外观主题持久化与跟随系统）

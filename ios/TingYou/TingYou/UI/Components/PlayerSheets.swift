@@ -113,12 +113,10 @@ struct SleepTimerSheet: View {
 /// （安卓 PlayerSettingsSheet + SkipSliderRow 等价移植：Slider 0–300 每 5 秒一档、
 /// 0 显示「关闭」、底部说明文案），按书持久化（SkipSettingsStore）。
 struct PlayerSettingsSheet: View {
-    @Binding var playMode: PlayMode
     /// 当前书片头跳过秒数（build 25）
     let introSec: Int
     /// 当前书片尾跳过秒数（build 25）
     let outroSec: Int
-    let onSelect: (PlayMode) -> Void
     /// build 25：拖动结束回调（对齐安卓 onValueChangeFinished）
     let onIntroChange: (Int) -> Void
     let onOutroChange: (Int) -> Void
@@ -127,24 +125,9 @@ struct PlayerSettingsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("播放模式") {
-                    ForEach(PlayMode.allCases) { mode in
-                        let selected = playMode == mode
-                        Button {
-                            onSelect(mode)
-                            playMode = mode
-                        } label: {
-                            HStack {
-                                Label(mode.displayName, systemImage: mode.symbolName)
-                                Spacer()
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .checkmark(selected)
-                        .buttonStyle(.pressable)
-                        .listRowBackground(Group { if selected { Color.accentColor.opacity(0.12) } })
-                    }
-                }
+                // build 27：删除播放模式分区（用户反馈精简设置面板）——
+                // 播放模式枚举与 chapterFinishedAction 决策逻辑保留在 PlaybackManager，
+                // 仅移除面板入口（PlayMode 相关行为回归不受影响，功能仍可用代码层调用）。
                 // build 25（对齐安卓 PlayerSettingsSheet 面板形态）
                 Section("片头/片尾跳过") {
                     SkipSliderRow(label: "片头跳过", valueSec: introSec, onValueChangeFinished: onIntroChange)
@@ -152,10 +135,6 @@ struct PlayerSettingsSheet: View {
                 }
                 Section {
                     Text("片头跳过：新章自动跳转到指定秒数；片尾跳过：播放到剩余时长时自动切下一章。\n（对本书生效，恢复播放时保留上次进度）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    // build 21 · 反馈 1：播放模式说明（build 25 面板扩容后保留）
-                    Text("顺序播放：播完最后一章后停止\n单曲循环：当前章播完后重播本章\n列表循环：最后一章播完后回到第一章")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

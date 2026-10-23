@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct ShelfScreen: View {
     @Query(sort: \FavoriteModel.createdAt, order: .reverse) private var favorites: [FavoriteModel]
     @Query(sort: \HistoryModel.updatedAt, order: .reverse) private var histories: [HistoryModel]
+    @Query(sort: \ImportedBookModel.createdAt, order: .reverse) private var importedBooks: [ImportedBookModel]
     @State private var layout: Int = 0
     @State private var selectedTab = 0
     @State private var showClearConfirm = false
@@ -27,6 +28,7 @@ struct ShelfScreen: View {
                     Picker("", selection: $selectedTab) {
                         Text("收藏 (\(favorites.count))").tag(0)
                         Text("历史 (\(histories.count))").tag(1)
+                        Text("导入 (\(importedBooks.count))").tag(2)
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: .infinity)
@@ -63,8 +65,10 @@ struct ShelfScreen: View {
                 // Content
                 if selectedTab == 0 {
                     favoritesContent
-                } else {
+                } else if selectedTab == 1 {
                     historyContent
+                } else {
+                    importedContent
                 }
             }
             .navigationTitle("书架")
@@ -111,6 +115,11 @@ struct ShelfScreen: View {
         }
     }
 
+    /// build 28 · 按 (src, albumId) 查找最近一条播放历史，用于收藏卡片进度展示。
+    private func historyForFavorite(_ f: FavoriteModel) -> HistoryModel? {
+        histories.first { $0.src == f.src && $0.albumId == f.albumId }
+    }
+
     @ViewBuilder
     private var favoritesContent: some View {
         if favorites.isEmpty {
@@ -128,7 +137,7 @@ struct ShelfScreen: View {
                             source: f.src, detailPath: f.detailPath
                         ))
                     } label: {
-                        FavoriteRow(favorite: f)
+                        FavoriteRow(favorite: f, history: historyForFavorite(f))
                     }
                 }
                 .onDelete(perform: deleteFavorites)
@@ -148,7 +157,7 @@ struct ShelfScreen: View {
                                 source: f.src, detailPath: f.detailPath
                             ))
                         } label: {
-                            FavoriteGridItem(favorite: f)
+                            FavoriteGridItem(favorite: f, history: historyForFavorite(f))
                         }
                     }
                 }
@@ -198,6 +207,70 @@ struct ShelfScreen: View {
                 }
             }
         }
+    }
+
+    /// P0-4：导入书籍列表（B站 / 59听书网）
+    @ViewBuilder
+    private var importedContent: some View {
+        if importedBooks.isEmpty {
+            ContentUnavailableView("暂无导入书籍", systemImage: "arrow.down.circle", description: Text("在发现页导入B站或59听书网书籍"))
+        } else if layout == 0 {
+            List {
+                ForEach(importedBooks) { book in
+                    NavigationLink {
+                        AlbumScreen(album: albumFromImported(book))
+                    } label: {
+                        ImportedBookRow(book: book)
+                    }
+                }
+                .onDelete(perform: deleteImportedBooks)
+            }
+            .listStyle(.plain)
+        } else {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 12) {
+                    ForEach(importedBooks) { book in
+                        NavigationLink {
+                            AlbumScreen(album: albumFromImported(book))
+                        } label: {
+                            ImportedBookGridItem(book: book)
+                        }
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+
+    /// 从 ImportedBookModel 构造 Album（供导入 Tab 与导航使用）
+    private func albumFromImported(_ book: ImportedBookModel) -> Album {
+        let src: String
+        let detailPath: String?
+        switch book.kind {
+        case BiliSource.KIND:
+            src = BiliSource.SRC
+            detailPath = book.meta
+        case Ting59Source.KIND:
+            src = Ting59Source.SRC
+            detailPath = book.meta.map { "/mp3/\($0).html" }
+        default:
+            src = book.kind
+            detailPath = book.meta
+        }
+        return Album(
+            albumId: book.id, title: book.title, author: nil, teller: nil,
+            coverUrl: nil, intro: nil, category: nil, categoryId: nil,
+            type: nil, typeId: nil, status: nil, chapterCount: nil,
+            updatedAt: nil, playCount: nil, available: true,
+            source: src, detailPath: detailPath
+        )
+    }
+
+    private func deleteImportedBooks(at offsets: IndexSet) {
+        for idx in offsets {
+            modelContext.delete(importedBooks[idx])
+        }
+        do { try modelContext.save() } catch { print("deleteImportedBooks save failed: \(error)") }
     }
 
     /// build 20 必修 2：书架恢复播放重建完整章节队列。
@@ -385,6 +458,9 @@ struct HistoryGridItem: View {
 
 struct FavoriteRow: View {
     let favorite: FavoriteModel
+    /// build 28 · 关联的播放历史（按 src+albumId 匹配），nil 表示未听过。
+    let history: HistoryModel?
+
     var body: some View {
         HStack(spacing: 12) {
             CoverImage(url: favorite.coverUrl, size: 60, source: favorite.src)
@@ -393,19 +469,92 @@ struct FavoriteRow: View {
                 if let author = favorite.author {
                     Text(author).lineLimit(1).font(.caption).foregroundStyle(.secondary)
                 }
+                // build 28 · 收藏进度：对齐 HistoryRow caption 风格
+                Text(progressCaption).lineLimit(1).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer()
         }
         .padding(.vertical, 4)
     }
+
+    private var progressCaption: String {
+        guard let h = history else { return "未开始" }
+        let pct = h.durationMs > 0 ? Int(Double(h.positionMs) / Double(h.durationMs) * 100) : 0
+        return "\(h.chapterTitle) · 已播 \(pct)%"
+    }
 }
 
 struct FavoriteGridItem: View {
     let favorite: FavoriteModel
+    /// build 28 · 关联的播放历史（按 src+albumId 匹配），nil 表示未听过。
+    let history: HistoryModel?
+
     var body: some View {
         VStack(spacing: 4) {
             CoverImage(url: favorite.coverUrl, size: 100, source: favorite.src)
             Text(favorite.title).lineLimit(1).font(.caption)
+            // build 28 · 收藏进度：网格中简化为百分比或「未开始」
+            Text(progressCaption).lineLimit(1).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private var progressCaption: String {
+        guard let h = history else { return "未开始" }
+        let pct = h.durationMs > 0 ? Int(Double(h.positionMs) / Double(h.durationMs) * 100) : 0
+        return "已播 \(pct)%"
+    }
+}
+
+// MARK: - Imported Book Views
+
+struct ImportedBookRow: View {
+    let book: ImportedBookModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.down.circle.fill")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 60, height: 60)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(book.title).lineLimit(1).font(.subheadline)
+                Text(kindLabel).lineLimit(1).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var kindLabel: String {
+        switch book.kind {
+        case BiliSource.KIND: return "B站"
+        case Ting59Source.KIND: return "59听书网"
+        default: return book.kind
+        }
+    }
+}
+
+struct ImportedBookGridItem: View {
+    let book: ImportedBookModel
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: "arrow.down.circle.fill")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 100, height: 100)
+                .foregroundStyle(.secondary)
+            Text(book.title).lineLimit(1).font(.caption)
+            Text(kindLabel).lineLimit(1).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private var kindLabel: String {
+        switch book.kind {
+        case BiliSource.KIND: return "B站"
+        case Ting59Source.KIND: return "59听书网"
+        default: return book.kind
         }
     }
 }

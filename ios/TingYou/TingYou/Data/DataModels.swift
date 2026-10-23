@@ -78,14 +78,17 @@ final class ImportedBookModel {
     // 与 build 19 修的 FavoriteModel 同型问题：SwiftData 的 .unique 是逐属性唯一，
     // 配合默认 id=0，第二本导入书必然触发约束冲突。
     // id 唯一性改由写入侧（ImportService.importLinks fetch 最大 id + 1）保证。
+    // build 29：新增 meta 字段（nullable String，lightweight migration 自动支持），
+    // 用于存储 B站 UP主名 / ting59 播音·作者 等扩展信息。
     var id: Int64
     var title: String
     var kind: String
+    var meta: String?
     var createdAt: Int64
 
-    init(id: Int64, title: String, kind: String,
+    init(id: Int64, title: String, kind: String, meta: String? = nil,
          createdAt: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) {
-        self.id = id; self.title = title; self.kind = kind; self.createdAt = createdAt
+        self.id = id; self.title = title; self.kind = kind; self.meta = meta; self.createdAt = createdAt
     }
 }
 

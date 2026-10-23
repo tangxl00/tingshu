@@ -11,7 +11,10 @@ struct SpeedSheet: View {
             List {
                 ForEach(presets, id: \.self) { s in
                     let selected = abs(speed - s) < 0.01
-                    Button("\(String(format: "%.1f", s))x") {
+                    // build 28 · 倍速整行可点：把对勾并入 Button label 内部，
+                    // 替代原 `Button(文本)` + 外部 `.checkmark(selected)` 的组合——
+                    // 后者把 Spacer/对勾放在 Button 之外，命中区只剩数字文本。
+                    Button {
                         select(s)
                         // build 26（写入确认反馈）：选择后延迟关闭，让底部「当前：Xx」
                         // 的更新可见——面板内值变了而主界面按钮没变 = 视图刷新断裂；
@@ -20,8 +23,18 @@ struct SpeedSheet: View {
                             try? await Task.sleep(nanoseconds: 600_000_000)
                             dismiss()
                         }
+                    } label: {
+                        HStack {
+                            Text("\(String(format: "%.1f", s))x")
+                                .foregroundStyle(selected ? Color.accentColor : .primary)
+                            Spacer()
+                            if selected {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .checkmark(selected)
                     // 增强 4：按压反馈 + 选中高亮底色
                     .buttonStyle(.pressable)
                     .listRowBackground(
@@ -68,6 +81,10 @@ struct ChapterListSheet: View {
         NavigationStack {
             List(chapters.indices, id: \.self) { i in
                 let isCurrent = i == currentIdx
+                // build 28 · 章节整行可点：HStack 加 `.frame(maxWidth: .infinity, maxHeight: .infinity)`
+                // 强制 label 占据 List 行内全部可用空间，使 `.contentShape(Rectangle())`
+                // 的矩形真正覆盖整行（原实现仅文本区响应，因 List 行内 Button label
+                // 的隐式 frame 未包含 spacer 展开后的空间）。
                 Button {
                     onSelect(i)
                     dismiss()
@@ -81,6 +98,7 @@ struct ChapterListSheet: View {
                                 .foregroundStyle(Color.accentColor)
                         }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 // 增强 4：按压反馈 + 当前播放项高亮底色

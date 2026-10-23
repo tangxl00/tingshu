@@ -20,8 +20,10 @@ struct SearchHistoryStore {
 
     var isEmpty: Bool { all.isEmpty }
 
-    /// 成功发起一次搜索时记录：去重置顶 + 截断上限。
+    /// 提交一次搜索时即记录：去重置顶 + 截断上限。
     /// 空白词不记录。
+    /// build 27：语义从「成功发起（至少一源有结果）」放宽为「提交即记」——
+    /// 被悦听反爬拦截或全源失败的搜索词同样落库（用户复搜有记忆）。
     func add(_ rawKeyword: String) {
         let kw = rawKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !kw.isEmpty else { return }
@@ -44,5 +46,12 @@ struct SearchHistoryStore {
     /// 一键清空
     func clear() {
         defaults.removeObject(forKey: key)
+    }
+
+    /// build 28 · 搜索历史输入联动建议：返回与 query 匹配（前缀或包含，不区分大小写）的历史词。
+    func matching(_ query: String) -> [String] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return all }
+        return all.filter { $0.localizedCaseInsensitiveContains(q) }
     }
 }

@@ -12,6 +12,14 @@ enum PinnedDomainAllowlist {
         "guoguo.org.cn",  // 音频直链白名单后缀
         "kuwo.cn",        // 书音FM 直链 302 跳转（音频+封面 img1-4）
         "ctyun.cn",       // 天翼云 OBS 跳转目标（*.obs.ctyun.cn 各区域）
+        "bilibili.com",   // B站 API / Web
+        "b23.tv",         // B站短链
+        "bilivideo.com",  // B站 DASH 音轨 CDN
+        "biliapi.net",    // B站 API 备用域
+        "akamaized.net",  // Akamai CDN 节点
+        "hdslb.com",      // B站自建 CDN
+        "ting59.com",     // 59听书网站点
+        "xmcdn.com",      // 喜马拉雅 CDN（音频直链）
     ]
 
     /// includeSubdomains = false（精确域）

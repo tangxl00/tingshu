@@ -41,7 +41,7 @@ struct MineScreen: View {
                     HStack {
                         Text("版本")
                         Spacer()
-                        Text("1.3.3 (26)")
+                        Text("1.4.0 (29)")
                             .foregroundStyle(.secondary)
                     }
                 }

@@ -129,6 +129,8 @@ final class SourceEnabledStore {
         SourceRegistry.TING08,
         SourceRegistry.YTYXSX,
         SourceRegistry.MEKUI,
+        SourceRegistry.BILI,
+        SourceRegistry.TING59,
     ]
 
     func isEnabled(_ src: String) -> Bool {

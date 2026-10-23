@@ -26,8 +26,14 @@ struct SearchScreen: View {
                     .foregroundStyle(.secondary)
                     .font(.footnote)
             }
+            // build 28 · 搜索输入联动历史建议：输入非空时展示匹配历史词；
+            // 输入为空时维持既有「最近搜索」分区。
             if results.isEmpty && !isSearching && errorMessage == nil {
-                historySection
+                if keyword.isEmpty {
+                    historySection
+                } else {
+                    suggestionsSection
+                }
             }
             if isSearching && results.isEmpty {
                 ProgressView()
@@ -66,6 +72,35 @@ struct SearchScreen: View {
     }
 
     // MARK: - 搜索历史（build 21 · 反馈 7）
+
+    /// build 28 · 输入联动历史建议：与输入匹配的历史词，点击直接搜索。
+    @ViewBuilder
+    private var suggestionsSection: some View {
+        let matches = historyStore.matching(keyword)
+        if !matches.isEmpty {
+            Section {
+                ForEach(matches, id: \.self) { kw in
+                    Button {
+                        keyword = kw
+                        Task { await search() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                            Text(kw)
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                }
+            } header: {
+                Text("历史建议")
+            }
+        }
+    }
 
     @ViewBuilder
     private var historySection: some View {
@@ -112,7 +147,9 @@ struct SearchScreen: View {
 
     // MARK: - 聚合搜索（build 22 · 对齐安卓）
 
-    private func search() async {
+    /// build 27（闪退修复）：@State 全路径主线程更新——显式 @MainActor
+    ///（非隔离 async 上下文改 @State 是未定义行为，验证回调重入时序下疑似崩溃源）。
+    @MainActor private func search() async {
         let kw = keyword.trimmingCharacters(in: .whitespaces)
         guard !kw.isEmpty else { return }
         guard let container = appContainer else { return }
@@ -120,6 +157,11 @@ struct SearchScreen: View {
         isSearching = true
         errorMessage = nil
         failedSources = []
+
+        // build 27：提交搜索时即记录（与发现页同一语义——非空关键词即记，
+        // 不依赖结果成败，被反爬拦截或全源失败的搜索词同样落库）
+        historyStore.add(kw)
+        history = historyStore.all
 
         // 启用集为空：对齐安卓「没有可用的搜索源」提示（零源防护在音源管理页兜底，此处不崩不假搜）
         let searcher = AggregateSearcher(
@@ -137,10 +179,6 @@ struct SearchScreen: View {
 
         if outcome.allFailed {
             errorMessage = "搜索失败：所有启用音源均不可用，请稍后重试"
-        } else if !outcome.albums.isEmpty {
-            // build 21 · 反馈 7：搜索词成功入列历史（去重置顶、上限 20）
-            historyStore.add(kw)
-            history = historyStore.all
         }
         if let antibot = outcome.antibotKeyword {
             pendingKeyword = antibot

@@ -11,24 +11,35 @@ actor SourceRouter {
     private let msrcAdapter: MsrcAdapter
     private let ytysxsAdapter: YtysxsAdapter
     private let mekuiAdapter: MekuiAdapter
+    private let biliAdapter: BiliAdapter
+    private let biliSearchApi: BiliSearchApi
+    private let ting59Adapter: Ting59Adapter
     let playbackRepository: PlaybackRepository
 
     init(apiClient: APIClient,
          albumRepository: AlbumRepository? = nil,
          msrcAdapter: MsrcAdapter? = nil,
          ytysxsAdapter: YtysxsAdapter? = nil,
-         mekuiAdapter: MekuiAdapter? = nil) {
+         mekuiAdapter: MekuiAdapter? = nil,
+         biliAdapter: BiliAdapter? = nil,
+         biliSearchApi: BiliSearchApi? = nil,
+         ting59Adapter: Ting59Adapter? = nil) {
         self.apiClient = apiClient
         self.albumRepository = albumRepository
             ?? AlbumRepository(apiClient: apiClient)
         self.msrcAdapter = msrcAdapter ?? MsrcAdapter(apiClient: apiClient)
         self.ytysxsAdapter = ytysxsAdapter ?? YtysxsAdapter(apiClient: apiClient)
         self.mekuiAdapter = mekuiAdapter ?? MekuiAdapter(apiClient: apiClient)
+        self.biliAdapter = biliAdapter ?? BiliAdapter()
+        self.biliSearchApi = biliSearchApi ?? BiliSearchApi(adapter: self.biliAdapter)
+        self.ting59Adapter = ting59Adapter ?? Ting59Adapter()
         self.playbackRepository = PlaybackRepository(
             apiClient: apiClient,
             msrcAdapter: self.msrcAdapter,
             ytysxsAdapter: self.ytysxsAdapter,
-            mekuiAdapter: self.mekuiAdapter)
+            mekuiAdapter: self.mekuiAdapter,
+            biliAdapter: self.biliAdapter,
+            ting59Adapter: self.ting59Adapter)
     }
 
     // MARK: - 搜索
@@ -47,6 +58,12 @@ actor SourceRouter {
         case SourceRegistry.MEKUI:
             let page = try await mekuiAdapter.search(keyword: keyword, page: 1)
             return page.items.map { Self.albumFromMekui($0) }
+        case SourceRegistry.BILI:
+            let page = try await biliSearchApi.searchAudiobooks(keyword: keyword, page: 1)
+            return page.items.map { Self.albumFromBili($0) }
+        case SourceRegistry.TING59:
+            let result = try await ting59Adapter.search(query: keyword, page: 1)
+            return result.list.map { Self.albumFromTing59($0) }
         default:
             throw URLError(.unsupportedURL)
         }
@@ -81,6 +98,19 @@ actor SourceRouter {
                          status: nil, chapterCount: d.chapters.count, updatedAt: nil,
                          playCount: nil, available: true, source: src,
                          detailPath: "/\(albumId)")
+        case SourceRegistry.BILI:
+            // B站不从此入口取详情；详情在导入环节通过 biliAdapter.videoInfo 获取
+            throw URLError(.unsupportedURL)
+        case SourceRegistry.TING59:
+            guard let path = detailPath, !path.isEmpty else { throw URLError(.badURL) }
+            let bookId = path.replacingOccurrences(of: "/mp3/", with: "").replacingOccurrences(of: ".html", with: "")
+            let d = try await ting59Adapter.bookDetail(bookId: bookId)
+            return Album(albumId: albumId, title: d.book.title, author: d.book.author,
+                         teller: d.book.narrator, coverUrl: d.book.coverUrl, intro: d.description,
+                         category: d.book.category, categoryId: nil, type: nil, typeId: nil,
+                         status: nil, chapterCount: d.chapters.count,
+                         updatedAt: d.book.updateTime, playCount: nil, available: true, source: src,
+                         detailPath: path)
         default:
             throw URLError(.unsupportedURL)
         }
@@ -108,6 +138,16 @@ actor SourceRouter {
             return d.chapters.map {
                 Chapter(chapterId: Int64($0.index), index: $0.index, title: $0.title, durationSec: nil)
             }
+        case SourceRegistry.BILI:
+            // B站章节在导入时通过 videoInfo 获取并存入 ImportedChapterModel
+            throw URLError(.unsupportedURL)
+        case SourceRegistry.TING59:
+            guard let path = detailPath, !path.isEmpty else { throw URLError(.badURL) }
+            let bookId = path.replacingOccurrences(of: "/mp3/", with: "").replacingOccurrences(of: ".html", with: "")
+            let d = try await ting59Adapter.bookDetail(bookId: bookId)
+            return d.chapters.map {
+                Chapter(chapterId: Int64($0.index), index: $0.index, title: $0.title, durationSec: nil)
+            }
         default:
             throw URLError(.unsupportedURL)
         }
@@ -116,7 +156,7 @@ actor SourceRouter {
     // MARK: - 播放地址（委托 PlaybackRepository）
 
     func playUrl(src: String, albumId: Int64, chapterIdx: Int, detailPath: String? = nil) async throws -> String {
-        try await playbackRepository.getPlayUrl(src: src, albumId: albumId, chapterIdx: chapterIdx)
+        try await playbackRepository.getPlayUrl(src: src, albumId: albumId, chapterIdx: chapterIdx, detailPath: detailPath)
     }
 
     // MARK: - 发现页分类（build 21 · 反馈 4/6：按原始音源分类拉取）
@@ -131,6 +171,9 @@ actor SourceRouter {
         case SourceRegistry.TING15, SourceRegistry.TING08:
             let result = try await msrcAdapter.category(src: src, categoryId: categoryId, page: page)
             return (result.items.map { Self.albumFromMsrc($0, src: src) }, result.hasMore)
+        case SourceRegistry.TING59:
+            let result = try await ting59Adapter.category(categoryId: categoryId, page: page)
+            return (result.books.map { Self.albumFromTing59($0) }, result.hasMore)
         default:
             throw URLError(.unsupportedURL) // 该源暂不支持发现页
         }
@@ -158,5 +201,24 @@ actor SourceRouter {
               intro: nil, category: nil, categoryId: nil, type: nil, typeId: nil, status: nil,
               chapterCount: nil, updatedAt: nil, playCount: nil, available: true,
               source: SourceRegistry.MEKUI, detailPath: "/\(item.id)")
+    }
+
+    private static func albumFromBili(_ item: BiliSearchApi.SearchResult) -> Album {
+        Album(albumId: 0, // B站搜索结果是视频，albumId 在导入阶段生成
+              title: item.title, author: item.author, teller: nil,
+              coverUrl: item.coverUrl, intro: item.description,
+              category: nil, categoryId: nil, type: nil, typeId: nil,
+              status: nil, chapterCount: nil, updatedAt: nil,
+              playCount: item.play, available: !item.paid,
+              source: SourceRegistry.BILI, detailPath: item.bvid)
+    }
+
+    private static func albumFromTing59(_ item: Ting59Adapter.Ting59SearchItem) -> Album {
+        Album(albumId: Int64(item.id) ?? 0, title: item.title, author: item.author,
+              teller: item.narrator, coverUrl: nil, intro: nil,
+              category: item.category, categoryId: nil, type: nil, typeId: nil,
+              status: nil, chapterCount: nil, updatedAt: item.updateTime,
+              playCount: nil, available: true, source: SourceRegistry.TING59,
+              detailPath: item.detailUrl)
     }
 }
