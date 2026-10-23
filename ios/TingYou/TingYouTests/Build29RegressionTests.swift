@@ -91,13 +91,54 @@ final class Build29RegressionTests: XCTestCase {
 
     // MARK: - 版本号断言
 
-    func testMarketingVersionIs140() {
-        // project.yml 已更新；此处用 Info.plist 值断言（构建产物最终来源）
-        // 注意：沙箱无法编译 iOS，以下读取的是源码中的 Info.plist 文本
-        let plistPath = Bundle(for: type(of: self)).path(forResource: "Info", ofType: "plist")
-        ?? Bundle.main.path(forResource: "Info", ofType: "plist")
-        // 若取不到 Bundle 内路径，回退到直接文件读取（测试目标与主目标同 bundle 时可能不同）
-        XCTAssertTrue(true, "版本号静态断言：project.yml 中 MARKETING_VERSION=1.4.1 CURRENT_PROJECT_VERSION=30")
+    /// v1.4.2 · P2-2（质检）：原断言为 `XCTAssertTrue(true, …)` 恒真——不读文件不校验值，
+    /// 版本号忘改也照常绿，防线形同虚设。重建为真读真比：经 `#filePath` 相对定位
+    /// `ios/TingYou/project.yml`（测试文件在 TingYouTests/ 下，上溯两级即工程目录，
+    /// 与 CI checkout 布局一致），逐行解析 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`
+    /// 首个定义并断言精确值。版本号忘改或格式漂移即测试红（CI 兜底）。
+    func testMarketingVersionIs142() {
+        // #filePath = …/ios/TingYou/TingYouTests/Build29RegressionTests.swift
+        // 上溯两级：TingYouTests → TingYou（project.yml 所在，与 xcodegen 读取位置一致）
+        let testDir = (#filePath as NSString).deletingLastPathComponent
+        let projectDir = (testDir as NSString).deletingLastPathComponent
+        let ymlPath = projectDir + "/project.yml"
+
+        guard FileManager.default.fileExists(atPath: ymlPath) else {
+            XCTFail("project.yml 不存在：\(ymlPath)——路径布局变化时请同步修正本测试")
+            return
+        }
+        guard let yml = try? String(contentsOfFile: ymlPath, encoding: .utf8) else {
+            XCTFail("project.yml 不可读：\(ymlPath)")
+            return
+        }
+        XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.2",
+                       "project.yml MARKETING_VERSION 必须为 1.4.2（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "31",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 31（升版本时同步改此断言）")
+    }
+
+    /// 从缩进 YAML 文本提取 `key: value` 首个定义的值：
+    /// 按行前缀精确匹配（trim 缩进后 `key:` 开头，不会误匹配同前缀长键），
+    /// 取值 trim、去行内 ` #` 注释、去成对引号。
+    /// project.yml 中两键均唯一定义（见沙箱 Python 模拟验证），取首行即正确。
+    private static func yamlFirstValue(of key: String, in yml: String) -> String? {
+        for rawLine in yml.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix(key + ":") else { continue }
+            var value = String(line.dropFirst(key.count + 1))
+                .trimmingCharacters(in: .whitespaces)
+            if let commentRange = value.range(of: " #") {
+                value = String(value[..<commentRange.lowerBound])
+                    .trimmingCharacters(in: .whitespaces)
+            }
+            if value.count >= 2,
+               (value.hasPrefix("\"") && value.hasSuffix("\""))
+               || (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value = String(value.dropFirst().dropLast())
+            }
+            return value.isEmpty ? nil : value
+        }
+        return nil
     }
 
     // MARK: - 辅助

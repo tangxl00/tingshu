@@ -22,8 +22,9 @@ struct DiscoverScreen: View {
     @State private var failedSources: [String] = []
     @State private var searchHasMore = false
     @State private var searchPage = 1
-    @State private var showAntibotSheet = false
-    @State private var pendingKeyword = ""
+    /// v1.4.2 · 悦听安全验证迁移：反爬拦截不再弹验证窗（入口迁至 我的→音源管理），
+    /// 命中拦截时置位，由搜索结果/错误提示区展示引导文案。
+    @State private var verifyHint = false
     /// build 21 · 反馈 7：发现页搜索框同步写入搜索历史
     private let historyStore = SearchHistoryStore()
     /// build 27：发现页搜索历史展示（页内变更即时刷新；形态参考 SearchScreen.historySection）
@@ -81,6 +82,7 @@ struct DiscoverScreen: View {
                             keyword = ""
                             searchMode = false
                             searchResults = []
+                            verifyHint = false
                         }) {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(.secondary)
@@ -115,18 +117,9 @@ struct DiscoverScreen: View {
                 }
             }
         }
-        // build 21 · Bug A 同类问题：发现页聚合搜索命中悦听反爬拦截时，
-        // AntibotException 置位了 showAntibotSheet 但从未挂 .sheet（与播放器页同款遗漏）——补挂。
-        .sheet(isPresented: $showAntibotSheet) {
-            YtysxsVerifySheet(
-                keyword: pendingKeyword,
-                cookieStore: appContainer?.ytysxsCookieStore ?? KeychainTokenStore()) { verified in
-                showAntibotSheet = false
-                if verified {
-                    performSearch(initial: true) // 验证通过后自动重试原搜索
-                }
-            }
-        }
+        // v1.4.2 · 悦听安全验证迁移：发现页不再挂验证 sheet——
+        // 命中 AntibotException 时仅置 verifyHint，由搜索结果/错误提示区
+        // 显示「请前往 我的→音源管理 完成验证」引导文案（验证入口已迁至该页）。
     }
 
     // MARK: - 搜索历史（build 27：发现页可达展示）
@@ -234,6 +227,13 @@ struct DiscoverScreen: View {
             List {
                 if !failedSources.isEmpty {
                     Text("以下音源本次搜索不可用：\(failedSources.joined(separator: "、"))")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                // v1.4.2 · 悦听安全验证迁移：拦截不弹窗，列表头部给引导文案
+                //（其余源有结果时用户仍可继续浏览，悦听结果待验证后可见）
+                if verifyHint {
+                    Text("悦听有声书需要安全验证，请前往「我的→音源管理」完成验证后重试")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
@@ -373,6 +373,7 @@ struct DiscoverScreen: View {
             failedSources = []
             searchPage = 1
             searchResults = []
+            verifyHint = false
             // build 27：提交搜索时即记录（非空关键词即记，不依赖结果成败）——
             // 被悦听反爬拦截或全源失败的搜索词同样落库（原「至少一源有结果才记」
             // 会丢失被拦截场景的词，用户复搜无记忆）。
@@ -399,12 +400,16 @@ struct DiscoverScreen: View {
             failedSources = outcome.failedSourceNames
             searchHasMore = false // 多源聚合首页后不再翻页（与旧行为一致）
             isSearching = false
-            if outcome.allFailed {
-                searchError = "搜索失败：所有启用音源均不可用，请稍后重试"
+            // v1.4.2 · 悦听安全验证迁移：反爬拦截不再弹窗——置提示态由结果区展示引导文案；
+            // 无结果时直接给可操作文案（点重试前先去 我的→音源管理 完成验证）
+            if outcome.antibotKeyword != nil {
+                verifyHint = true
+                if outcome.albums.isEmpty {
+                    searchError = "悦听有声书需要安全验证，请前往「我的→音源管理」完成验证后重试"
+                }
             }
-            if let antibot = outcome.antibotKeyword {
-                pendingKeyword = antibot
-                showAntibotSheet = true
+            if outcome.allFailed && searchError == nil {
+                searchError = "搜索失败：所有启用音源均不可用，请稍后重试"
             }
         }
     }

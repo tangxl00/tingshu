@@ -616,8 +616,13 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         prefetchTask = Task { [weak self] in
             guard !Task.isCancelled else { return }
             if self?.resolvedPlayUrl(forKey: key) != nil { return } // 已预取过
+            // v1.4.2 · P2-1（质检）：预取补传 detailPath——此前缺参时 BILI 必抛 badURL
+            // 被静默吞掉（切章预取全失效）、TING59 导入书回退 String(albumId) 解析到
+            // 错误书页；与 resourceLoader 主路径（detailPath: currentAlbum?.detailPath）
+            // 口径对齐，预取与播放解析到同一章。
             guard let resolved = try? await repository.getPlayUrl(
                 src: album.source, albumId: album.albumId, chapterIdx: next.index,
+                detailPath: album.detailPath,
                 markPaid: false), // 静默预取：付费章不弹不打标，失败不影响播放
                 !resolved.isEmpty else { return }
             guard !Task.isCancelled else { return }
