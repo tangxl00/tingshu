@@ -498,7 +498,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 } else {
                     info.contentLength = http.expectedContentLength
                 }
-                info.byteRangeAccessSupported = true
+                info.isByteRangeAccessSupported = true
             }
             // 流式转发：64KB 一批 respond；加载请求被取消（seek/切章）即止
             var buffer = [UInt8]()
