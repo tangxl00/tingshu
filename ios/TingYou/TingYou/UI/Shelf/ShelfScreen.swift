@@ -15,9 +15,9 @@ struct ShelfScreen: View {
     @State private var showDocumentPicker = false
     @State private var importMessage: String?
     @State private var showImportMessage = false
-    /// v1.4.1：B站 / 59听书网导入 sheet 入口（自发现页迁至书架导入页工具栏「+」）
-    @State private var showBiliImport = false
-    @State private var showTing59Import = false
+    /// v1.4.3 · 需求 1：删除书架导入页工具栏「+」按钮——B站/59听书导入入口按需求撤销，
+    /// 关联的导入展示 @State 与 sheet 挂载一并移除；
+    /// 导入页本身保留（已导入书籍仍正常显示与播放，与 SearchScreen 死代码同口径）。
     /// v1.4.1：导入完成 → 打开专辑（对齐原发现页 P0-4 的导航语义）
     @State private var navToAlbum: Album? = nil
     @Environment(\.appContainer) private var container
@@ -38,22 +38,7 @@ struct ShelfScreen: View {
                     .pickerStyle(.segmented)
                     .frame(maxWidth: .infinity)
 
-                    // v1.4.1：导入页工具栏「+」——B站 / 59听书网导入入口
-                    //（自发现页迁来；视图本身不动，仅换挂载入口）
-                    if selectedTab == 2 {
-                        Menu {
-                            Button(action: { showBiliImport = true }) {
-                                Label("B站导入", systemImage: "play.rectangle")
-                            }
-                            Button(action: { showTing59Import = true }) {
-                                Label("59听书网导入", systemImage: "headphones")
-                            }
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.title3)
-                        }
-                    }
-
+                    // v1.4.3 · 需求 1：原导入页工具栏「+」Menu（B站/59听书导入入口）已删除
                     Menu {
                         Section("书籍排列") {
                             Button(action: { layout = 0 }) {
@@ -133,25 +118,7 @@ struct ShelfScreen: View {
                     showImportMessage = true
                 }
             }
-            // v1.4.1：B站 / 59听书网导入（入口自发现页迁至导入页工具栏「+」）
-            .sheet(isPresented: $showBiliImport) {
-                BiliImportScreen(
-                    onBack: { showBiliImport = false },
-                    onOpenAlbum: { _, bookId in
-                        showBiliImport = false
-                        openImportedAlbum(bookId)
-                    }
-                )
-            }
-            .sheet(isPresented: $showTing59Import) {
-                Ting59ImportScreen(
-                    onBack: { showTing59Import = false },
-                    onOpenAlbum: { _, bookId in
-                        showTing59Import = false
-                        openImportedAlbum(bookId)
-                    }
-                )
-            }
+            // v1.4.3 · 需求 1：原 B站/59听书两个导入 sheet 挂载已删除（入口一并撤销）
             .navigationDestination(item: $navToAlbum) { album in
                 AlbumScreen(album: album)
             }
@@ -160,6 +127,8 @@ struct ShelfScreen: View {
 
     /// v1.4.1：导入完成 → 按 (src, detailPath) 还原 Album 并打开专辑页。
     /// 复用本页既有 albumFromImported（B站 detailPath=meta(bvid)、59听书 detailPath=/mp3/{id}.html）。
+    /// v1.4.3 · 需求 1：导入入口删除后本方法暂无调用者——按最小改动口径保留
+    ///（importedContent 卡片仍在用的 albumFromImported 不动，同 SearchScreen 死代码处理原则）。
     private func openImportedAlbum(_ bookId: Int64) {
         let descriptor = FetchDescriptor<ImportedBookModel>(
             predicate: #Predicate { $0.id == bookId }

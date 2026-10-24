@@ -29,6 +29,9 @@ struct DiscoverScreen: View {
     private let historyStore = SearchHistoryStore()
     /// build 27：发现页搜索历史展示（页内变更即时刷新；形态参考 SearchScreen.historySection）
     @State private var history: [String] = []
+    /// v1.4.3 · 需求 2：搜索历史仅聚焦时出现——未聚焦（默认浏览态）不显示，
+    /// 聚焦/开始输入时显示，失焦或提交搜索（searchMode）后隐藏；输入联想逻辑不动。
+    @FocusState private var searchFocused: Bool
     /// v1.4.1：浏览区当前音源（听友FM / B站 / 59听书网），默认主源
     @State private var browseSource = SourceRegistry.TINGYOU
 
@@ -74,6 +77,7 @@ struct DiscoverScreen: View {
                         .foregroundStyle(.secondary)
                     TextField("搜索书名 / 作者 / 主播", text: $keyword)
                         .submitLabel(.search)
+                        .focused($searchFocused)
                         .onSubmit {
                             performSearch(initial: true)
                         }
@@ -99,9 +103,11 @@ struct DiscoverScreen: View {
                 if searchMode && !keyword.isEmpty {
                     searchResultsContent
                 } else {
-                    // build 27：搜索历史展示——关键词为空（未进入搜索模式）时显示「最近搜索」
-                    // （SearchScreen 是死代码不可达，历史此前只写不读；现移到发现页可达）。
-                    historySection
+                    // v1.4.3 · 需求 2：搜索历史仅聚焦搜索框时显示——此前常驻显示，
+                    // 失焦或提交搜索（searchMode）即隐藏；未聚焦的默认浏览态不再出现。
+                    if searchFocused {
+                        historySection
+                    }
                     libraryContent
                 }
             }

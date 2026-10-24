@@ -2,11 +2,26 @@ import Foundation
 import AVFoundation
 import MediaPlayer
 import Combine
+import UniformTypeIdentifiers
 
 /// Swift 6 并发装箱：跨 Task 隔离域持有 AVAssetResourceLoadingRequest。
 /// AVFoundation 的 finishLoading / redirect 支持任意线程调用，此处仅解除编译器 Sendable 检查。
 private struct LoadingRequestBox: @unchecked Sendable {
     let request: AVAssetResourceLoadingRequest
+}
+
+/// v1.4.3 · P0（取证 A）：需要代理取流的 CDN 域后缀——B站 DASH 音轨直链域名
+/// （bilivideo.com / akamaized.net / hdslb.com）。实测（2026-10-24 沙箱）：
+/// AVPlayer 经 redirect 自行请求该 CDN 时**不带 Referer，一律 HTTP 403**
+/// （带 Referer+UA 则 200, Content-Type video/mp4）——必须由 ResourceLoader
+/// 代理取流注入 Referer/UA，再喂给 AVFoundation。API 域（bilibili.com 等）不在此列。
+/// 其余音源（tingyou / msrc / ting59）直链此前 redirect 工作正常，维持原路径不代理。
+enum ProxiedCdnHosts {
+    static let suffixes: [String] = ["bilivideo.com", "akamaized.net", "hdslb.com"]
+
+    static func needsProxy(_ host: String) -> Bool {
+        suffixes.contains { host == $0 || host.hasSuffix(".\($0)") }
+    }
 }
 
 @Observable
@@ -35,6 +50,26 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private let listeningTimeStore = ListeningTimeStore()
     private let skipStore: SkipSettingsStore
     private var cancellables = Set<AnyCancellable>()
+
+    /// v1.4.3 · P0（取证 D）：播放失败不再静默——AVPlayerItem .failed 时置人话文案，
+    /// PlayerScreen 显示非阻断提示（含重试）；切章/重试时清空。
+    private(set) var playbackError: String?
+
+    /// v1.4.3 · P0（取证 A）：B站 CDN 代理取流专用 session——带 Referer/UA（B站 CDN
+    /// 实测裸请求一律 403），并挂证书固定 delegate（代理路径同样 fail-closed，
+    /// bilivideo.com 等已在 PinnedDomainAllowlist 后缀白名单内，取证 C 核实）。
+    private let proxySession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60 * 60 * 6 // 长音频流式，资源级放宽
+        config.httpAdditionalHeaders = [
+            "User-Agent": BiliAdapter.USER_AGENT,
+            "Referer": BiliAdapter.REFERER,
+            "Origin": BiliAdapter.REFERER,
+        ]
+        return URLSession(configuration: config, delegate: PinningURLSessionDelegate(),
+                          delegateQueue: nil)
+    }()
 
     // MARK: - Bug 2 播放历史落库 + 增强 5.3 下一章预取
 
@@ -279,10 +314,14 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
 
     private func loadCurrentChapter(startPosMs: Int64 = 0, autoPlay: Bool = true) {
         guard currentChapterIdx < currentChapters.count else { return }
+        // v1.4.3 · P0（取证 D）：新章加载即清上次播放失败提示（切章/重试共用）
+        playbackError = nil
         let ch = currentChapters[currentChapterIdx]
         currentChapterTitle = ch.title
         currentChapterIdx = currentChapters.firstIndex(where: { $0.chapterId == ch.chapterId }) ?? currentChapterIdx
 
+        // v1.4.3 · P0（取证 D）：statusObserver 须能引用当前源（ting59 失效文案特化用）
+        let failedSource = currentAlbum?.source ?? ""
         // P0-1：构建占位 URI，经 AVAssetResourceLoaderDelegate 在 AVPlayer 打开资源时
         // 惰性解析为真实音频直链（对等安卓 PlayUri + PlayUrlResolver + ResolvingDataSource）
         let uri = PlayUri.build(src: currentAlbum?.source ?? "tingyou",
@@ -299,6 +338,16 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 // build 27（倍速加固）：条目替换后 AVFoundation 将 rate 归零——
                 // 新条目就绪时按当前 speed 与播放态重放（暂停态不起播）。
                 self?.applyRate()
+            } else if item.status == .failed {
+                // v1.4.3 · P0（取证 D）：此前 .failed 完全静默——点章失败用户无感知。
+                // 现透出人话错误（URLError 常见项映射 + ting59 站点失效特化文案），
+                // Task { @MainActor } 包裹（观察回调线程不定，UI 状态须主线程更新）。
+                let message = item.error.map {
+                    PlaybackManager.describePlaybackError($0, source: failedSource)
+                } ?? "播放失败，请稍后重试"
+                Task { @MainActor [weak self] in
+                    self?.playbackError = message
+                }
             }
         }
         player.replaceCurrentItem(with: item)
@@ -336,14 +385,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
               let parsed = PlayUri.parse(url.absoluteString) else {
             return false // 非本 scheme 的请求不拦截
         }
-        // 增强 5.3：预取命中 → 直接 redirect，省一次网络解析（切章零等待）
-        if let cached = resolvedPlayUrl(forKey: url.absoluteString),
-           let redirectURL = URL(string: cached) {
-            loadingRequest.redirect = URLRequest(url: redirectURL)
-            loadingRequest.response = HTTPURLResponse(
-                url: redirectURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)
-            loadingRequest.finishLoading()
-            return true
+        // 增强 5.3：预取命中 → 直接服务，省一次网络解析（切章零等待）。
+        // v1.4.3 · P0：命中后不总是 redirect——按直链域名分流（代理 / redirect），
+        // B站 CDN 必须代理（裸请求 403，见 ProxiedCdnHosts 注释）。
+        if let cached = resolvedPlayUrl(forKey: url.absoluteString) {
+            return serveResolved(LoadingRequestBox(request: loadingRequest), playUrl: cached)
         }
         loaderLock.lock()
         let seq = loaderTaskSeq
@@ -364,14 +410,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                     detailPath: self?.currentAlbum?.detailPath)
                 // 解析结果顺手入缓存（同一章 seek/重开不再重复解析）
                 self?.storeResolved(key: cacheKey, url: playUrl)
-                guard let redirectURL = URL(string: playUrl) else {
+                guard let resolvedSelf = self else { return }
+                // v1.4.3 · P0：解析完成同样按域名分流服务
+                if !resolvedSelf.serveResolved(box, playUrl: playUrl) {
                     box.request.finishLoading(with: URLError(.badURL))
-                    return
                 }
-                box.request.redirect = URLRequest(url: redirectURL)
-                box.request.response = HTTPURLResponse(
-                    url: redirectURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)
-                box.request.finishLoading()
             } catch {
                 box.request.finishLoading(with: error)
             }
@@ -381,6 +424,99 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         loaderTasks[seq] = task
         loaderLock.unlock()
         return true // 已异步接管，等待 finishLoading
+    }
+
+    /// v1.4.3 · P0（取证 A）：按直链域名分流服务 AVFoundation——
+    /// - B站 CDN 域（ProxiedCdnHosts）：代理取流（带 Referer/UA 由 proxySession 请求，
+    ///   响应数据喂给 loadingRequest；AVPlayer 自行请求必 403，不能 redirect）；
+    /// - 其余源：维持既有 redirect 语义（build 29 起线上验证可行，不动）。
+    /// 返回 false 仅当直链 URL 不合法（调用方兜底 finishLoading）。
+    @discardableResult
+    private func serveResolved(_ box: LoadingRequestBox, playUrl: String) -> Bool {
+        guard let redirectURL = URL(string: playUrl) else { return false }
+        guard let host = redirectURL.host, ProxiedCdnHosts.needsProxy(host) else {
+            // 非代理域：原 redirect 语义（AVPlayer 自行取流）
+            box.request.redirect = URLRequest(url: redirectURL)
+            box.request.response = HTTPURLResponse(
+                url: redirectURL, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)
+            box.request.finishLoading()
+            return true
+        }
+        // 代理域：接管数据流（loaderTasks 复用既有取消管理）
+        loaderLock.lock()
+        let seq = loaderTaskSeq
+        loaderTaskSeq += 1
+        loaderLock.unlock()
+        let task = Task { [weak self] in
+            await self?.proxyMedia(box: box, url: redirectURL)
+            self?.removeLoaderTask(seq)
+        }
+        loaderLock.lock()
+        loaderTasks[seq] = task
+        loaderLock.unlock()
+        return true
+    }
+
+    /// v1.4.3 · P0（取证 A）：代理取流——用 proxySession（Referer/UA + 证书固定）
+    /// 请求直链，流式喂给 AVAssetResourceLoadingRequest。支持 Range（AVFoundation
+    /// 对自定义 scheme 资源会发分段请求：信息请求 + 多段数据请求，每次各自走本代理）。
+    private func proxyMedia(box: LoadingRequestBox, url: URL) async {
+        let request = box.request
+        var req = URLRequest(url: url)
+        // 按本 loadingRequest 的数据区间组装 Range（requestsAllDataToEndOfResource = 开区间）
+        if let dataRequest = request.dataRequest {
+            if dataRequest.requestsAllDataToEndOfResource {
+                req.setValue("bytes=\(dataRequest.requestedOffset)-", forHTTPHeaderField: "Range")
+            } else {
+                let end = dataRequest.requestedOffset + Int64(dataRequest.requestedLength) - 1
+                req.setValue("bytes=\(dataRequest.requestedOffset)-\(max(end, dataRequest.requestedOffset))",
+                             forHTTPHeaderField: "Range")
+            }
+        }
+        do {
+            let (bytes, response) = try await proxySession.bytes(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                request.finishLoading(with: URLError(.badServerResponse))
+                return
+            }
+            guard (200...299).contains(http.statusCode) else {
+                request.finishLoading(with: URLError(.badServerResponse, userInfo: [
+                    NSLocalizedDescriptionKey: "音频服务器拒绝访问（HTTP \(http.statusCode)），请稍后重试",
+                ]))
+                return
+            }
+            // 媒体元信息（首个信息请求）：Content-Type→UTI、总长度、可分段标志
+            if let info = request.contentInformationRequest {
+                if let mime = http.mimeType {
+                    info.contentType = UTType(mimeType: mime)?.identifier ?? UTType.audio.identifier
+                }
+                if http.statusCode == 206,
+                   let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
+                   let total = contentRange.split(separator: "/").last.flatMap({ Int64($0) }),
+                   total > 0 {
+                    info.contentLength = total
+                } else {
+                    info.contentLength = http.expectedContentLength
+                }
+                info.byteRangeAccessSupported = true
+            }
+            // 流式转发：64KB 一批 respond；加载请求被取消（seek/切章）即止
+            var buffer = [UInt8]()
+            buffer.reserveCapacity(64 * 1024)
+            for try await byte in bytes {
+                if request.isCancelled || Task.isCancelled { return } // 已取消：静默止流
+                buffer.append(byte)
+                if buffer.count >= 64 * 1024 {
+                    request.dataRequest?.respond(with: Data(buffer))
+                    buffer.removeAll(keepingCapacity: true)
+                }
+            }
+            if !buffer.isEmpty { request.dataRequest?.respond(with: Data(buffer)) }
+            request.finishLoading()
+        } catch {
+            if request.isCancelled { return }
+            request.finishLoading(with: error)
+        }
     }
 
     /// build 19 P2-2：loaderTasks 字典的并发访问统一经锁收口。
@@ -401,6 +537,50 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         pause()
         currentChapterIdx = index
         loadCurrentChapter(autoPlay: true)
+    }
+
+    /// v1.4.3 · P0（取证 D）：播放失败重试——重走当前章加载（清错误后重建
+    /// AVPlayerItem，解析缓存若在则直接分流服务）。PlayerScreen 提示区接线。
+    func retryCurrentChapter() {
+        guard currentChapters.indices.contains(currentChapterIdx) else { return }
+        loadCurrentChapter(autoPlay: true)
+    }
+
+    /// v1.4.3 · P0（取证 D）：播放失败人话文案——URLError 常见项映射；
+    /// ting59 特化：非客户端网络错误的失败按站点侧源失效提示（取证 B 实测：
+    /// xmcdn 直链已全组合 403/404，带 Referer+cookie 的"正确"请求同样被拒，
+    /// 站点自身网页播放器裸用同一 URL，非 App 可修，如实告知换源）。
+    static func describePlaybackError(_ error: Error, source: String) -> String {
+        let isClientNetworkIssue: (URLError) -> Bool = { ue in
+            switch ue.code {
+            case .notConnectedToInternet, .networkConnectionLost, .timedOut,
+                 .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .cancelled:
+                return true
+            default:
+                return false
+            }
+        }
+        if source == SourceRegistry.TING59, let ue = error as? URLError, isClientNetworkIssue(ue) {
+            return "网络连接异常，请检查网络后重试"
+        }
+        if source == SourceRegistry.TING59 {
+            return "59听书网音频源当前不可用（站点侧变更，2026-10-24 实测其音频直链已被 CDN 全面拒绝），请换用其他音源收听本书"
+        }
+        if let ue = error as? URLError {
+            switch ue.code {
+            case .notConnectedToInternet, .networkConnectionLost:
+                return "网络连接不可用，请检查网络后重试"
+            case .timedOut:
+                return "连接音频服务器超时，请稍后重试"
+            case .badServerResponse:
+                return "音频服务器响应异常，请稍后重试"
+            case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed:
+                return "无法连接音频服务器，请稍后重试"
+            default:
+                return "播放失败，请稍后重试"
+            }
+        }
+        return "播放失败，请稍后重试（\(error.localizedDescription)）"
     }
 
     func play() {

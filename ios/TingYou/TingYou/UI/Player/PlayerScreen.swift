@@ -30,6 +30,27 @@ struct PlayerScreen: View {
                         Text(pm?.currentChapterTitle ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     }
 
+                    // v1.4.3 · P0（取证 D）：播放失败非阻断提示——不打断界面、可重试
+                    //（此前 .failed 完全静默，点章失败用户无感知）
+                    if let playbackError = pm?.playbackError {
+                        VStack(spacing: 6) {
+                            Text(playbackError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.center)
+                            Button {
+                                pm?.retryCurrentChapter()
+                            } label: {
+                                Text("重试")
+                                    .font(.caption.bold())
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 4)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        .padding(.horizontal, 24)
+                    }
+
                     DotProgress(
                         value: (pm?.durationMs ?? 0) > 0 ? Double(pm?.currentPositionMs ?? 0) / Double(pm!.durationMs) : 0,
                         onSeek: { pct in
