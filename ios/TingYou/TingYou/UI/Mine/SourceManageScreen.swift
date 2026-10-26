@@ -11,7 +11,7 @@ import SwiftUI
 /// 发现页触发 AntibotException 时不再弹窗，只显示引导文案指向本页。
 ///
 /// v1.4.2 · 音源连通性检测：对每个参与搜索的音源发起一次轻量真实请求
-/// （听友FM 榜单 / 听十五·听吧·B站·59听书 各自最轻分类页、悦听·书音一次小搜索），
+/// （听友FM 榜单 / 听十五·B站·59听书 各自最轻分类页、悦听·书音一次小搜索），
 /// 可用显示绿色延迟毫秒数、不可用标红「不可用」；悦听命中反爬视为「站点可达但需验证」
 /// （延迟 + 需验证标注）。各源并发、10 秒超时、失败不重试；瞬时状态不持久化，
 /// 重新点「检测」重测；「导入」为本地源不参与检测，如实标注。
@@ -132,9 +132,19 @@ struct SourceManageScreen: View {
                 .font(.caption)
                 .foregroundStyle(.green)
         case .needsVerify(let ms):
-            Text("\(ms) ms · 需验证")
-                .font(.caption)
-                .foregroundStyle(.orange)
+            // build 36 · 反馈 5：「需验证」与实际 token 有效性联动——完成人机验证
+            // （token 有效）后不再显示死文案；仅 token 无效时如实提示。
+            // 验证 sheet 关闭回调刷新 ytysxsVerified 触发重渲染，此处实时读 token。
+            // 仅悦听有验证 token 闭环；59听书（vdcode 请求级验证码）无 token，恒提示。
+            if id == SourceRegistry.YTYXSX, verifyStore().hasValidToken() {
+                Text("\(ms) ms")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Text("\(ms) ms · 需验证")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         case .unavailable:
             Text("不可用")
                 .font(.caption)
@@ -157,7 +167,6 @@ final class SourceManageModel {
     let rows: [Row] = [
         Row(id: SourceRegistry.TINGYOU, name: "听友FM", note: nil),
         Row(id: SourceRegistry.TING15, name: "听十五", note: nil),
-        Row(id: SourceRegistry.TING08, name: "听吧", note: nil),
         Row(id: SourceRegistry.YTYXSX, name: "悦听有声书", note: nil),
         Row(id: SourceRegistry.MEKUI, name: "书音FM", note: nil),
         Row(id: SourceRegistry.BILI, name: "B站", note: nil),
@@ -205,7 +214,7 @@ final class SourceManageModel {
 
     /// 单源探测：各源最轻真实接口各发一次请求，与 10s 超时竞速（先到者胜，输者取消）。
     /// 接口选择原则：一次、轻量、能证明「可用」（成功解析出真实数据）而非只 ping 通——
-    /// 听友FM rank 榜单 / 听十五·听吧·B站·59听书 各自首个分类页（复用发现页分类路由）/
+    /// 听友FM rank 榜单 / 听十五·B站·59听书 各自首个分类页（复用发现页分类路由）/
     /// 悦听·书音一次小搜索（无更轻的既有探测路径）。
     private static func probeOne(router: SourceRouter, id: String) async -> SourceProbe {
         let clock = ContinuousClock()
@@ -218,8 +227,6 @@ final class SourceManageModel {
                         _ = try await router.discoverCategory(src: id, categoryId: "recommend", page: 1)
                     case SourceRegistry.TING15:
                         _ = try await router.discoverCategory(src: id, categoryId: "wuxiaxuanhuan", page: 1)
-                    case SourceRegistry.TING08:
-                        _ = try await router.discoverCategory(src: id, categoryId: "wuxia", page: 1)
                     case SourceRegistry.YTYXSX:
                         _ = try await router.search(src: id, keyword: "三体")
                     case SourceRegistry.MEKUI:
@@ -233,6 +240,10 @@ final class SourceManageModel {
                     }
                     return .ok
                 } catch is AntibotException {
+                    return .antibot
+                } catch is Ting59AntibotException {
+                    // build 36 · 反馈 1：59听书站点级验证码页（vdcode）——站点可达但被
+                    // 安全验证拦截，如实标「需验证」（与悦听同徽标，无 token 闭环）
                     return .antibot
                 } catch {
                     return .failed

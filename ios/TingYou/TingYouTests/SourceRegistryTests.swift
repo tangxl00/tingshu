@@ -4,7 +4,7 @@ import XCTest
 final class SourceRegistryTests: XCTestCase {
 
     func testAllConfiguredHostsAreWellFormedAndCovered() {
-        let allSources = [SourceRegistry.ting15, SourceRegistry.ting08]
+        let allSources = [SourceRegistry.ting15]
         for cfg in allSources {
             XCTAssertTrue(cfg.siteBase.hasPrefix("https://"))
             let site = cfg.siteBase.replacingOccurrences(of: "https://", with: "")
@@ -20,7 +20,6 @@ final class SourceRegistryTests: XCTestCase {
                 XCTAssertTrue(SourceRegistry.audioHostAllowed(cfg: cfg, host: host))
             }
         }
-        XCTAssertEqual(SourceRegistry.ting15.imgHosts, SourceRegistry.ting08.imgHosts)
 
         let mk = SourceRegistry.mekui
         XCTAssertTrue(mk.fetchHosts.allSatisfy { SourceRegistry.fetchHostAllowed(cfg: mk, host: $0) })
@@ -44,7 +43,7 @@ final class SourceRegistryTests: XCTestCase {
     }
 
     func testAudioWhitelistAcceptsExactAndSuffixButRejectsOthers() {
-        let cfg = SourceRegistry.ting08
+        let cfg = SourceRegistry.ting15
         XCTAssertTrue(SourceRegistry.audioHostAllowed(cfg: cfg, host: "oss-links.guoguo.org.cn"))
         XCTAssertTrue(SourceRegistry.audioHostAllowed(cfg: cfg, host: "cloud.guoguo.org.cn"))
         XCTAssertTrue(SourceRegistry.audioHostAllowed(cfg: cfg, host: "cdn-3.guoguo.org.cn"))
@@ -57,11 +56,11 @@ final class SourceRegistryTests: XCTestCase {
     func testRegistryLookupAndDisplayNames() {
         XCTAssertTrue(SourceRegistry.isKnown(src: "tingyou"))
         XCTAssertTrue(SourceRegistry.isKnown(src: "ting15"))
-        XCTAssertTrue(SourceRegistry.isKnown(src: "ting08"))
+        // build 36 · 反馈 4：听吧已下架——不再注册
+        XCTAssertFalse(SourceRegistry.isKnown(src: "ting08"))
         XCTAssertFalse(SourceRegistry.isKnown(src: "ting20"))
         XCTAssertEqual(SourceRegistry.displayName(src: "tingyou"), "听友FM")
         XCTAssertEqual(SourceRegistry.displayName(src: "ting15"), "听十五")
-        XCTAssertEqual(SourceRegistry.displayName(src: "ting08"), "听吧")
         XCTAssertNotNil(SourceRegistry.configOf(src: "ting15"))
         XCTAssertNil(SourceRegistry.configOf(src: "nope"))
         XCTAssertEqual(SourceRegistry.externalKey(src: "tingyou", albumId: 123), "123")

@@ -3,7 +3,7 @@ import Foundation
 /// build 22 · 对齐安卓 v1.3.3：搜索一次聚合「全部启用音源」的结果。
 /// 安卓对应物：SearchViewModel.kt 的 `SEARCH_SOURCES.filter { it in enabled }` 并行聚合。
 /// 搜索范围 = SourceEnabledStore 的启用集（「我的→音源管理」开关真正生效）；
-/// 顺序 = SourceEnabledStore.searchSources 固定序（tingyou→ting15→ting08→ytysxs→mekui）；
+/// 顺序 = SourceEnabledStore.searchSources 固定序（build 36 删听吧后 6 源）；
 /// 逐源容错：单源失败收集源名如实透出、悦听 AntibotException 走人工验证闭环、
 /// 全源失败才视为整体失败（对齐安卓 anySuccess 语义）。
 protocol SourceSearching {
@@ -71,6 +71,10 @@ struct AggregateSearcher {
             case .failure(let error)?:
                 if let antibot = error as? AntibotException {
                     antibotKeyword = antibot.keyword.isEmpty ? keyword : antibot.keyword
+                } else if error is Ting59AntibotException {
+                    // build 36 · 反馈 1：59听书站点级验证拦截——计入失败源名并附
+                    // 明确标注，如实透出「该站点需要安全验证」，不静默吞为 0 结果。
+                    failed.append("\(SourceRegistry.displayName(src: sources[idx]))（需安全验证）")
                 } else {
                     failed.append(SourceRegistry.displayName(src: sources[idx]))
                 }

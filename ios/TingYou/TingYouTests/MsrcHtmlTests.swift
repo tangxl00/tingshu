@@ -1,7 +1,7 @@
 import XCTest
 @testable import TingYou
 
-/// ting15 / ting08 宽容解析（MsrcHtml）黄金样本测试：
+/// ting15（及已下架 ting08 模板形态）宽容解析（MsrcHtml）黄金样本测试：
 /// 搜索 / 详情 / 两步 token 播放响应，覆盖 BOM、status 双形态、付费/频控码。
 final class MsrcHtmlTests: XCTestCase {
 
@@ -40,8 +40,20 @@ final class MsrcHtmlTests: XCTestCase {
         XCTAssertEqual(items[1].author, "辰东")
     }
 
-    func testParseSearchTing08Golden() {
-        let items = MsrcHtml.parseSearch(cfg: SourceRegistry.ting08, html: ting08SearchHtml)
+    /// build 36 · 反馈 4：听吧（ting08）源已下架（SourceRegistry.ting08 删除），
+    /// 但 MsrcHtml 基础设施保留（ting15 共用）——该模板形态
+    /// （category-list 切片 + &lt;aside 边界）的解析能力以本地构造的同形态 config 继续守护。
+    func testParseSearchTing08TemplateGolden() {
+        let ting08Cfg = SourceRegistry.MsrcSourceConfig(
+            id: "ting08", name: "听吧",
+            siteBase: "https://www.ting08.com", referer: "https://www.ting08.com/",
+            searchPOST: true, extraLHeader: true,
+            searchStart: "class=\"category-list\"", searchEnd: "<aside",
+            fetchHosts: ["www.ting08.com"],
+            imgHosts: ["img-book-oss.guoguo.org.cn"],
+            audioExact: ["oss-links.guoguo.org.cn"],
+            audioSuffixes: [".guoguo.org.cn"])
+        let items = MsrcHtml.parseSearch(cfg: ting08Cfg, html: ting08SearchHtml)
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items[0].title, "遮天")
         XCTAssertEqual(items[0].detailPath, "/book/2001.html")

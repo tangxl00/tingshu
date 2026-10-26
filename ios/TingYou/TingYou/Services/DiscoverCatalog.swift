@@ -3,7 +3,7 @@ import Foundation
 /// build 21 · 反馈 4/6（增强 2/3）：发现页按原始音源拉取分类。
 /// 不再硬套 tingyou 的 6 个 section——每个源用自己的原始分类结构：
 /// - tingyou：rank API 的 5 个 section（recommend/new/hot/serial/story）；
-/// - ting15 / ting08：站点首页导航的一级分类页（/<分类>/index1.html，实测可达，
+/// - ting15：站点首页导航的一级分类页（/<分类>/index1.html，实测可达，
 ///   分类页 DOM 与搜索结果页同模板，条目形态 /<分类>/<id>.html 直接复用 parseSearch）；
 /// - mekui：移动站为 Next.js SPA、无 SSR 分类数据，且无公开榜单 API（实测 /api/list/* 404）→ 不支持；
 /// - ytysxs：全站有人机验证门（实测 /?s= 稳定返回「搜索驗證」页）→ 不支持。
@@ -19,7 +19,6 @@ enum DiscoverCatalog {
     static let sourceOptions: [(id: String, name: String)] = [
         (SourceRegistry.TINGYOU, "听友FM"),
         (SourceRegistry.TING15, "听十五"),
-        (SourceRegistry.TING08, "听吧"),
         (SourceRegistry.YTYXSX, "悦听有声书"),
         (SourceRegistry.MEKUI, "书音FM"),
     ]
@@ -55,25 +54,6 @@ enum DiscoverCatalog {
                 DiscoverCategory(id: "xiangshengxiaopin", name: "相声小品"),
                 DiscoverCategory(id: "yinyue", name: "助眠音频"),
             ]
-        case SourceRegistry.TING08:
-            // www.ting08.com 首页导航（2026-10-20 实测）
-            return [
-                DiscoverCategory(id: "wuxia", name: "武侠"),
-                DiscoverCategory(id: "yanqing", name: "言情"),
-                DiscoverCategory(id: "tuili", name: "推理"),
-                DiscoverCategory(id: "xunhuan", name: "玄幻"),
-                DiscoverCategory(id: "lingyi", name: "灵异"),
-                DiscoverCategory(id: "lishi", name: "历史"),
-                DiscoverCategory(id: "guanc", name: "官场"),
-                DiscoverCategory(id: "junlv", name: "军旅"),
-                DiscoverCategory(id: "zhic", name: "职场"),
-                DiscoverCategory(id: "xuanyi", name: "悬疑"),
-                DiscoverCategory(id: "chuanyue", name: "穿越"),
-                DiscoverCategory(id: "xiaopin", name: "小品"),
-                DiscoverCategory(id: "pingshu", name: "评书"),
-                DiscoverCategory(id: "xiqu", name: "戏曲"),
-                DiscoverCategory(id: "cyy", name: "助眠音乐"),
-            ]
         case SourceRegistry.TING59:
             // v1.4.1 · 59听书网 24 个原始分类（Ting59Categories.ALL，发现页浏览区音源选择用）
             return Ting59Categories.ALL.map { DiscoverCategory(id: $0.id, name: $0.name) }
@@ -87,10 +67,10 @@ enum DiscoverCatalog {
     }
 
     /// HTML 源分类页 URL（第 page 页，1 基）。
-    /// ting15/ting08 分页形态：/<分类>/index2.html（实测）。
+    /// ting15 分页形态：/<分类>/index2.html（实测）。
     static func categoryPageURL(cfg: SourceRegistry.MsrcSourceConfig, categoryId: String, page: Int) -> String? {
         guard categoryId.range(of: "^[a-z0-9]+$", options: .regularExpression) != nil else { return nil }
-        guard cfg.id == SourceRegistry.TING15 || cfg.id == SourceRegistry.TING08 else { return nil }
+        guard cfg.id == SourceRegistry.TING15 else { return nil }
         return "\(cfg.siteBase)/\(categoryId)/index\(max(1, page)).html"
     }
 }

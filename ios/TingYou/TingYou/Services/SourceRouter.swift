@@ -49,7 +49,7 @@ actor SourceRouter {
         case SourceRegistry.TINGYOU:
             let result = try await albumRepository.search(keyword: keyword, page: 1)
             return result.items
-        case SourceRegistry.TING15, SourceRegistry.TING08:
+        case SourceRegistry.TING15:
             let items = try await msrcAdapter.search(src: src, keyword: keyword)
             return items.map { Self.albumFromMsrc($0, src: src) }
         case SourceRegistry.YTYXSX:
@@ -75,7 +75,7 @@ actor SourceRouter {
         switch src {
         case SourceRegistry.TINGYOU:
             return try await albumRepository.albumDetail(id: albumId)
-        case SourceRegistry.TING15, SourceRegistry.TING08:
+        case SourceRegistry.TING15:
             guard let path = detailPath, !path.isEmpty else { throw URLError(.badURL) }
             let d = try await msrcAdapter.detail(src: src, detailPath: path)
             return Album(albumId: albumId, title: d.title, author: d.author, teller: d.teller,
@@ -123,7 +123,7 @@ actor SourceRouter {
         switch src {
         case SourceRegistry.TINGYOU:
             return try await albumRepository.chapters(albumId: albumId)
-        case SourceRegistry.TING15, SourceRegistry.TING08:
+        case SourceRegistry.TING15:
             guard let path = detailPath, !path.isEmpty else { throw URLError(.badURL) }
             let d = try await msrcAdapter.detail(src: src, detailPath: path)
             return d.chapters.map {
@@ -175,7 +175,7 @@ actor SourceRouter {
         case SourceRegistry.TINGYOU:
             let result = try await albumRepository.rank(section: categoryId, page: page)
             return (result.items, result.hasMore)
-        case SourceRegistry.TING15, SourceRegistry.TING08:
+        case SourceRegistry.TING15:
             let result = try await msrcAdapter.category(src: src, categoryId: categoryId, page: page)
             return (result.items.map { Self.albumFromMsrc($0, src: src) }, result.hasMore)
         case SourceRegistry.TING59:

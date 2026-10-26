@@ -126,7 +126,6 @@ final class SourceEnabledStore {
     static let searchSources: [String] = [
         SourceRegistry.TINGYOU,
         SourceRegistry.TING15,
-        SourceRegistry.TING08,
         SourceRegistry.YTYXSX,
         SourceRegistry.MEKUI,
         SourceRegistry.BILI,

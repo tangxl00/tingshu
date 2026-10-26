@@ -3,7 +3,6 @@ import Foundation
 enum SourceRegistry {
     static let TINGYOU = "tingyou"
     static let TING15 = "ting15"
-    static let TING08 = "ting08"
     static let YTYXSX = "ytysxs"
     static let MEKUI = "mekui"
     static let BILI = "bili"
@@ -37,17 +36,6 @@ enum SourceRegistry {
         audioSuffixes: [".guoguo.org.cn"]
     )
 
-    static let ting08 = MsrcSourceConfig(
-        id: "ting08", name: "听吧",
-        siteBase: "https://www.ting08.com", referer: "https://www.ting08.com/",
-        searchPOST: true, extraLHeader: true,
-        searchStart: "class=\"category-list\"", searchEnd: "<aside",
-        fetchHosts: ["www.ting08.com"],
-        imgHosts: ["img-book-oss.guoguo.org.cn", "img-south-oss.guoguo.org.cn"],
-        audioExact: ["oss-links.guoguo.org.cn", "cloud.guoguo.org.cn"],
-        audioSuffixes: [".guoguo.org.cn"]
-    )
-
     static let mekui = MsrcSourceConfig(
         id: "mekui", name: "书音FM",
         siteBase: "https://m.mekui.com", referer: "https://m.mekui.com/",
@@ -60,7 +48,7 @@ enum SourceRegistry {
     )
 
     static let msrcSources: [String: MsrcSourceConfig] = [
-        TING15: ting15, TING08: ting08, MEKUI: mekui
+        TING15: ting15, MEKUI: mekui
     ]
 
     static func displayName(src: String) -> String {

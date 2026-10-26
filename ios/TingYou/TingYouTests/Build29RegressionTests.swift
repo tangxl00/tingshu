@@ -2,7 +2,8 @@ import XCTest
 @testable import TingYou
 
 /// build 29 · 回归测试（R1-R8）。
-/// 验证新增两源未破坏既有三源（ting15/ting08/ytysxs/mekui）行为与 v1.3.4 调整。
+/// 验证新增两源未破坏既有源（ting15/ytysxs/mekui）行为与 v1.3.4 调整；
+/// build 36：听吧（ting08）下架后的源清单口径同步。
 final class Build29RegressionTests: XCTestCase {
 
     // MARK: - R1-R4 · 聚合搜索源列表包含既有源（结构存在性，非网络测试）
@@ -11,7 +12,8 @@ final class Build29RegressionTests: XCTestCase {
         let sources = SourceEnabledStore.searchSources
         XCTAssertTrue(sources.contains(SourceRegistry.TINGYOU), "听友FM 必须在搜索源列表中")
         XCTAssertTrue(sources.contains(SourceRegistry.TING15), "听十五 必须在搜索源列表中")
-        XCTAssertTrue(sources.contains(SourceRegistry.TING08), "听吧 必须在搜索源列表中")
+        // build 36 · 反馈 4：听吧（ting08）已下架——不得再出现在搜索源列表
+        XCTAssertFalse(sources.contains("ting08"), "听吧已下架，不得残留在搜索源列表中")
         XCTAssertTrue(sources.contains(SourceRegistry.YTYXSX), "悦听有声书 必须在搜索源列表中")
         XCTAssertTrue(sources.contains(SourceRegistry.MEKUI), "书音FM 必须在搜索源列表中")
     }
@@ -69,7 +71,7 @@ final class Build29RegressionTests: XCTestCase {
     func testSourceRegistryDisplayNamesUnchanged() {
         XCTAssertEqual(SourceRegistry.displayName(src: "tingyou"), "听友FM")
         XCTAssertEqual(SourceRegistry.displayName(src: "ting15"), "听十五")
-        XCTAssertEqual(SourceRegistry.displayName(src: "ting08"), "听吧")
+        XCTAssertFalse(SourceRegistry.isKnown(src: "ting08"), "听吧已下架，不应再注册为已知源")
         XCTAssertEqual(SourceRegistry.displayName(src: "ytysxs"), "悦听有声书")
         XCTAssertEqual(SourceRegistry.displayName(src: "mekui"), "书音FM")
     }
@@ -83,7 +85,7 @@ final class Build29RegressionTests: XCTestCase {
 
     func testMsrcSourcesUnchanged() {
         XCTAssertNotNil(SourceRegistry.configOf(src: "ting15"))
-        XCTAssertNotNil(SourceRegistry.configOf(src: "ting08"))
+        XCTAssertNil(SourceRegistry.configOf(src: "ting08"), "听吧已下架，config 不得残留")
         XCTAssertNotNil(SourceRegistry.configOf(src: "mekui"))
         XCTAssertNil(SourceRegistry.configOf(src: "bili"), "B站不应进入 msrcSources")
         XCTAssertNil(SourceRegistry.configOf(src: "ting59"), "ting59 不应进入 msrcSources")
@@ -96,7 +98,7 @@ final class Build29RegressionTests: XCTestCase {
     /// `ios/TingYou/project.yml`（测试文件在 TingYouTests/ 下，上溯两级即工程目录，
     /// 与 CI checkout 布局一致），逐行解析 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`
     /// 首个定义并断言精确值。版本号忘改或格式漂移即测试红（CI 兜底）。
-    /// v1.4.4：断言值随 build 35 同步升位（1.4.4 / 35）。
+    /// v1.4.4：断言值随 build 36 同步升位（1.4.4 / 36）。
     func testMarketingVersionIs144() {
         // #filePath = …/ios/TingYou/TingYouTests/Build29RegressionTests.swift
         // 上溯两级：TingYouTests → TingYou（project.yml 所在，与 xcodegen 读取位置一致）
@@ -114,8 +116,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "35",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 35（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "36",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 36（升版本时同步改此断言）")
     }
 
     /// 从缩进 YAML 文本提取 `key: value` 首个定义的值：

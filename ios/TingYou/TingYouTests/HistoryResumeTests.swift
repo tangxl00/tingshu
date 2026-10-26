@@ -31,7 +31,7 @@ final class HistoryResumeTests: XCTestCase {
         let fetched = [chapter(11), chapter(12), Chapter(chapterId: 99, index: 13, title: "第02集", durationSec: nil)]
         let planner = HistoryResumePlanner { _, _, _ in fetched }
         let outcome = await planner.plan(
-            src: "ting08", albumId: 502, detailPath: nil,
+            src: "ting15", albumId: 502, detailPath: nil,
             chapterIdx: 2, chapterTitle: "第02集"
         )
         guard case .fullQueue(_, let startIdx) = outcome else {
@@ -73,7 +73,7 @@ final class HistoryResumeTests: XCTestCase {
     func testPlanFallsBackToSingleChapterOnEmptyChapters() async {
         let planner = HistoryResumePlanner { _, _, _ in [] }
         let outcome = await planner.plan(
-            src: "ting08", albumId: 505, detailPath: nil,
+            src: "ting15", albumId: 505, detailPath: nil,
             chapterIdx: 1, chapterTitle: "第01集"
         )
         guard case .singleChapter = outcome else {

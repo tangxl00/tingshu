@@ -2,7 +2,7 @@ import Foundation
 
 /// 播放地址解析仓库（安卓 PlaybackRepository.kt 对等）：按 src 路由 getPlayUrl。
 /// - tingyou → API play 端点；
-/// - ting15 / ting08 → MsrcAdapter 两步 token；
+/// - ting15 → MsrcAdapter 两步 token；
 /// - ytysxs → 章节直链透传（白名单自检）；
 /// - mekui → ecmsapi wapseries 预签名。
 final class PlaybackRepository: Sendable {
@@ -45,7 +45,7 @@ final class PlaybackRepository: Sendable {
                 throw URLError(.badServerResponse)
             }
             return url
-        case SourceRegistry.TING15, SourceRegistry.TING08:
+        case SourceRegistry.TING15:
             return try await msrcAdapter.getPlayUrl(src: src, bookId: albumId, page: chapterIdx,
                                                     markPaid: markPaid)
         case SourceRegistry.YTYXSX:

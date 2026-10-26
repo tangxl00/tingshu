@@ -130,8 +130,10 @@ struct DiscoverScreen: View {
 
     // MARK: - 搜索历史（build 27：发现页可达展示）
 
-    /// 「最近搜索」区块：条目点选直接填入并搜索、单条删除（滑动）、一键清空。
-    /// 形态对齐 SearchScreen.historySection 既有实现（复用 SearchHistoryStore）。
+    /// 「最近搜索」区块（build 36 · 反馈 3 返修）：条目改为不滚动的自适应换行
+    /// 胶囊 chip 流式排布（LazyVGrid adaptive，一行放不下自动折到下一行）——
+    /// 点 chip 主体直接填入并搜索、尾部 xmark 单条删除、一键清空保留；
+    /// 交互不变，仅纵向列表 → 多行自适应排布。
     @ViewBuilder
     private var historySection: some View {
         if !history.isEmpty {
@@ -146,33 +148,32 @@ struct DiscoverScreen: View {
                     }
                     .font(.caption)
                 }
-                ForEach(history, id: \.self) { kw in
-                    // 行主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
-                    //（swipeActions 是 List 专属修饰符，VStack 布局下不生效，故用显式删除按钮）
-                    HStack {
-                        Button {
-                            keyword = kw
-                            performSearch(initial: true)
-                        } label: {
-                            HStack {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .foregroundStyle(.secondary)
-                                    .font(.caption)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
+                    ForEach(history, id: \.self) { kw in
+                        // chip 主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
+                        HStack(spacing: 4) {
+                            Button {
+                                keyword = kw
+                                performSearch(initial: true)
+                            } label: {
                                 Text(kw)
                                     .foregroundStyle(.primary)
-                                Spacer()
+                                    .lineLimit(1)
                             }
-                            .contentShape(Rectangle())
+                            .buttonStyle(.pressable)
+                            Button {
+                                historyStore.remove(kw)
+                                history = historyStore.all
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(Color(.systemGray3))
+                                    .font(.caption)
+                            }
                         }
-                        .buttonStyle(.pressable)
-                        Button {
-                            historyStore.remove(kw)
-                            history = historyStore.all
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(Color(.systemGray3))
-                                .font(.caption)
-                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color(.systemGray5)))
+                        .fixedSize()
                     }
                 }
             }

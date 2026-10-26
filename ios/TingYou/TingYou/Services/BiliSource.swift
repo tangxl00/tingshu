@@ -95,11 +95,12 @@ enum BiliInputParser {
            range.lowerBound == s.startIndex, range.upperBound == s.endIndex {
             return .video(bvid: String(s[range]))
         }
-        // 纯 av 号
+        // 纯 av 号（match.range 覆盖整串才能确认无前缀杂质；range(at:1) 仅数字部分，不能用于整串校验）
         if let match = avRe.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
-           let range = Range(match.range(at: 1), in: s),
-           let aid = Int64(s[range]),
-           range.lowerBound == s.startIndex, range.upperBound == s.endIndex {
+           let fullRange = Range(match.range, in: s),
+           fullRange.lowerBound == s.startIndex, fullRange.upperBound == s.endIndex,
+           let digitRange = Range(match.range(at: 1), in: s),
+           let aid = Int64(s[digitRange]) {
             return .av(aid: aid)
         }
         return nil

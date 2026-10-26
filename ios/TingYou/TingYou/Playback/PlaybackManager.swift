@@ -432,7 +432,14 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     func prepareQueue(album: Album, chapters: [Chapter], startIdx: Int, startPosMs: Int64 = 0) {
         currentAlbum = album
         currentChapters = chapters
-        currentChapterIdx = max(0, chapters.firstIndex(where: { $0.index == startIdx }) ?? 0)
+        // build 36 · 恢复链路语义错位修复：startIdx 有两种语义来源——
+        // AlbumScreen 传 ch.index（章 index 值，首选 index 匹配正确）；恢复链路
+        // （ContentView 启动恢复 / ShelfScreen 书架恢复）把 HistoryResumePlanner.locate
+        // 输出的【数组位置】传进来。index 匹配失败时原先兜底到 0（章首），对非 0 基 /
+        // 乱序 index 的源会恢复错章。改为按 planner 兜底同款夹取语义回退（1 基章号 →
+        // 0 基数组位置的最接近值），index 0 基连续的源两种语义重合、行为不变。
+        currentChapterIdx = chapters.firstIndex(where: { $0.index == startIdx })
+            ?? min(max(0, startIdx), max(chapters.count - 1, 0))
         currentAlbumTitle = album.title
         coverUrl = album.coverUrl
         loadCurrentChapter(startPosMs: startPosMs, autoPlay: false)
@@ -596,6 +603,19 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// 消除每字节一次的异步挂起开销——真机上 build 32 表现为长时间缓冲不播。
     /// Range 拼装、元信息回填、取消检查（loadingRequest.isCancelled / 外层 Task
     /// 取消经 withTaskCancellationHandler 连带取消网络任务）、证书固定口径全部不变。
+    /// build 36 · 反馈 2（B 站播放 cannot open）：bilivideo.com 音频 CDN 强制校验
+    /// Referer——裸请求/仅 Cookie 均 403，仅加 `Referer: https://www.bilibili.com`
+    /// 即 206（沙箱分离实验实测）。proxySession 虽有 session 级 httpAdditionalHeaders，
+    /// 但真机证据显示 session 级头未可靠生效，故对代理 CDN 域出站请求**请求级**
+    /// 逐请求 setValue 双保险：Referer + 与 BiliAdapter 一致的 User-Agent。
+    /// 仅对 B 站代理域（ProxiedCdnHosts，本函数只服务这些域）注入，其余域头保持原样。
+    /// 纯静态函数，供单测直接构造 URLRequest 校验头注入逻辑。
+    static func applyBiliCdnHeaders(to req: inout URLRequest, url: URL) {
+        guard let host = url.host, ProxiedCdnHosts.needsProxy(host) else { return }
+        req.setValue(BiliAdapter.REFERER, forHTTPHeaderField: "Referer")
+        req.setValue(BiliAdapter.USER_AGENT, forHTTPHeaderField: "User-Agent")
+    }
+
     private func proxyMedia(box: LoadingRequestBox, url: URL) async {
         let request = box.request
         var req = URLRequest(url: url)
@@ -609,6 +629,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                              forHTTPHeaderField: "Range")
             }
         }
+        Self.applyBiliCdnHeaders(to: &req, url: url)
         let task = proxySession.dataTask(with: req)
         proxyStreamDelegate.attach(request, to: task)
         // 挂起至网络任务完成；外层 loader Task 被取消（切章/停止播放）时连带取消网络任务。

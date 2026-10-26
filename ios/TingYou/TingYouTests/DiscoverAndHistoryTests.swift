@@ -81,10 +81,12 @@ final class DiscoverCatalogTests: XCTestCase {
         XCTAssertTrue(cats.contains(DiscoverCategory(id: "jingdianpingshu", name: "经典评书")))
     }
 
-    func testTing08CategoriesFromRealNav() {
-        let cats = DiscoverCatalog.categories(for: SourceRegistry.TING08)
-        XCTAssertEqual(cats.count, 15, "www.ting08.com 首页导航 15 个分类（2026-10-20 实测）")
-        XCTAssertTrue(cats.contains(DiscoverCategory(id: "pingshu", name: "评书")))
+    /// build 36 · 反馈 4：听吧（ting08）已下架——分类清单与可选音源均不得残留。
+    func testTing08RemovedFromCatalog() {
+        XCTAssertTrue(DiscoverCatalog.categories(for: "ting08").isEmpty,
+                      "已下架源不再提供分类数据")
+        XCTAssertFalse(DiscoverCatalog.sourceOptions.contains { $0.id == "ting08" },
+                       "已下架源不得残留在发现页可选音源中")
     }
 
     func testUnsupportedSources() {
@@ -96,8 +98,6 @@ final class DiscoverCatalogTests: XCTestCase {
     func testCategoryPageURLBuiltCorrectly() {
         let url = DiscoverCatalog.categoryPageURL(cfg: SourceRegistry.ting15, categoryId: "pingshu", page: 2)
         XCTAssertEqual(url, "https://m.ting15.com/pingshu/index2.html")
-        let url8 = DiscoverCatalog.categoryPageURL(cfg: SourceRegistry.ting08, categoryId: "wuxia", page: 1)
-        XCTAssertEqual(url8, "https://www.ting08.com/wuxia/index1.html")
     }
 
     func testCategoryPageURLRejectsInvalidCategoryId() {
@@ -114,7 +114,7 @@ final class DiscoverCatalogTests: XCTestCase {
 }
 
 /// build 21 · 反馈 4/6：分类页 HTML 解析（真实站点黄金样本节选）。
-/// ting15 / ting08 分类页与搜索页同模板（clist / category-list 切片 + 相同条目形态），
+/// ting15 分类页与搜索页同模板（clist 切片 + 相同条目形态；ting08 模板形态样本保留于 MsrcHtmlTests），
 /// parseSearch 应直接命中；分页链接 index{N}.html 供 hasMore 判定。
 final class DiscoverCategoryParseTests: XCTestCase {
 
@@ -180,8 +180,19 @@ final class DiscoverCategoryParseTests: XCTestCase {
         XCTAssertTrue(ting15CategoryHtml.contains("href=\"/jingdianpingshu/index2.html\""))
     }
 
+    /// build 36 · 反馈 4：ting08 源已下架（SourceRegistry.ting08 删除），该真实站点
+    /// 样本以本地构造的同形态 config 继续守护 MsrcHtml 的解析与分页判定能力。
     func testParseTing08CategoryPage() {
-        let items = MsrcHtml.parseSearch(cfg: SourceRegistry.ting08, html: ting08CategoryHtml)
+        let ting08Cfg = SourceRegistry.MsrcSourceConfig(
+            id: "ting08", name: "听吧",
+            siteBase: "https://www.ting08.com", referer: "https://www.ting08.com/",
+            searchPOST: true, extraLHeader: true,
+            searchStart: "class=\"category-list\"", searchEnd: "<aside",
+            fetchHosts: ["www.ting08.com"],
+            imgHosts: ["img-book-oss.guoguo.org.cn"],
+            audioExact: ["oss-links.guoguo.org.cn"],
+            audioSuffixes: [".guoguo.org.cn"])
+        let items = MsrcHtml.parseSearch(cfg: ting08Cfg, html: ting08CategoryHtml)
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items[0].title, "敌后武工队(36回)")
         XCTAssertEqual(items[0].detailPath, "/pingshu/2051.html")
@@ -256,13 +267,13 @@ final class DiscoverMultiSourceTests: XCTestCase {
     func testLoadMoreAppendsPagesForCategory() async {
         let vm = DiscoverViewModel()
         let loader = FakeLoader()
-        loader.categoryResult = .success(([makeAlbum(1, "页1", src: "ting08")], true))
+        loader.categoryResult = .success(([makeAlbum(1, "页1", src: "ting15")], true))
         vm.attach(loader: loader, cache: nil)
 
-        await vm.load(target: .category(src: "ting08", categoryId: "pingshu"))
+        await vm.load(target: .category(src: "ting15", categoryId: "pingshu"))
         XCTAssertEqual(loader.categoryCalls.first?.page, 1)
 
-        loader.categoryResult = .success(([makeAlbum(2, "页2", src: "ting08")], false))
+        loader.categoryResult = .success(([makeAlbum(2, "页2", src: "ting15")], false))
         await vm.loadMore()
         XCTAssertEqual(loader.categoryCalls.last?.page, 2, "翻页请求第 2 页")
         XCTAssertEqual(vm.albums.map(\.title), ["页1", "页2"])

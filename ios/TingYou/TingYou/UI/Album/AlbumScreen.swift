@@ -1,16 +1,19 @@
 import SwiftUI
 
 /// 专辑详情页：章节列表按专辑来源走 SourceRouter 真实路由（P0-3）——
-/// tingyou 走 JSON API；ting15/ting08/悦听/书音FM 各自适配器解析；
+/// tingyou 走 JSON API；ting15/悦听/书音FM 各自适配器解析；
 /// 点击章节经 PlaybackManager 播放（占位 URI 由 AVAssetResourceLoaderDelegate 惰性解析直链）。
 struct AlbumScreen: View {
     let album: Album
     @State private var chapters: [Chapter] = []
     @State private var isLoading = true
     @State private var loadError: String?
+    /// build 36 · 反馈 6：章节列表加载完成后是否已自动定位过（只定位一次，切章不抢滚动）
+    @State private var didScrollToCurrent = false
     @Environment(\.appContainer) private var container
 
     var body: some View {
+        ScrollViewReader { proxy in
         List {
             Section {
                 HStack(spacing: 12) {
@@ -50,13 +53,20 @@ struct AlbumScreen: View {
                             HStack {
                                 Text("\(ch.index).").font(.caption).foregroundStyle(.secondary).frame(width: 28, alignment: .trailing)
                                 Text(ch.title).lineLimit(1)
+                                if isPlayingChapter(ch) {
+                                    // build 36 · 反馈 6：当前正在播放的章节高亮标识
+                                    Image(systemName: "speaker.wave.2.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(Color.accentColor)
+                                }
                                 Spacer()
                                 if let dur = ch.durationSec {
                                     Text(formatDuration(dur)).font(.caption2).foregroundStyle(.tertiary)
                                 }
                             }
                         }
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(isPlayingChapter(ch) ? Color.accentColor : .primary)
+                        .id(ch.id)
                     }
                 }
             }
@@ -66,6 +76,38 @@ struct AlbumScreen: View {
         .task {
             await loadChapters()
         }
+        // build 36 · 反馈 6：章节列表就绪后自动滚动定位到当前正在播放的章节
+        .onChange(of: chapters) { _, _ in
+            scrollToCurrentChapter(proxy: proxy)
+        }
+        }
+    }
+
+    /// build 36 · 反馈 6：本专辑正在播放时，取播放中章节定位（只定位一次）。
+    /// 匹配口径：专辑（source + albumId）一致 且 章节列表含播放中章节（chapterId 匹配）。
+    private func scrollToCurrentChapter(proxy: ScrollViewProxy) {
+        guard !didScrollToCurrent,
+              let pm = container?.playbackManager,
+              pm.currentAlbum?.albumId == album.albumId,
+              pm.currentAlbum?.source == album.source,
+              pm.currentChapterIdx >= 0, pm.currentChapterIdx < pm.currentChapters.count else { return }
+        let playing = pm.currentChapters[pm.currentChapterIdx]
+        guard chapters.contains(where: { $0.chapterId == playing.chapterId }) else { return }
+        didScrollToCurrent = true
+        DispatchQueue.main.async {
+            withAnimation {
+                proxy.scrollTo(playing.chapterId, anchor: .center)
+            }
+        }
+    }
+
+    /// build 36 · 反馈 6：该章节是否为当前正在播放的章节（章节行高亮判定）。
+    private func isPlayingChapter(_ ch: Chapter) -> Bool {
+        guard let pm = container?.playbackManager,
+              pm.currentAlbum?.albumId == album.albumId,
+              pm.currentAlbum?.source == album.source,
+              pm.currentChapterIdx >= 0, pm.currentChapterIdx < pm.currentChapters.count else { return false }
+        return pm.currentChapters[pm.currentChapterIdx].chapterId == ch.chapterId
     }
 
     /// 多源章节加载（P0-3 / P1-10：复用容器内 SourceRouter，不再自建 APIClient）

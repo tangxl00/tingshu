@@ -102,33 +102,38 @@ struct SearchScreen: View {
         }
     }
 
+    /// build 36 · 反馈 3 返修：搜索历史改为不滚动的自适应换行胶囊 chip 流式
+    /// 排布（LazyVGrid adaptive，一行放不下自动折行；与发现页形态对齐）；
+    /// 点 chip 填入并搜索、xmark 单条删除、清空保留。
     @ViewBuilder
     private var historySection: some View {
         if !history.isEmpty {
             Section {
-                ForEach(history, id: \.self) { kw in
-                    Button {
-                        keyword = kw
-                        Task { await search() }
-                    } label: {
-                        HStack {
-                            Image(systemName: "clock.arrow.circlepath")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                            Text(kw)
-                                .foregroundStyle(.primary)
-                            Spacer()
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
+                    ForEach(history, id: \.self) { kw in
+                        HStack(spacing: 4) {
+                            Button {
+                                keyword = kw
+                                Task { await search() }
+                            } label: {
+                                Text(kw)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                            }
+                            .buttonStyle(.pressable)
+                            Button {
+                                historyStore.remove(kw)
+                                history = historyStore.all
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(Color(.systemGray3))
+                                    .font(.caption)
+                            }
                         }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
-                    .swipeActions {
-                        Button(role: .destructive) {
-                            historyStore.remove(kw)
-                            history = historyStore.all
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color(.systemGray5)))
+                        .fixedSize()
                     }
                 }
             } header: {

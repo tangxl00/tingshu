@@ -1,4 +1,17 @@
 import Foundation
+import CoreFoundation
+
+/// build 36 · 反馈 1（59听书搜索无结果）：站点级人机验证拦截异常。
+/// 沙箱实测：首页正常（200），但 /search.php?searchword=... 返回 3022 字节 GBK 编码
+/// 的「系统安全验证」验证码页（vdcode 表单），携带首页 Cookie 后依然拦截——按请求级
+/// 验证码，与悦听 cf-turnstile 不同类，且不做自动破解。语义上与悦听 AntibotException
+/// 严格隔离：后者驱动悦听专属验证闭环（AggregateSearch.antibotKeyword →
+/// YtysxsVerifySheet），本异常仅如实报错 + 音源管理标注，避免误触发悦听验证 UI。
+struct Ting59AntibotException: LocalizedError {
+    var errorDescription: String? {
+        "59听书需要安全验证，本次请求被站点拦截，请稍后重试"
+    }
+}
 
 // build 29 · 59听书网适配器（设计文档 10.1.4 / 10.2 语义移植）。
 // 站点画像：免费公开 HTML 站，无登录态、无 API 签名、无风控；
@@ -149,9 +162,29 @@ actor Ting59Adapter {
         guard Int64(data.count) <= Ting59Adapter.MAX_BODY_BYTES else {
             throw URLError(.dataLengthExceedsMaximum)
         }
-        guard let html = String(data: data, encoding: .utf8), !html.isEmpty else {
+        guard let html = Self.decodeBody(data), !html.isEmpty else {
             throw URLError(.badServerResponse)
         }
+        // build 36 · 反馈 1：命中站点级「系统安全验证」验证码页 → 明确报错，
+        // 不静默返回空结果（0 结果误导用户以为无此书）。
+        if Self.isAntibotPage(html) {
+            throw Ting59AntibotException()
+        }
         return html
+    }
+
+    /// 页面混合编码兜底（build 36）：常规页 UTF-8；站点级安全验证页为 GBK
+    /// （沙箱实测 3022 字节，UTF-8 解码为 nil 会被误判为坏响应）。UTF-8 失败时
+    /// 按 GB18030（GBK 超集）兜底解码。
+    static func decodeBody(_ data: Data) -> String? {
+        if let s = String(data: data, encoding: .utf8), !s.isEmpty { return s }
+        let gbk = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(
+            CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+        return String(data: data, encoding: gbk)
+    }
+
+    /// 站点级安全验证页特征（沙箱实测）：页面含「系统安全验证」文案或 vdcode 验证表单。
+    static func isAntibotPage(_ html: String) -> Bool {
+        html.contains("系统安全验证") || html.contains("vdcode")
     }
 }
