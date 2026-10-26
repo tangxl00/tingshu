@@ -126,7 +126,7 @@ enum MsrcHtml {
     /// 命名实体解码：单次扫描 + 从后往前替换（&amp; 解出的 & 不会被二次解码）。
     private static func decodeNamedEntities(in s: String) -> String {
         var result = s
-        let matches = reNamedEntity.matches(in: result)
+        let matches = result.matches(of: reNamedEntity)
         guard !matches.isEmpty else { return s }
         for m in matches.reversed() {
             guard let value = namedEntities[String(m.output.1)] else { continue }
@@ -139,7 +139,7 @@ enum MsrcHtml {
     /// 单次扫描收集后从后往前替换，避免下标漂移。
     private static func decodeNumericEntities(in s: String) -> String {
         var result = s
-        let matches = reNumericEntity.matches(in: result)
+        let matches = result.matches(of: reNumericEntity)
         guard !matches.isEmpty else { return s }
         for m in matches.reversed() {
             let body = String(m.output.1)
