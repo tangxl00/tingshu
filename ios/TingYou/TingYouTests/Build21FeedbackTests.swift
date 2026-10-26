@@ -64,10 +64,33 @@ final class HtmlEntityTests: XCTestCase {
         XCTAssertEqual(MsrcHtml.decodeHTMLEntities("x&lt;y&gt;z"), "x<y>z")
     }
 
-    func testDecodeNumericEntities() {
-        XCTAssertEqual(MsrcHtml.decodeHTMLEntities("&#x4E2D;&#x6587;"), "中文")
-        XCTAssertEqual(MsrcHtml.decodeHTMLEntities("&#20013;&#25991;"), "中文")
-        XCTAssertEqual(MsrcHtml.decodeHTMLEntities("&#x4E2D;&#20013;"), "中文") // 十六/十进制混合
+    // build 36 返修（r4 · CI 失败 2 拆分取证）：原 testDecodeNumericEntities 是全套件
+    // 唯一覆盖「十进制」数字实体的用例（其余全过的实体用例——testDecodeMixedNamedAndNumeric
+    // 与 testParseSearchDecodesEntitiesAtExit——只用十六进制），NSRegularExpression 旧实现与
+    // Swift Regex 新实现两套完全不同的实现挂在同一用例（0.211s/0.251s/1.165s），指向断言侧
+    // 或十进制变体的共性因素。CI 并行测试模式下断言消息不进 test.log、xcresult 未上传、
+    // 无诊断可用——按拆分取证方案拆成 hex / decimal / 混合三条独立用例，期望值改用
+    // Unicode.Scalar 码点构造（本轮已 od -tx1 逐字节核验三行输入与期望字面量均为纯
+    // ASCII + 合法 UTF-8、无隐形字符，码点构造再排除字面量编码残余疑点）。下轮 CI 失败
+    // 清单将直接指认挂在哪个变体、哪条断言上。
+    private var codepointZhongWen: String {
+        String(Unicode.Scalar(0x4E2D)!) + String(Unicode.Scalar(0x6587)!)
+    }
+
+    func testDecodeNumericHexEntities() {
+        XCTAssertEqual(MsrcHtml.decodeHTMLEntities("&#x4E2D;&#x6587;"), codepointZhongWen,
+                       "十六进制数字实体：&#x4E2D;(U+4E2D 中) + &#x6587;(U+6587 文)")
+    }
+
+    func testDecodeNumericDecimalEntities() {
+        // 0x4E2D = 20013、0x6587 = 25991（十进制码点）
+        XCTAssertEqual(MsrcHtml.decodeHTMLEntities("&#20013;&#25991;"), codepointZhongWen,
+                       "十进制数字实体：&#20013;=中 &#25991;=文（全套件唯一十进制覆盖）")
+    }
+
+    func testDecodeNumericHexDecimalMixed() {
+        XCTAssertEqual(MsrcHtml.decodeHTMLEntities("&#x4E2D;&#20013;"), codepointZhongWen,
+                       "十六/十进制混合：hex 中 + decimal 文")
     }
 
     func testDecodeMixedNamedAndNumeric() {

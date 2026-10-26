@@ -468,6 +468,33 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         currentChapterTitle = ch.title
         currentChapterIdx = currentChapters.firstIndex(where: { $0.chapterId == ch.chapterId }) ?? currentChapterIdx
 
+        // build 36 返修（r4 · CI 失败 1+3 进程击杀收口）：nil repository（单测/预览配置，
+        // 生产经 AppContainer 恒注入非 nil）下不再构造 AVAsset/AVPlayerItem/
+        // resourceLoader/statusObserver 播放机器。取证：r4 两条 0.000s 失败 + 两次 PID
+        // 更替；受害者之一 testChapterStartUsesIntroWhenNoResume 是纯静态函数用例（无
+        // PM 实例、无 play()，源码可证）——崩点不在受害用例自身，而是异步余震随机砸中
+        // 后续用例，按受害者画像归因不可靠。全部命中用例的共同点只有一个：占位 URI 的
+        // AVAsset 必然加载失败（nil repo → loader Task 立即 finishLoading(.unsupportedURL)
+        // → item .failed），AVFoundation 异步加载/取消机器全程跑在注定失败的条目上，且
+        // 用例收尾时 PM 随即释放——崩溃藏在该机器与我们对象生命周期的竞态区（deinit 撤
+        // observer、replaceCurrentItem 取消在途请求、KVO token 重赋值并发失效、deleg非
+        // 持有引用等），属 EXC 级内存事故而非 Swift trap：play→prepare→load→loader 全链
+        // 静态审计无强解包、无 try!/as!、数值转换已全部设防（周期观察器与 duration 的
+        // isFinite 守卫）。CI 并行测试模式断言消息不进 test.log、xcresult 未上传、崩溃
+        // 回溯不可得，沙箱无 Swift 工具链无法复现，无法指认到具体 trap 行——按约定采用
+        // 「nil repository 优雅失败」收口：历史照记（含片头跳过位置）、章节标题照设、
+        // 预取自守卫，播放机器整体不建，isPlaying 维持 false（play() 对空条目本就早退）。
+        // 生产路径（repository 非 nil）行为完全不变。
+        guard playbackRepository != nil else {
+            let albumSource = currentAlbum?.source ?? "tingyou"
+            let albumId = currentAlbum?.albumId ?? 0
+            let startMs = Self.chapterStartMs(startPosMs: startPosMs,
+                                               introSec: skipStore.intro(for: albumSource, albumId: albumId))
+            recordHistory(force: true, positionMs: startMs)
+            scheduleNextChapterPrefetch()
+            return
+        }
+
         // v1.4.3 · P0（取证 D）：statusObserver 须能引用当前源（ting59 失效文案特化用）
         let failedSource = currentAlbum?.source ?? ""
         // P0-1：构建占位 URI，经 AVAssetResourceLoaderDelegate 在 AVPlayer 打开资源时
@@ -481,7 +508,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         let item = AVPlayerItem(asset: asset)
         statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             if item.status == .readyToPlay {
-                self?.durationMs = Int64(item.duration.seconds * 1000)
+                // build 36 返修（r4 · 崩溃面加固）：流式/异常资源在 readyToPlay 瞬间
+                // duration 可为 indefinite（seconds = NaN）——与周期观察器同口径先验
+                // finite 再转换；Int64(NaN) 是进程击杀级致命转换错误。
+                let durSec = item.duration.seconds
+                self?.durationMs = durSec.isFinite ? Int64(durSec * 1000) : 0
                 self?.updateNowPlaying()
                 // build 27（倍速加固）：条目替换后 AVFoundation 将 rate 归零——
                 // 新条目就绪时按当前 speed 与播放态重放（暂停态不起播）。
