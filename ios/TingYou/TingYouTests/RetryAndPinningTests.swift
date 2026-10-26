@@ -4,6 +4,27 @@ import XCTest
 /// P0-5 重试策略 + P1-1 域名后缀 pinning 白名单的回归测试。
 final class RetryAndPinningTests: XCTestCase {
 
+    // build 36 返修（CI #5 加固）：RetryStubURLProtocol 的四个静态桩（handler /
+    // errorOnce / errorAlways / callCounter）为全局单槽，此前各用例只在 Happy Path
+    // 尾部手工清理——一旦用例中途 throw（如 catch 类型不匹配），静态态即泄漏到
+    // 同进程后续用例（errorAlways 残留会让后续用例莫名多退避多失败）。
+    // 统一 setUp/tearDown 全量清态，消除跨用例串扰面。
+    override func setUp() {
+        super.setUp()
+        RetryStubURLProtocol.handler = nil
+        RetryStubURLProtocol.errorOnce = nil
+        RetryStubURLProtocol.errorAlways = nil
+        RetryStubURLProtocol.callCounter = nil
+    }
+
+    override func tearDown() {
+        RetryStubURLProtocol.handler = nil
+        RetryStubURLProtocol.errorOnce = nil
+        RetryStubURLProtocol.errorAlways = nil
+        RetryStubURLProtocol.callCounter = nil
+        super.tearDown()
+    }
+
     // MARK: - HttpRetryPolicy
 
     func testRetryableStatusesAreGatewayClassOnly() {
@@ -61,12 +82,16 @@ final class RetryAndPinningTests: XCTestCase {
     }
 
     func testTransportErrorRetriesWithBackoffThenSucceeds() async throws {
-        // 判别力：旧实现传输层错误 continue 直跑、无等待——elapsed 断言在旧实现下必失败
+        // 判别力：旧实现传输层错误 continue 直跑、无等待——elapsed 断言在旧实现下必失败。
+        // build 36 返修（CI #5 真实根因）：原实现 calls 用 handler 闭包计数——errorOnce
+        // 注入失败的那次首发请求走 didFailWithError 分支、根本不触达 handler，重试成功后
+        // handler 只被调 1 次，断言 calls==2 确定性失败（三轮 0.404s/0.529s/1.455s 均败
+        // 于此；时长波动=0.3s 退避 + CI 负载，elapsed 断言本身一直通过）。非静态桩串扰、
+        // 非 URLProtocol 桩 CI 行为差异。改用 callCounter 口径（每次 startLoading 必调、
+        // 含注入失败的首发），与 testConnectionLostRetriesThenSucceeds 对齐。
         var calls = 0
-        RetryStubURLProtocol.handler = { _ in
-            calls += 1
-            return (200, Data("ok".utf8))
-        }
+        RetryStubURLProtocol.callCounter = { calls += 1 }
+        RetryStubURLProtocol.handler = { _ in (200, Data("ok".utf8)) }
         RetryStubURLProtocol.errorOnce = URLError(.notConnectedToInternet)
         let client = APIClient(session: RetryStubURLProtocol.makeSession())
         let cfg = RetryConfig(maxRetries: 1, backoffSecs: [1.5], transportBackoffSecs: [0.3])
@@ -76,8 +101,9 @@ final class RetryAndPinningTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
         XCTAssertEqual(resp.statusCode, 200)
         XCTAssertEqual(String(data: data, encoding: .utf8), "ok")
-        XCTAssertEqual(calls, 2, "传输层错误应重试一次后成功")
+        XCTAssertEqual(calls, 2, "传输层错误应退避后重试一次成功（共 2 次请求，含注入失败的首发）")
         XCTAssertGreaterThanOrEqual(elapsed, 0.25, "重试前必须退避等待（0.3s 档），旧实现直跑不等待")
+        RetryStubURLProtocol.callCounter = nil
         RetryStubURLProtocol.handler = nil
     }
 

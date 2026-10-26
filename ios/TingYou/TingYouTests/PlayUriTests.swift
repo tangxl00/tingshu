@@ -45,13 +45,23 @@ final class PlayUriTests: XCTestCase {
     }
 
     func testGarbageUrlIsRejected() {
-        // iOS 17+ / swift-foundation：默认 lenient（encodingInvalidCharacters: true），
-        // “not a url” 的空格会被自动编码而不返回 nil；严格拒绝垃圾串须显式传 false。
-        // 注：harness://no-slash 的 host “no-slash” 是合法 reg_name（含 -），属合法 URL。
-        XCTAssertNotNil(URL(string: "not a url"))
-        XCTAssertNil(URL(string: "not a url", encodingInvalidCharacters: false))
-        XCTAssertNil(URL(string: ""))
-        XCTAssertNil(URL(string: "://no-scheme", encodingInvalidCharacters: false))
-        XCTAssertNil(URL(string: "http://exa mple.com/x", encodingInvalidCharacters: false))
+        // build 36 返修（CI #3）：原 5 条断言全部是对系统 URL(string:) 内部解析行为的
+        // 平台断言（lenient 自动编码、encodingInvalidCharacters 严格模式），其中一条在
+        // CI 的 iOS 18.5 运行时上不成立（两轮 0.003s/0.005s 秒败=确定性断言失败）。
+        // 系统解析器行为非应用契约，改为只断言 PlayUri 自身契约：
+        // 1) build 产物必须可解析且三字段回读一致（生产 loadCurrentChapter 依赖）；
+        // 2) parse 对空串/垃圾串/缺参串/非数字参数一律拒绝。
+        let uri = PlayUri.build(src: "tingyou", albumId: 12345, chapterIdx: 7)
+        XCTAssertNotNil(URL(string: uri), "build 产物必须是可解析 URI（生产 resourceLoader 依赖）")
+        let parsed = PlayUri.parse(uri)
+        XCTAssertEqual(parsed?.src, "tingyou")
+        XCTAssertEqual(parsed?.albumId, 12345)
+        XCTAssertEqual(parsed?.chapterIdx, 7)
+        XCTAssertNil(PlayUri.parse(""), "空串必须被拒绝")
+        XCTAssertNil(PlayUri.parse("not a url"), "非 URI 垃圾串必须被拒绝")
+        XCTAssertNil(PlayUri.parse("://no-scheme"), "无 scheme 串必须被拒绝")
+        XCTAssertNil(PlayUri.parse("tingyou-chapter://play"), "缺全部参数必须被拒绝")
+        XCTAssertNil(PlayUri.parse("tingyou-chapter://play?src=tingyou"), "缺 album_id/chapter_idx 必须被拒绝")
+        XCTAssertNil(PlayUri.parse("tingyou-chapter://play?src=tingyou&album_id=abc&chapter_idx=1"), "非数字参数必须被拒绝")
     }
 }

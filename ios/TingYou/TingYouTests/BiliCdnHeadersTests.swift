@@ -9,8 +9,11 @@ import XCTest
 final class BiliCdnHeadersTests: XCTestCase {
 
     func testProxiedBiliCdnHostsGetRefererAndUA() {
+        // build 36 返修（CI #1）：B站图床真实域是 hdslb.com（ProxiedCdnHosts 白名单后缀为 .com），
+        // 此前误写 .cn 不在白名单 → 头不注入 → 断言必败（两轮 0.59s/0.66s 稳定复现）。
+        // 修测试用例域名，不改产品白名单（.cn 域真实性未证实，不得入白名单）。
         for host in ["upos-sz-mirror8.bilivideo.com", "bilivideo.com",
-                     "cdn.example.akamaized.net", "i0.hdslb.cn"] {
+                     "cdn.example.akamaized.net", "i0.hdslb.com"] {
             var req = URLRequest(url: URL(string: "https://\(host)/a.mp3")!)
             PlaybackManager.applyBiliCdnHeaders(to: &req, url: req.url!)
             XCTAssertEqual(req.value(forHTTPHeaderField: "Referer"), BiliAdapter.REFERER,

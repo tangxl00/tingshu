@@ -98,13 +98,20 @@ enum MsrcHtml {
 
     // ---- build 21 · 反馈 2（Bug B）：HTML 实体解码 ----
 
-    private static let reNumericEntity = try! NSRegularExpression(pattern: #"&#(x[0-9A-Fa-f]+|\d+);"#)
+    // build 36 返修（CI #4）：实体解码由 NSString + NSRegularExpression.enumerateMatches
+    // + NSRange 互操作改为 Swift Regex（纯 Swift String.Range，deployment target 17 支持）。
+    // 原实现静态自洽、沙箱静态审不出逻辑毛病，但 NSString 下标 / NSRange 换算是唯一
+    // 的 Foundation 版本敏感面——CI Xcode 26.3 两轮 0.211s/0.251s 确定性失败（沙箱无
+    // Swift 工具链无法本地复现，不猜具体行为差异，直接消除敏感面）。匹配语义与原
+    // NSRegularExpression 完全一致：非重叠、最左优先、贪心；单层替换、先数字后命名、
+    // 未识别实体原样保留的口径全部不变。
+    private static let reNumericEntity = /&#(x[0-9A-Fa-f]+|\d+);/
     private static let namedEntities: [String: String] = [
         "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
         "nbsp": " ", "mdash": "—", "ndash": "–", "hellip": "…",
         "middot": "·", "ldquo": "“", "rdquo": "”", "lsquo": "‘", "rsquo": "’",
     ]
-    private static let reNamedEntity = try! NSRegularExpression(pattern: #"&(amp|lt|gt|quot|apos|nbsp|mdash|ndash|hellip|middot|ldquo|rdquo|lsquo|rsquo);"#)
+    private static let reNamedEntity = /&(amp|lt|gt|quot|apos|nbsp|mdash|ndash|hellip|middot|ldquo|rdquo|lsquo|rsquo);/
 
     /// HTML 实体还原：命名实体（&amp; &quot; &nbsp; 等 14 个常用集）+
     /// 十六进制 &#x4E2D; 与十进制 &#20013; 数字实体。
@@ -118,46 +125,32 @@ enum MsrcHtml {
 
     /// 命名实体解码：单次扫描 + 从后往前替换（&amp; 解出的 & 不会被二次解码）。
     private static func decodeNamedEntities(in s: String) -> String {
-        let ns = s as NSString
-        var ranges: [(NSRange, String)] = []
-        reNamedEntity.enumerateMatches(in: s, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
-            guard let m else { return }
-            let name = ns.substring(with: m.range(at: 1))
-            if let value = namedEntities[name] {
-                ranges.append((m.range, value))
-            }
-        }
-        guard !ranges.isEmpty else { return s }
         var result = s
-        for (range, replacement) in ranges.reversed() {
-            guard let swiftRange = Range(range, in: result) else { continue }
-            result.replaceSubrange(swiftRange, with: replacement)
+        let matches = reNamedEntity.matches(in: result)
+        guard !matches.isEmpty else { return s }
+        for m in matches.reversed() {
+            guard let value = namedEntities[String(m.output.1)] else { continue }
+            result.replaceSubrange(m.range, with: value)
         }
         return result
     }
 
     /// 数字实体解码：&#x4E2D; / &#20013; → 对应 Unicode 字符。
-    /// 用 enumerated matches 从后往前替换，避免下标漂移。
+    /// 单次扫描收集后从后往前替换，避免下标漂移。
     private static func decodeNumericEntities(in s: String) -> String {
-        let ns = s as NSString
-        var ranges: [(NSRange, String)] = []
-        reNumericEntity.enumerateMatches(in: s, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
-            guard let m else { return }
-            let bodyNS = ns.substring(with: m.range(at: 1))
-            var code: UInt32?
-            if bodyNS.hasPrefix("x") || bodyNS.hasPrefix("X") {
-                code = UInt32(bodyNS.dropFirst(), radix: 16)
-            } else {
-                code = UInt32(bodyNS)
-            }
-            guard let code, let scalar = Unicode.Scalar(code) else { return }
-            ranges.append((m.range, String(Character(scalar))))
-        }
-        guard !ranges.isEmpty else { return s }
         var result = s
-        for (range, replacement) in ranges.reversed() {
-            guard let swiftRange = Range(range, in: result) else { continue }
-            result.replaceSubrange(swiftRange, with: replacement)
+        let matches = reNumericEntity.matches(in: result)
+        guard !matches.isEmpty else { return s }
+        for m in matches.reversed() {
+            let body = String(m.output.1)
+            var code: UInt32?
+            if body.hasPrefix("x") || body.hasPrefix("X") {
+                code = UInt32(body.dropFirst(), radix: 16)
+            } else {
+                code = UInt32(body)
+            }
+            guard let code, let scalar = Unicode.Scalar(code) else { continue }
+            result.replaceSubrange(m.range, with: String(Character(scalar)))
         }
         return result
     }

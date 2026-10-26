@@ -412,6 +412,16 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         let interval = CMTime(seconds: 1, preferredTimescale: 1)
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             guard let self = self else { return }
+            // build 36 返修（CI #6 进程崩溃根因）：条目 .failed / replaceCurrentItem
+            // 替换瞬间，periodic observer 会对无效 CMTime（seconds = NaN/Inf）回调——
+            // Int64(NaN * 1000) 是致命转换错误（"Double value cannot be converted to
+            // Int because it is either infinite or NaN"），直接杀死进程。CI 铁证：
+            // testHistoryWriteSerializedLatestChapterWins 是全进程唯一「repository
+            // == nil 且 play() 激活时钟」的用例——占位 URI 必然解析失败、item 必
+            // .failed，即崩（三轮 0.000s + app 进程实例 12316→12874，b35 已复现、
+            // 排除 b36 回归）；真机 repository 非 nil 正常加载、CMTime 有效不触发。
+            // 防御：NaN/Inf 拍直接跳过，位置保持上一拍值，等条目就绪后恢复。
+            guard time.seconds.isFinite else { return }
             self.currentPositionMs = Int64(time.seconds * 1000)
             self.updateNowPlaying()
             self.checkOutroSkip()

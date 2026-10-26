@@ -323,7 +323,48 @@ final class StartupRestoreTests: XCTestCase {
         }
         pm.prepareQueue(album: album, chapters: chapters, startIdx: 1, startPosMs: 120_000)
         XCTAssertEqual(pm.currentAlbumTitle, "恢复的书", "专辑应载入播放器（迷你条可见）")
-        XCTAssertEqual(pm.currentChapterIdx, 1, "定位到上次听到的章节")
+        // build 36 返修（CI #2）：prepareQueue 双语义——index 匹配优先（$0.index == startIdx）。
+        // 本章 index 为 1/2/3、startIdx=1 → 按「章 index 值」命中第 1 章（数组位置 0）。
+        // 旧断言按数组位置语义期望 1，与 build 36 恢复链路语义错位修复冲突（实现是对的）。
+        XCTAssertEqual(pm.currentChapterIdx, 0, "startIdx=1（1 基连续章节）按章 index 匹配定位到第 1 章（位置 0）")
         XCTAssertFalse(pm.isPlaying, "启动恢复不得自动出声——用户点播放才播")
+    }
+
+    /// build 36 返修（CI #2）：startIdx 双语义显式锁定（各自独立用例，防未来回归）。
+    /// 语义 A：AlbumScreen 点章传「章 index 值」（ch.index）——按 index 匹配定位。
+    func testPrepareQueueIndexValueSemanticsMatchesByIndex() {
+        let album = Album(albumId: 2, title: "双语义书", author: nil, teller: nil,
+                          coverUrl: nil, intro: nil, category: nil, categoryId: nil,
+                          type: nil, typeId: nil, status: nil, chapterCount: nil,
+                          updatedAt: nil, playCount: nil, available: true,
+                          source: "tingyou", detailPath: nil)
+        // 非 0 基乱序 index：5, 9, 13——两种语义在此输入下可区分
+        let chapters = [5, 9, 13].map {
+            Chapter(chapterId: Int64($0), index: $0, title: "第\($0)章", durationSec: nil)
+        }
+        let pm = PlaybackManager(playbackRepository: nil)
+        // 传「章 index 值」9 → 命中 index==9 的第 2 章（数组位置 1）
+        pm.prepareQueue(album: album, chapters: chapters, startIdx: 9)
+        XCTAssertEqual(pm.currentChapterIdx, 1, "startIdx=章 index 值时按 index 匹配定位")
+    }
+
+    /// 语义 B：启动/书架恢复链路传「数组位置」（HistoryResumePlanner.locate 输出）——
+    /// index 失配时夹取兜底（对齐 planner 兜底同款语义）。
+    func testPrepareQueueArrayPositionSemanticsClampsOnIndexMismatch() {
+        let album = Album(albumId: 2, title: "双语义书", author: nil, teller: nil,
+                          coverUrl: nil, intro: nil, category: nil, categoryId: nil,
+                          type: nil, typeId: nil, status: nil, chapterCount: nil,
+                          updatedAt: nil, playCount: nil, available: true,
+                          source: "tingyou", detailPath: nil)
+        let chapters = [5, 9, 13].map {
+            Chapter(chapterId: Int64($0), index: $0, title: "第\($0)章", durationSec: nil)
+        }
+        let pm = PlaybackManager(playbackRepository: nil)
+        // 传「数组位置」0（无任何章 index==0）→ index 失配夹取兜底到位置 0
+        pm.prepareQueue(album: album, chapters: chapters, startIdx: 0)
+        XCTAssertEqual(pm.currentChapterIdx, 0, "startIdx=数组位置时 index 失配走夹取兜底")
+        // 位置越界夹取到末章
+        pm.prepareQueue(album: album, chapters: chapters, startIdx: 99)
+        XCTAssertEqual(pm.currentChapterIdx, 2, "startIdx 越界时夹取到最后一章")
     }
 }
