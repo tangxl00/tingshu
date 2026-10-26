@@ -1,14 +1,27 @@
 import Foundation
 
-/// B站视频音轨适配器（build 29 · 对齐 Android BiliAdapter.kt）
+/// B站风控拦截错误（HTTP 412/403 或 body code -412/-352/-509）——
+/// 与普通业务错误区分开：风控类按退避表重试，业务类（404/付费等）不重试
+///（build 37 · abts playUrl：只有风控类错误值得重试）。
+struct BiliRiskError: Error, LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
+/// B站视频音轨适配器（build 29 · 对齐 Android BiliAdapter.kt；build 37 · 播放链路对齐 abts）
 ///
-/// 技术路线：playurl fnval=16（DASH 音轨分离）→ dash.audio[] 按码率降序取最高；
-/// view 接口取视频标题/UP主/分P列表；请求头复刻桌面浏览器；
-/// 风控应对：调 API 前先访问首页获取初始 cookie（buvid3），进程内 CookieStorage 保持；
-/// 412 阶梯退避；访客态最小请求间隔 450ms。
+/// build 37 技术路线：playurl 改走 WBI 签名接口 /x/player/wbi/playurl
+/// （fnval=4048、qn=80、try_look=1、gaia_source=prefer-ua）——此前无签名的
+/// /x/player/playurl + fnval=16 已被风控拒绝，是「能搜索、不能播」的直接原因；
+/// 可播判定按 abts 口径：flac / dolby / dash.audio 任一 baseUrl 或 backupUrls
+/// 非空；view 接口取视频标题/UP主/分P列表；请求头复刻桌面浏览器；
+/// 风控应对：本地种 buvid3（大写 UUID + 5 位零填充随机数 + infoc）/ buvid4 +
+/// gaia ExClimbWuzhi 激活（3064/39c8/3c43 载荷）；HTTP 412/403 或 body code
+/// ∈ {-412,-352,-509} 时按 [1200,2600,5000]ms 阶梯退避并重种 b_nut 后重试；
+/// 访客态最小请求间隔 450ms。
 actor BiliAdapter {
     static let USER_AGENT =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
     static let REFERER = "https://www.bilibili.com"
 
     /// 412 阶梯退避表（毫秒）
@@ -17,14 +30,10 @@ actor BiliAdapter {
     static let MIN_REQUEST_GAP_NS: UInt64 = 450_000_000
     /// 响应体大小上限（8MB）
     private static let MAX_BODY_BYTES: Int64 = 8 * 1024 * 1024
-    /// 访客态 mid
-    private static let MID_ANONYMOUS = 1
     /// gaia 预激活网关
     private static let GAIA_URL = "https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi"
-    /// buvid3 字符集
-    private static let BUVID3_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    /// buvid3 长度
-    private static let BUVID3_LENGTH = 32
+    /// buvid3 长度（UUID v4 36 位 + 5 位零填充随机数 + "infoc"，abts genBuvid3 口径）
+    static let BUVID3_LENGTH = 46
 
     private let apiBase: String
     private let homeBase: String
@@ -41,6 +50,9 @@ actor BiliAdapter {
     private var cookiesReady = false
     /// 节流锁（actor 隔离已提供串行化，但 lastRequestAt 需原子更新）
     private var lastRequestAt: UInt64 = 0
+    /// WBI 签名密钥缓存（密钥每日轮换，TTL 沿用搜索侧 BiliSearchApi.WBI_KEY_TTL_MS）
+    private var cachedWbiKey: String?
+    private var wbiKeyFetchedAt: UInt64 = 0
 
     init(apiBase: String = "https://api.bilibili.com",
          homeBase: String = "https://www.bilibili.com",
@@ -98,33 +110,135 @@ actor BiliAdapter {
 
     // MARK: - DASH 音轨直链
 
+    /// build 37 · 对齐 abts playUrl：WBI 签名接口 + 共 3 次尝试（1800ms × attempt
+    /// 递增间隔）；仅风控类错误与「无可用音轨」重试，其余（404/付费等）立即失败。
     func audioStreamUrl(bvid: String, cid: Int64) async -> Result<String, Error> {
         do {
             try await warmup()
-            let json = try await requestJsonWithBackoff(url:
-                "\(apiBase)/x/player/playurl?bvid=\(bvid)&cid=\(cid)&fnval=16&fnver=0&fourk=1")
-            let code = json["code"] as? Int ?? -1
-            if code != 0 {
-                throw URLError(.badServerResponse,
-                               userInfo: [NSLocalizedDescriptionKey: biliApiError(code: code, message: "")])
+            var lastError: Error = URLError(.badServerResponse,
+                                            userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
+            for attempt in 0..<3 {
+                if attempt > 0 {
+                    try await Task.sleep(nanoseconds: 1_800_000_000 * UInt64(attempt))
+                }
+                do {
+                    let key = try await wbiKey()
+                    let wts = UInt64(Date().timeIntervalSince1970)
+                    let url = Self.buildPlayUrl(apiBase: apiBase, bvid: bvid, cid: cid,
+                                                wbiKey: key, wtsSeconds: wts)
+                    let json = try await requestJsonWithBackoff(url: url)
+                    let code = json["code"] as? Int ?? -1
+                    if code != 0 {
+                        let message = json["message"] as? String ?? ""
+                        if Self.isRiskCode(code) {
+                            lastError = BiliRiskError(message: biliApiError(code: code, message: message))
+                            continue
+                        }
+                        throw URLError(.badServerResponse,
+                                       userInfo: [NSLocalizedDescriptionKey: biliApiError(code: code, message: message)])
+                    }
+                    guard let stream = try? extractPlayableUrl(json) else {
+                        // abts：无可用音轨同样视为可重试失败（避免上层静默拿到空地址）
+                        lastError = URLError(.badServerResponse,
+                                             userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
+                        continue
+                    }
+                    return .success(stream)
+                } catch {
+                    if error is BiliRiskError {
+                        lastError = error
+                        continue
+                    }
+                    throw error
+                }
             }
-            guard let data = json["data"] as? [String: Any],
-                  let dash = data["dash"] as? [String: Any],
-                  let audio = dash["audio"] as? [[String: Any]] else {
-                throw URLError(.badServerResponse,
-                               userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
-            }
-            return .success(try selectStreamUrl(audio))
+            return .failure(lastError)
         } catch {
             return .failure(error)
         }
+    }
+
+    /// 从 playurl 响应抽取可播直链：flac / dolby（含 dolby.audio[]）/ dash.audio[]
+    /// 合并后按码率降序选最优（abts _hasPlayableUrl 的可播判定口径）。
+    private func extractPlayableUrl(_ json: [String: Any]) throws -> String {
+        guard let data = json["data"] as? [String: Any] else {
+            throw URLError(.badServerResponse,
+                           userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
+        }
+        var tracks: [[String: Any]] = []
+        if let dash = data["dash"] as? [String: Any] {
+            if let flac = dash["flac"] as? [String: Any] {
+                tracks.append(flac)
+            }
+            if let dolby = dash["dolby"] as? [String: Any] {
+                if let dolbyTracks = dolby["audio"] as? [[String: Any]] {
+                    tracks.append(contentsOf: dolbyTracks)
+                } else {
+                    tracks.append(dolby)
+                }
+            }
+            tracks.append(contentsOf: dash["audio"] as? [[String: Any]] ?? [])
+        }
+        guard !tracks.isEmpty else {
+            throw URLError(.badServerResponse,
+                           userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
+        }
+        return try selectStreamUrl(tracks)
+    }
+
+    /// WBI 签名密钥（nav 接口无需登录态即可取到 wbi_img；TTL 与搜索侧一致）
+    private func wbiKey() async throws -> String {
+        let now = DispatchTime.now().uptimeNanoseconds / 1_000_000
+        if let key = cachedWbiKey, now - wbiKeyFetchedAt < BiliSearchApi.WBI_KEY_TTL_MS {
+            return key
+        }
+        let json = try await requestJsonWithBackoff(url: "\(apiBase)/x/web-interface/nav")
+        guard let data = json["data"] as? [String: Any],
+              let wbi = data["wbi_img"] as? [String: Any],
+              let img = wbi["img_url"] as? String, !img.isEmpty,
+              let sub = wbi["sub_url"] as? String, !sub.isEmpty else {
+            throw URLError(.badServerResponse,
+                           userInfo: [NSLocalizedDescriptionKey: "WBI 密钥获取失败"])
+        }
+        let key = BiliSearchApi.mixinKey(imgUrl: img, subUrl: sub)
+        cachedWbiKey = key
+        wbiKeyFetchedAt = DispatchTime.now().uptimeNanoseconds / 1_000_000
+        return key
+    }
+
+    /// build 37 · WBI 签名 playurl URL 构造（abts 口径：8 个业务参数 + wts，
+    /// 参数名排序后拼 query，w_rid = md5(query + mixinKey)——与搜索侧 buildSearchUrl 同一签名约定）。
+    static func buildPlayUrl(apiBase: String, bvid: String, cid: Int64,
+                             wbiKey: String, wtsSeconds: UInt64) -> String {
+        let params: [(String, String)] = [
+            ("bvid", bvid),
+            ("cid", String(cid)),
+            ("qn", "80"),
+            ("fnval", "4048"),
+            ("fnver", "0"),
+            ("fourk", "1"),
+            ("try_look", "1"),
+            ("gaia_source", "prefer-ua"),
+            ("wts", String(wtsSeconds)),
+        ]
+        let sorted = params.sorted { $0.0 < $1.0 }
+        let query = sorted.map { "\($0.0)=\(BiliSearchApi.encodeValue($0.1))" }.joined(separator: "&")
+        let wRid = BiliSearchApi.md5Hex(query + wbiKey)
+        return "\(apiBase)/x/player/wbi/playurl?\(query)&w_rid=\(wRid)"
+    }
+
+    /// 风控响应码（abts：HTTP 412/403 与 body code -412/-352/-509 一视同仁）
+    static func isRiskCode(_ code: Int) -> Bool {
+        code == -412 || code == -352 || code == -509
     }
 
     private func selectStreamUrl(_ audio: [[String: Any]]) throws -> String {
         var best: String?
         var bestBandwidth: Int64 = -1
         for track in audio {
-            let bw = track["bandwidth"] as? Int64 ?? -1
+            // flac/dolby 对象可能缺 bandwidth 字段——按 0 处理保证首个可播直链可用
+            //（dash.audio 正常都带 bandwidth，不影响「按码率降序选最优」的既有语义）
+            let bw = track["bandwidth"] as? Int64 ?? 0
             if bw <= bestBandwidth { continue }
             let candidates = [
                 track["baseUrl"] as? String,
@@ -145,7 +259,8 @@ actor BiliAdapter {
 
     private func backupUrls(from track: [String: Any]) -> [String] {
         var result: [String] = []
-        for key in ["backupUrl", "backup_url"] {
+        // build 37：补 "backupUrls" 复数键——flac/dolby 对象偶用该形态
+        for key in ["backupUrl", "backup_url", "backupUrls"] {
             if let arr = track[key] as? [String] {
                 result.append(contentsOf: arr)
             }
@@ -191,6 +306,8 @@ actor BiliAdapter {
                 try await Task.sleep(nanoseconds: Self.BACKOFF_MILLIS[attempt - 1])
                 cookiesReady = false
                 forceNewIdentity = true
+                // abts _mitigateRisk：重种 b_nut（毫秒时间戳）抬高后续请求成功率
+                mitigateRisk()
             }
             try await throttle()
             try await ensureBuvidActivated(force: forceNewIdentity)
@@ -206,9 +323,8 @@ actor BiliAdapter {
                 guard let http = response as? HTTPURLResponse else {
                     throw URLError(.badServerResponse)
                 }
-                if http.statusCode == 412 {
-                    throw URLError(.badServerResponse,
-                                   userInfo: [NSLocalizedDescriptionKey: "B站接口风控拦截（HTTP 412）"])
+                if http.statusCode == 412 || http.statusCode == 403 {
+                    throw BiliRiskError(message: "B站接口风控拦截（HTTP \(http.statusCode)）")
                 }
                 guard http.statusCode == 200 else {
                     throw URLError(.badServerResponse,
@@ -226,6 +342,12 @@ actor BiliAdapter {
                 guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                     throw URLError(.badServerResponse,
                                    userInfo: [NSLocalizedDescriptionKey: "B站接口响应异常（非 JSON）"])
+                }
+                // build 37：body 风控码（-412/-352/-509）与 HTTP 412/403 一视同仁——
+                // 抛 BiliRiskError 让本层退避表接管重试（abts _isRiskResponse 口径）
+                if let code = obj["code"] as? Int, Self.isRiskCode(code) {
+                    throw BiliRiskError(message: biliApiError(code: code,
+                                                               message: obj["message"] as? String ?? ""))
                 }
                 return obj
             } catch {
@@ -258,24 +380,28 @@ actor BiliAdapter {
     private func ensureBuvidActivated(force: Bool = false) async throws {
         if buvidActivated && !force { return }
         try await throttle()
-        let existing = cookieValue(name: "buvid3", forHost: "bilibili.com")
-        let buvid3: String
-        if force || existing == nil {
-            buvid3 = Self.genBuvid3()
+        // abts：本地直接种入 buvid3/buvid4——缺设备标识会被判异常请求直接 412
+        if force || cookieValue(name: "buvid3", forHost: "bilibili.com") == nil {
+            let buvid3 = Self.genBuvid3()
             if let cookie = makeCookie(name: "buvid3", value: buvid3, domain: ".bilibili.com") {
                 cookieStorage.setCookie(cookie)
             }
-        } else {
-            buvid3 = existing!
         }
-        // gaia 激活
+        if force || cookieValue(name: "buvid4", forHost: "bilibili.com") == nil {
+            if let cookie = makeCookie(name: "buvid4", value: Self.genBuvid3(), domain: ".bilibili.com") {
+                cookieStorage.setCookie(cookie)
+            }
+        }
+        // gaia 激活（build 37 · abts ExClimbWuzhi 3064/39c8/3c43 载荷，
+        // 请求体为 {"payload": "<payload json 字符串>"}，payload 值整体是一段 JSON 文本）
         do {
-            let payload = Self.buildGaiaPayload(mid: Self.MID_ANONYMOUS, buvid3: buvid3, buvid4: "")
+            let png = Self.genPngBase64()
+            let payload = Self.buildGaiaPayload(pngBase64: png)
             guard let url = URL(string: gaiaUrl) else { return }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = payload.data(using: .utf8)
+            req.httpBody = try JSONSerialization.data(withJSONObject: ["payload": payload])
             let (data, _) = try await session.data(for: req)
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let code = json["code"] as? Int, code == 0,
@@ -289,6 +415,15 @@ actor BiliAdapter {
             // 预激活失败不抛错，由请求层如实上报
         }
         buvidActivated = true
+    }
+
+    /// 风控补救（abts _mitigateRisk 的 b_nut 部分）：重种 b_nut（毫秒时间戳）。
+    /// buvid3/buvid4 由调用侧 forceNewIdentity → ensureBuvidActivated(force:) 重种。
+    private func mitigateRisk() {
+        let nowMs = UInt64(Date().timeIntervalSince1970 * 1000)
+        if let cookie = makeCookie(name: "b_nut", value: String(nowMs), domain: ".bilibili.com") {
+            cookieStorage.setCookie(cookie)
+        }
     }
 
     // MARK: - 节流
@@ -383,15 +518,20 @@ actor BiliAdapter {
 
     // MARK: - 纯函数工具（单测可断言）
 
-    /// buvid3 生成
+    /// buvid3 生成（build 37 · abts genBuvid3：大写 UUID v4 + 5 位零填充随机数 + "infoc"）
     static func genBuvid3(random: inout UInt64) -> String {
-        var result = ""
-        for _ in 0..<BUVID3_LENGTH {
+        func nextMod(_ modulus: UInt64) -> UInt64 {
             random = random &* 6364136223846793005 &+ 1
-            let idx = Int((random >> 33) % UInt64(BUVID3_ALPHABET.count))
-            result.append(BUVID3_ALPHABET[BUVID3_ALPHABET.index(BUVID3_ALPHABET.startIndex, offsetBy: idx)])
+            return (random >> 33) % modulus
         }
-        return result
+        func hex(_ n: Int) -> String {
+            (0..<n).map { _ in String(format: "%x", Int(nextMod(16))) }.joined()
+        }
+        // UUID v4：version 固定 4，variant 取 8..b 一位十六进制
+        let variant = String(format: "%x", Int(8 + nextMod(4)))
+        let uuid = "\(hex(8))-\(hex(4))-4\(hex(3))-\(variant)\(hex(3))-\(hex(12))"
+        let suffix = String(format: "%05d", Int(nextMod(100_000)))
+        return uuid.uppercased() + suffix + "infoc"
     }
 
     /// 确定性 buvid3 生成（单测用）
@@ -405,8 +545,30 @@ actor BiliAdapter {
         genBuvid3(seed: UInt64.random(in: UInt64.min...UInt64.max))
     }
 
-    /// gaia 激活载荷
-    static func buildGaiaPayload(mid: Int, buvid3: String, buvid4: String) -> String {
-        "{\"mid\":\(mid),\"buvid3\":\"\(buvid3)\",\"buvid4\":\"\(buvid4)\"}"
+    /// gaia 激活 PNG（abts bili_client.dart：32 随机字节 + 0,0,0,0,73,69,78,68 + 4 随机字节 → base64）
+    static func genPngBase64(random: inout UInt64) -> String {
+        var bytes: [UInt8] = []
+        for _ in 0..<32 {
+            random = random &* 6364136223846793005 &+ 1
+            bytes.append(UInt8((random >> 33) % 256))
+        }
+        bytes.append(contentsOf: [0, 0, 0, 0, 73, 69, 78, 68])
+        for _ in 0..<4 {
+            random = random &* 6364136223846793005 &+ 1
+            bytes.append(UInt8((random >> 33) % 256))
+        }
+        return Data(bytes).base64EncodedString()
+    }
+
+    /// 运行时入口：系统随机种子生成 gaia PNG
+    static func genPngBase64() -> String {
+        var rng = UInt64.random(in: UInt64.min...UInt64.max)
+        return genPngBase64(random: &rng)
+    }
+
+    /// gaia 激活载荷（build 37 · abts 3064/39c8/3c43 三键 + PNG 尾 50 字符）
+    static func buildGaiaPayload(pngBase64: String) -> String {
+        let tail = String(pngBase64.suffix(50))
+        return "{\"3064\":1,\"39c8\":\"333.1387.fp.risk\",\"3c43\":{\"adca\":\"Linux\",\"bfe9\":\"\(tail)\"}}"
     }
 }

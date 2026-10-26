@@ -51,43 +51,38 @@ final class CoverImageCacheTests: XCTestCase {
 
     // MARK: - P2-3 防盗链 Referer
 
-    /// build 20 必修 1 判别测试：guoguo 图床被 ting15 等源共用，
-    /// 同一封面 URL 按各自源带各自 referer——旧实现按字典序二选一，必有一条失败。
-    /// build 36 · 反馈 4：听吧（ting08）下架后按 ting15 单源重写（原断言引用已删源）。
-    func testMakeRequestSetsRefererByExactSource() {
+    /// build 20 必修 1 判别测试（guoguo 图床防盗链 referer）——build 36/37 听吧、
+    /// 听十五相继下架后按 delisted 语义重写：MSRC 图床不再配置任何 referer
+    /// （下架源的封面 403 属预期降级，源已不在 App 内可达）。
+    func testMakeRequestRefererNilForMsrcHostsAfterDelisting() {
         let url = URL(string: "https://img-book-oss.guoguo.org.cn/cover/1.jpg")!
-        let ting15 = CoverImageCache.makeRequest(for: url, source: SourceRegistry.TING15)
-        XCTAssertEqual(ting15.value(forHTTPHeaderField: "Referer"), "https://m.ting15.com/",
-                       "ting15 源的封面必须带 ting15 的 referer")
-        // img-south-oss 子域同样按源取值
+        XCTAssertNil(CoverImageCache.makeRequest(for: url).value(forHTTPHeaderField: "Referer"),
+                     "无源上下文：MSRC 图床不再配 referer")
+        XCTAssertNil(CoverImageCache.makeRequest(for: url, source: "ting15").value(forHTTPHeaderField: "Referer"),
+                     "已下架源上下文：无 referer")
+        XCTAssertNil(CoverImageCache.makeRequest(for: url, source: SourceRegistry.TINGYOU).value(forHTTPHeaderField: "Referer"),
+                     "未知源上下文回落全局查找，注册表为空亦无 referer")
         let south = URL(string: "https://img-south-oss.guoguo.org.cn/cover/2.jpg")!
-        XCTAssertEqual(
-            CoverImageCache.makeRequest(for: south, source: SourceRegistry.TING15)
-                .value(forHTTPHeaderField: "Referer"), "https://m.ting15.com/")
-        // 非该源图床的源上下文 → 回落全局查找（不误加别的 referer）
-        let tingyou = CoverImageCache.makeRequest(for: url, source: SourceRegistry.TINGYOU)
-        XCTAssertEqual(tingyou.value(forHTTPHeaderField: "Referer"), "https://m.ting15.com/",
-                      "未知源上下文回落旧的按 host 查找（共用源站仅剩 ting15）")
+        XCTAssertNil(CoverImageCache.makeRequest(for: south, source: "ting08").value(forHTTPHeaderField: "Referer"))
     }
 
-    func testMakeRequestSetsRefererForGuoguoImgHost() {
-        // 无源上下文（旧行为兜底）：guoguo 图源仍带 Referer（ting15 使用该图床）
+    func testMakeRequestOmitsRefererForGuoguoImgHostAfterDelisting() {
+        // 无源上下文（旧行为兜底）：guoguo 图床在 ting15/ting08 全下架后无 referer
         let url = URL(string: "https://img-book-oss.guoguo.org.cn/cover/1.jpg")!
         let req = CoverImageCache.makeRequest(for: url)
-        let referer = req.value(forHTTPHeaderField: "Referer")
-        XCTAssertNotNil(referer, "guoguo 图源封面请求必须带 Referer，否则 403 空白")
-        XCTAssertTrue(referer == "https://m.ting15.com/" || referer == "https://www.ting08.com/",
-                      "Referer 应为使用该图床的源站之一，实际 \(referer ?? "nil")")
+        XCTAssertNil(req.value(forHTTPHeaderField: "Referer"),
+                     "MSRC 源全下架后 guoguo 图床不再配 Referer")
     }
 
-    func testMakeRequestSetsRefererForMekuiImgHosts() {
+    func testMakeRequestOmitsRefererForMekuiImgHosts() {
         let shuyinfm = CoverImageCache.makeRequest(
             for: URL(string: "https://shuyinfm.oss-cn-hangzhou.aliyuncs.com/2.jpg")!)
-        XCTAssertEqual(shuyinfm.value(forHTTPHeaderField: "Referer"), "https://m.mekui.com/")
+        XCTAssertNil(shuyinfm.value(forHTTPHeaderField: "Referer"),
+                     "书音FM 下架后其图床不再配 Referer")
 
         let kugou = CoverImageCache.makeRequest(
             for: URL(string: "https://imge.kugou.com/3.jpg")!)
-        XCTAssertEqual(kugou.value(forHTTPHeaderField: "Referer"), "https://m.mekui.com/")
+        XCTAssertNil(kugou.value(forHTTPHeaderField: "Referer"))
     }
 
     func testMakeRequestOmitsRefererForNonRefererHosts() {

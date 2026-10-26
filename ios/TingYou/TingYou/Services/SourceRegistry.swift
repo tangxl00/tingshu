@@ -2,9 +2,7 @@ import Foundation
 
 enum SourceRegistry {
     static let TINGYOU = "tingyou"
-    static let TING15 = "ting15"
     static let YTYXSX = "ytysxs"
-    static let MEKUI = "mekui"
     static let BILI = "bili"
     static let TING59 = "ting59"
     static let IMPORT = "import"
@@ -25,31 +23,11 @@ enum SourceRegistry {
         let audioSuffixes: [String]
     }
 
-    static let ting15 = MsrcSourceConfig(
-        id: "ting15", name: "听十五",
-        siteBase: "https://m.ting15.com", referer: "https://m.ting15.com/",
-        searchPOST: false, extraLHeader: false,
-        searchStart: "class=\"clist\"", searchEnd: "class=\"cpage\"",
-        fetchHosts: ["m.ting15.com"],
-        imgHosts: ["img-book-oss.guoguo.org.cn", "img-south-oss.guoguo.org.cn"],
-        audioExact: ["oss-links.guoguo.org.cn", "cloud.guoguo.org.cn"],
-        audioSuffixes: [".guoguo.org.cn"]
-    )
-
-    static let mekui = MsrcSourceConfig(
-        id: "mekui", name: "书音FM",
-        siteBase: "https://m.mekui.com", referer: "https://m.mekui.com/",
-        searchPOST: false, extraLHeader: false,
-        searchStart: "", searchEnd: "", // JSON API，不走 HTML 切片
-        fetchHosts: ["m.mekui.com", "api.mekui.com"],
-        imgHosts: ["shuyinfm.oss-cn-hangzhou.aliyuncs.com", "img1.kuwo.cn", "img2.kuwo.cn", "img3.kuwo.cn", "img4.kuwo.cn", "imge.kugou.com"],
-        audioExact: ["api.aikeu.com", "mp3.aikeu.com"],
-        audioSuffixes: [".aikeu.com"]
-    )
-
-    static let msrcSources: [String: MsrcSourceConfig] = [
-        TING15: ting15, MEKUI: mekui
-    ]
+    /// build 37 · 反馈 1：听十五（ting15）/ 书音FM（mekui）已下架（同 build 36
+    /// 删听吧 ting08 的模式）——常量与 config 摘除，MSRC 注册表清空。
+    /// MsrcSourceConfig 结构、MsrcAdapter / MekuiAdapter 解析器与离线解析测试保留，
+    /// isKnown / configOf / imageRefererFor 对已下架源自然返回 false / nil / nil。
+    static let msrcSources: [String: MsrcSourceConfig] = [:]
 
     static func displayName(src: String) -> String {
         switch src {

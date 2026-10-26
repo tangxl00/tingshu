@@ -1,3 +1,4 @@
+import UIKit
 import SwiftUI
 
 /// 搜索页（build 22 · 对齐安卓 v1.3.3）：
@@ -53,6 +54,14 @@ struct SearchScreen: View {
             }
         }
         .listStyle(.plain)
+        // build 37 · 反馈 2：点击搜索框以外区域收起输入法——
+        // List 滚动收起 + 列表空白区 tap 主动 resignFirstResponder
+        //（NavigationLink 行点击优先于父手势，不受影响）。
+        .scrollDismissesKeyboard(.immediately)
+        .onTapGesture {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                            to: nil, from: nil, for: nil)
+        }
         .searchable(text: $keyword)
         .onSubmit(of: .search) {
             Task { await search() }

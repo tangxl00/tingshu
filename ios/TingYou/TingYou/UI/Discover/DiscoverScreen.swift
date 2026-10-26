@@ -100,15 +100,28 @@ struct DiscoverScreen: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
 
-                if searchMode && !keyword.isEmpty {
-                    searchResultsContent
-                } else {
-                    // v1.4.3 · 需求 2：搜索历史仅聚焦搜索框时显示——此前常驻显示，
-                    // 失焦或提交搜索（searchMode）即隐藏；未聚焦的默认浏览态不再出现。
-                    if searchFocused {
-                        historySection
+                // build 37 · 反馈 2：点击搜索框以外区域收起输入法——
+                // 搜索框下方内容区整体挂 tap 收焦手势（Button/NavigationLink 等
+                // 子视图点击优先于父手势，历史 chip 与列表行点击行为不受影响），
+                // 并叠加两个 List 的滚动收起（.scrollDismissesKeyboard，
+                // 等价 UIScrollView.keyboardDismissMode.onDrag）。
+                Group {
+                    if searchMode && !keyword.isEmpty {
+                        searchResultsContent
+                    } else {
+                        // v1.4.3 · 需求 2：搜索历史仅聚焦搜索框时显示——此前常驻显示，
+                        // 失焦或提交搜索（searchMode）即隐藏；未聚焦的默认浏览态不再出现。
+                        if searchFocused {
+                            historySection
+                        }
+                        libraryContent
                     }
-                    libraryContent
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if searchFocused {
+                        searchFocused = false
+                    }
                 }
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
@@ -257,6 +270,7 @@ struct DiscoverScreen: View {
                 }
             }
             .listStyle(.plain)
+            .scrollDismissesKeyboard(.immediately)
         }
     }
 
@@ -354,6 +368,7 @@ struct DiscoverScreen: View {
                     }
                 }
                 .listStyle(.plain)
+                .scrollDismissesKeyboard(.immediately)
             }
         }
         .task {

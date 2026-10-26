@@ -22,9 +22,12 @@ final class MekuiAdapter: Sendable {
     private let paidChapters: PaidChapterRegistry
     private let config: SourceRegistry.MsrcSourceConfig
 
+    /// build 37 · 反馈 1：mekui 源下架（SourceRegistry.mekui config 删除）——
+    /// 本适配器按 build 36 删 ting08 的模式保留（签名算法与解析黄金样本由
+    /// MekuiAdapterTests 离线守护）；config 改为必填参数，生产装配点已摘除。
     init(apiClient: APIClient,
          paidChapters: PaidChapterRegistry = .shared,
-         config: SourceRegistry.MsrcSourceConfig = SourceRegistry.mekui) {
+         config: SourceRegistry.MsrcSourceConfig) {
         self.apiClient = apiClient
         self.paidChapters = paidChapters
         self.config = config

@@ -138,9 +138,7 @@ final class Ting59StructuralTests: XCTestCase {
     func testPlaybackRepositoryAcceptsTing59Adapter() {
         let repo = PlaybackRepository(
             apiClient: APIClient(),
-            msrcAdapter: MsrcAdapter(apiClient: APIClient()),
             ytysxsAdapter: YtysxsAdapter(apiClient: APIClient()),
-            mekuiAdapter: MekuiAdapter(apiClient: APIClient()),
             biliAdapter: BiliAdapter(),
             ting59Adapter: Ting59Adapter()
         )
@@ -156,6 +154,44 @@ final class Ting59StructuralTests: XCTestCase {
     }
 
     // MARK: - 列表解析 fixture 验证（离线 HTML）
+
+    /// build 37 · 反馈 4：真实搜索页 clist 形态为 <div class="clist sear_height">
+    /// （fixture 取自 www.ting59.com 搜索页真实结构，带 UTF-8 BOM）——旧精确匹配
+    /// 永远落空导致「搜索无结果」；前缀匹配后两种形态都必须解析出条目。
+    /// build 37 · 反馈 4：真实搜索页 clist 形态为 <div class="clist sear_height">
+    /// （结构取自 www.ting59.com 搜索页真实样本，带 UTF-8 BOM）——旧精确匹配
+    /// 永远落空导致「搜索无结果」；前缀匹配后两种形态都必须解析出条目。
+    func testListParserHitsSearHeightClistFormWithBom() {
+        let html = "\u{FEFF}<div class=\"clist sear_height\"><ul>"
+        + "<li><a href=\"/mp3/19745.html\" title=\"测试书\"><img src=\"https://img.ting59.com/19745.jpg\"/></a>"
+        + "<dl><dd><a href=\"/mp3/19745.html\" title=\"测试书\"><b>测试书</b></a>"
+        + "<p>作者：某作者</p><p>播音：小D</p></dd></dl></li>"
+        + "</ul><div class=\"page\">共1条 <a href=\"/search.php?wd=%E4%B9%A6&amp;page=2\">下一页</a></div></div>"
+        let result = Ting59ListParsers.parseSearch(doc: html)
+        XCTAssertEqual(result.list.count, 1, "sear_height 形态必须解析出条目")
+        XCTAssertEqual(result.list.first?.id, "19745")
+        XCTAssertEqual(result.list.first?.title, "测试书")
+        XCTAssertEqual(result.list.first?.author, "某作者")
+        XCTAssertEqual(result.list.first?.narrator, "小D")
+        XCTAssertTrue(result.hasMore, "分页区含「下一页」锚点")
+        XCTAssertEqual(result.total, 1, "「共1条」总数解析")
+    }
+
+    /// build 37 · 反馈 4：分类页 <div class="clist"> 纯形态回归守护（前缀匹配不得破坏旧形态）。
+    func testListParserStillHitsPlainClistForm() {
+        let html = "<div class=\"clist\"><ul><li><a href=\"/mp3/123.html\" title=\"分类书\"><b>分类书</b></a></li></ul>"
+        + "<div class=\"page\">共1条</div></div>"
+        let result = Ting59ListParsers.parseSearch(doc: html)
+        XCTAssertEqual(result.list.count, 1, "纯 clist 形态继续命中")
+        XCTAssertEqual(result.list.first?.id, "123")
+    }
+
+    /// build 37 · 反馈 4：同前缀类名（clist2）不得误命中——边界校验回归。
+    func testListParserRejectsClistPrefixLookalike() {
+        let html = "<div class=\"clist2\"><ul><li><a href=\"/mp3/9.html\" title=\"假条目\"><b>假条目</b></a></li></ul></div>"
+        let result = Ting59ListParsers.parseSearch(doc: html)
+        XCTAssertTrue(result.list.isEmpty, "clist2 等同前缀类名不得被误认为 clist 容器")
+    }
 
     func testListParserHandlesEmptySearchResult() {
         let html = "<div class=\"clist\"><ul></ul><div class=\"page\">共0条</div></div>"

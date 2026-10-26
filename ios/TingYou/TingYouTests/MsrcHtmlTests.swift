@@ -5,6 +5,21 @@ import XCTest
 /// 搜索 / 详情 / 两步 token 播放响应，覆盖 BOM、status 双形态、付费/频控码。
 final class MsrcHtmlTests: XCTestCase {
 
+    /// build 37 · 反馈 1：ting15 下架（SourceRegistry.ting15 删除）——以本地构造的
+    /// 同形态 config（原黄金值）继续守护 MsrcHtml 解析（同 build 36 ting08 样板）。
+    private func ting15Cfg() -> SourceRegistry.MsrcSourceConfig {
+        SourceRegistry.MsrcSourceConfig(
+            id: "ting15", name: "听十五",
+            siteBase: "https://m.ting15.com", referer: "https://m.ting15.com/",
+            searchPOST: false, extraLHeader: false,
+            searchStart: "class=\"clist\"", searchEnd: "class=\"cpage\"",
+            fetchHosts: ["m.ting15.com"],
+            imgHosts: ["img-book-oss.guoguo.org.cn", "img-south-oss.guoguo.org.cn"],
+            audioExact: ["oss-links.guoguo.org.cn", "cloud.guoguo.org.cn"],
+            audioSuffixes: [".guoguo.org.cn"]
+        )
+    }
+
     // MARK: - 搜索
 
     private let ting15SearchHtml = """
@@ -28,7 +43,7 @@ final class MsrcHtmlTests: XCTestCase {
     """
 
     func testParseSearchTing15Golden() {
-        let items = MsrcHtml.parseSearch(cfg: SourceRegistry.ting15, html: ting15SearchHtml)
+        let items = MsrcHtml.parseSearch(cfg: ting15Cfg(), html: ting15SearchHtml)
         XCTAssertEqual(items.count, 2, "同 detailPath 的第三条应去重")
         XCTAssertEqual(items[0].title, "斗罗大陆")
         XCTAssertEqual(items[0].detailPath, "/youshengxiaoshuo/1001.html")
@@ -63,8 +78,8 @@ final class MsrcHtmlTests: XCTestCase {
     }
 
     func testParseSearchEmptyHtmlDegradesToEmpty() {
-        XCTAssertTrue(MsrcHtml.parseSearch(cfg: SourceRegistry.ting15, html: "").isEmpty)
-        XCTAssertTrue(MsrcHtml.parseSearch(cfg: SourceRegistry.ting15, html: "<html>404</html>").isEmpty)
+        XCTAssertTrue(MsrcHtml.parseSearch(cfg: ting15Cfg(), html: "").isEmpty)
+        XCTAssertTrue(MsrcHtml.parseSearch(cfg: ting15Cfg(), html: "<html>404</html>").isEmpty)
     }
 
     // MARK: - 详情

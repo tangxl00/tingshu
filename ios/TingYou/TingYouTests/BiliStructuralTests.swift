@@ -93,14 +93,23 @@ final class BiliStructuralTests: XCTestCase {
         XCTAssertNil(BiliSource.parseChapterUri("https://example.com"))
     }
 
-    // MARK: - B6 · buvid3 生成 32 位且同种子可复现
+    // MARK: - B6 · buvid3 生成 46 位（UUID v4 大写 + 5 位零填充 + infoc）且同种子可复现
 
     func testGenBuvid3LengthAndReproducibility() {
         let a = BiliAdapter.genBuvid3(seed: 42)
         let b = BiliAdapter.genBuvid3(seed: 42)
-        XCTAssertEqual(a.count, 32, "buvid3 必须为 32 位")
+        // build 37 · abts 口径：UUID v4（36 位）+ 5 位零填充随机数 + "infoc" = 46 位
+        XCTAssertEqual(a.count, BiliAdapter.BUVID3_LENGTH, "buvid3 必须为 46 位")
+        XCTAssertEqual(a.count, 46, "buvid3 必须为 46 位")
         XCTAssertEqual(a, b, "同种子必须可复现")
         XCTAssertNotEqual(BiliAdapter.genBuvid3(seed: 43), a, "不同种子应不同")
+        XCTAssertTrue(a.hasSuffix("infoc"), "abts 口径：以 infoc 结尾")
+        let uuidPart = String(a.prefix(36))
+        XCTAssertEqual(uuidPart, uuidPart.uppercased(), "UUID 段必须大写")
+        XCTAssertEqual(uuidPart[uuidPart.index(uuidPart.startIndex, offsetBy: 14)], "4",
+                       "UUID version 固定为 4")
+        let digitPart = String(a.dropFirst(36).prefix(5))
+        XCTAssertTrue(digitPart.allSatisfy { $0.isNumber }, "UUID 后为 5 位零填充数字")
     }
 
     // MARK: - B7 · 搜索 URL 构造含签名与范围限定
@@ -157,9 +166,7 @@ final class BiliStructuralTests: XCTestCase {
         // 若能成功构造（含 biliAdapter 参数）即证明装配点存在
         let repo = PlaybackRepository(
             apiClient: APIClient(),
-            msrcAdapter: MsrcAdapter(apiClient: APIClient()),
             ytysxsAdapter: YtysxsAdapter(apiClient: APIClient()),
-            mekuiAdapter: MekuiAdapter(apiClient: APIClient()),
             biliAdapter: BiliAdapter(),
             ting59Adapter: Ting59Adapter()
         )
@@ -184,12 +191,58 @@ final class BiliStructuralTests: XCTestCase {
         XCTAssertNotNil(BiliCategories.of("hot"))
     }
 
-    // MARK: - gaia 载荷格式
+    // MARK: - gaia 载荷格式（build 37 · abts 3064/39c8/3c43 三键）
 
     func testBuildGaiaPayloadFormat() {
-        let payload = BiliAdapter.buildGaiaPayload(mid: 1, buvid3: "abc123", buvid4: "def456")
-        XCTAssertTrue(payload.contains("\"mid\":1"))
-        XCTAssertTrue(payload.contains("\"buvid3\":\"abc123\""))
-        XCTAssertTrue(payload.contains("\"buvid4\":\"def456\""))
+        let png = String(repeating: "A", count: 80)
+        let payload = BiliAdapter.buildGaiaPayload(pngBase64: png)
+        XCTAssertTrue(payload.contains("\"3064\":1"), "abts 3064 键")
+        XCTAssertTrue(payload.contains("\"39c8\":\"333.1387.fp.risk\""), "abts 39c8 键")
+        XCTAssertTrue(payload.contains("\"3c43\""), "abts 3c43 键")
+        XCTAssertTrue(payload.contains("\"adca\":\"Linux\""))
+        let expectedBfe9 = "\"bfe9\":\"" + String(repeating: "A", count: 50) + "\""
+        XCTAssertTrue(payload.contains(expectedBfe9), "bfe9 取 PNG base64 尾 50 字符")
+    }
+
+    func testGenGaiaPngBase64Deterministic() {
+        var r1: UInt64 = 7
+        var r2: UInt64 = 7
+        let a = BiliAdapter.genPngBase64(random: &r1)
+        let b = BiliAdapter.genPngBase64(random: &r2)
+        XCTAssertEqual(a, b, "同种子 PNG 必须可复现")
+        XCTAssertGreaterThanOrEqual(a.count, 50, "PNG base64 至少 50 字符（尾部取 50）")
+        XCTAssertNotEqual(BiliAdapter.genPngBase64(), a, "运行时入口应为系统随机")
+    }
+
+    // MARK: - B13 · build 37 WBI playurl URL 构造（abts playUrl 参数口径）
+
+    func testBuildPlayUrlContainsRequiredParams() {
+        let url = BiliAdapter.buildPlayUrl(
+            apiBase: "https://api.bilibili.com",
+            bvid: "BV1xx411c7mD",
+            cid: 123456,
+            wbiKey: "deadbeefdeadbeefdeadbeefdeadbeef",
+            wtsSeconds: 1700000000
+        )
+        XCTAssertTrue(url.hasPrefix("https://api.bilibili.com/x/player/wbi/playurl?"),
+                      "必须走 WBI 签名 playurl 端点")
+        XCTAssertTrue(url.contains("bvid=BV1xx411c7mD"))
+        XCTAssertTrue(url.contains("cid=123456"))
+        XCTAssertTrue(url.contains("qn=80"))
+        XCTAssertTrue(url.contains("fnval=4048"))
+        XCTAssertTrue(url.contains("fnver=0"))
+        XCTAssertTrue(url.contains("fourk=1"))
+        XCTAssertTrue(url.contains("try_look=1"))
+        XCTAssertTrue(url.contains("gaia_source=prefer-ua"))
+        XCTAssertTrue(url.contains("wts=1700000000"))
+        XCTAssertTrue(url.contains("w_rid="), "必须含 WBI 签名")
+    }
+
+    func testIsRiskCodeMatchesAbtsSet() {
+        XCTAssertTrue(BiliAdapter.isRiskCode(-412))
+        XCTAssertTrue(BiliAdapter.isRiskCode(-352))
+        XCTAssertTrue(BiliAdapter.isRiskCode(-509))
+        XCTAssertFalse(BiliAdapter.isRiskCode(0))
+        XCTAssertFalse(BiliAdapter.isRiskCode(-404), "404 等业务错误不属于风控")
     }
 }

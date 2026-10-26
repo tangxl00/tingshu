@@ -68,6 +68,21 @@ final class SearchHistoryStoreTests: XCTestCase {
 /// 判别力：build 20 发现页固定 6 个 section 硬编码——DiscoverCatalog 不存在。
 final class DiscoverCatalogTests: XCTestCase {
 
+    /// build 37 · 反馈 1：ting15 下架（SourceRegistry.ting15 删除）——以本地构造的
+    /// 同形态 config（原黄金值）继续守护 MsrcHtml 分类页解析（同 build 36 ting08 样板）。
+    private func ting15Cfg() -> SourceRegistry.MsrcSourceConfig {
+        SourceRegistry.MsrcSourceConfig(
+            id: "ting15", name: "听十五",
+            siteBase: "https://m.ting15.com", referer: "https://m.ting15.com/",
+            searchPOST: false, extraLHeader: false,
+            searchStart: "class=\"clist\"", searchEnd: "class=\"cpage\"",
+            fetchHosts: ["m.ting15.com"],
+            imgHosts: ["img-book-oss.guoguo.org.cn", "img-south-oss.guoguo.org.cn"],
+            audioExact: ["oss-links.guoguo.org.cn", "cloud.guoguo.org.cn"],
+            audioSuffixes: [".guoguo.org.cn"]
+        )
+    }
+
     func testTingyouCategoriesMatchRankSections() {
         let cats = DiscoverCatalog.categories(for: SourceRegistry.TINGYOU)
         XCTAssertEqual(cats.count, 5)
@@ -75,10 +90,16 @@ final class DiscoverCatalogTests: XCTestCase {
                        "tingyou 分类必须与 rank API 支持的 section 一一对应")
     }
 
-    func testTing15CategoriesFromRealNav() {
-        let cats = DiscoverCatalog.categories(for: SourceRegistry.TING15)
-        XCTAssertEqual(cats.count, 10, "m.ting15.com 首页导航 10 个分类（2026-10-20 实测）")
-        XCTAssertTrue(cats.contains(DiscoverCategory(id: "jingdianpingshu", name: "经典评书")))
+    /// build 37 · 反馈 1：听十五（ting15）/ 书音FM（mekui）下架——分类清单不得残留。
+    func testTing15AndMekuiRemovedFromCatalog() {
+        XCTAssertTrue(DiscoverCatalog.categories(for: "ting15").isEmpty,
+                      "听十五已下架，不再提供分类数据")
+        XCTAssertTrue(DiscoverCatalog.categories(for: "mekui").isEmpty,
+                      "书音FM 已下架，不再提供分类数据")
+        XCTAssertFalse(DiscoverCatalog.sourceOptions.contains { $0.id == "ting15" },
+                       "听十五不得残留在发现页可选音源中")
+        XCTAssertFalse(DiscoverCatalog.sourceOptions.contains { $0.id == "mekui" },
+                       "书音FM 不得残留在发现页可选音源中")
     }
 
     /// build 36 · 反馈 4：听吧（ting08）已下架——分类清单与可选音源均不得残留。
@@ -90,26 +111,33 @@ final class DiscoverCatalogTests: XCTestCase {
     }
 
     func testUnsupportedSources() {
-        XCTAssertTrue(DiscoverCatalog.unsupportedSources.contains(SourceRegistry.MEKUI))
         XCTAssertTrue(DiscoverCatalog.unsupportedSources.contains(SourceRegistry.YTYXSX))
         XCTAssertFalse(DiscoverCatalog.unsupportedSources.contains(SourceRegistry.TINGYOU))
     }
 
     func testCategoryPageURLBuiltCorrectly() {
-        let url = DiscoverCatalog.categoryPageURL(cfg: SourceRegistry.ting15, categoryId: "pingshu", page: 2)
+        // build 37：ting15 已下架，以本地同形态 config 继续守护 URL 构造逻辑
+        let url = DiscoverCatalog.categoryPageURL(cfg: ting15Cfg(), categoryId: "pingshu", page: 2)
         XCTAssertEqual(url, "https://m.ting15.com/pingshu/index2.html")
     }
 
     func testCategoryPageURLRejectsInvalidCategoryId() {
         // 防 URL 注入：大写/特殊字符/路径穿越的分类 id 拒绝
-        XCTAssertNil(DiscoverCatalog.categoryPageURL(cfg: SourceRegistry.ting15, categoryId: "Pingshu", page: 1))
-        XCTAssertNil(DiscoverCatalog.categoryPageURL(cfg: SourceRegistry.ting15, categoryId: "../etc", page: 1))
-        XCTAssertNil(DiscoverCatalog.categoryPageURL(cfg: SourceRegistry.ting15, categoryId: "a b", page: 1))
+        XCTAssertNil(DiscoverCatalog.categoryPageURL(cfg: ting15Cfg(), categoryId: "Pingshu", page: 1))
+        XCTAssertNil(DiscoverCatalog.categoryPageURL(cfg: ting15Cfg(), categoryId: "../etc", page: 1))
+        XCTAssertNil(DiscoverCatalog.categoryPageURL(cfg: ting15Cfg(), categoryId: "a b", page: 1))
     }
 
-    func testCategoryPageURLNilForMekui() {
-        XCTAssertNil(DiscoverCatalog.categoryPageURL(cfg: SourceRegistry.mekui, categoryId: "any", page: 1),
-                     "mekui 走 JSON API 无分类页 HTML")
+    func testCategoryPageURLNilForNonTing15Config() {
+        // build 37：mekui 已下架；用本地构造的非 ting15 config 守护「只对 ting15 形态放行」
+        let mekuiLike = SourceRegistry.MsrcSourceConfig(
+            id: "mekui", name: "书音FM",
+            siteBase: "https://m.mekui.com", referer: "https://m.mekui.com/",
+            searchPOST: false, extraLHeader: false,
+            searchStart: "", searchEnd: "",
+            fetchHosts: ["m.mekui.com"], imgHosts: [], audioExact: [], audioSuffixes: [])
+        XCTAssertNil(DiscoverCatalog.categoryPageURL(cfg: mekuiLike, categoryId: "any", page: 1),
+                     "非 ting15 形态 config 不放行分类页 URL")
     }
 }
 
@@ -117,6 +145,21 @@ final class DiscoverCatalogTests: XCTestCase {
 /// ting15 分类页与搜索页同模板（clist 切片 + 相同条目形态；ting08 模板形态样本保留于 MsrcHtmlTests），
 /// parseSearch 应直接命中；分页链接 index{N}.html 供 hasMore 判定。
 final class DiscoverCategoryParseTests: XCTestCase {
+
+    /// build 37 · 反馈 1：ting15 下架（SourceRegistry.ting15 删除）——以本地构造的
+    /// 同形态 config（原黄金值）继续守护 MsrcHtml 分类页解析（同 build 36 ting08 样板）。
+    private func ting15Cfg() -> SourceRegistry.MsrcSourceConfig {
+        SourceRegistry.MsrcSourceConfig(
+            id: "ting15", name: "听十五",
+            siteBase: "https://m.ting15.com", referer: "https://m.ting15.com/",
+            searchPOST: false, extraLHeader: false,
+            searchStart: "class=\"clist\"", searchEnd: "class=\"cpage\"",
+            fetchHosts: ["m.ting15.com"],
+            imgHosts: ["img-book-oss.guoguo.org.cn", "img-south-oss.guoguo.org.cn"],
+            audioExact: ["oss-links.guoguo.org.cn", "cloud.guoguo.org.cn"],
+            audioSuffixes: [".guoguo.org.cn"]
+        )
+    }
 
     /// m.ting15.com/jingdianpingshu/ 实测结构节选（2026-10-20，条目为真实数据）
     private let ting15CategoryHtml = """
@@ -168,8 +211,9 @@ final class DiscoverCategoryParseTests: XCTestCase {
     </body></html>
     """
 
+    /// build 37 · 反馈 1：ting15 已下架——本地同形态 config 继续守护解析能力。
     func testParseTing15CategoryPage() {
-        let items = MsrcHtml.parseSearch(cfg: SourceRegistry.ting15, html: ting15CategoryHtml)
+        let items = MsrcHtml.parseSearch(cfg: ting15Cfg(), html: ting15CategoryHtml)
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items[0].title, "李元霸别传")
         XCTAssertEqual(items[0].detailPath, "/jingdianpingshu/2111.html")

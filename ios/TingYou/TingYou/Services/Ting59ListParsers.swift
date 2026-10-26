@@ -29,19 +29,28 @@ enum Ting59ListParsers {
     )
 
     static func parseSearch(doc: String) -> Ting59SearchResult {
-        let items = extractListItems(html: doc)
+        let html = stripBom(doc)
+        let items = extractListItems(html: html)
         let books = items.compactMap { parseItem(html: $0) }
         return Ting59SearchResult(
             list: books,
-            hasMore: hasMore(html: doc),
-            total: totalFromPage(html: doc)
+            hasMore: hasMore(html: html),
+            total: totalFromPage(html: html)
         )
     }
 
     static func parseCategory(doc: String) -> Ting59CategoryResult {
-        let items = extractListItems(html: doc)
+        let html = stripBom(doc)
+        let items = extractListItems(html: html)
         let books = items.compactMap { parseItem(html: $0) }
-        return Ting59CategoryResult(books: books, hasMore: hasMore(html: doc))
+        return Ting59CategoryResult(books: books, hasMore: hasMore(html: html))
+    }
+
+    /// build 37 · 反馈 4：站点响应带 UTF-8 BOM（EF BB BF），整页解析前剥除；
+    /// 字符串 range 查找本身不受 BOM 影响，此为防御性剥除（BOM 出现在页首时
+    /// 保证首标签定位与 fixture 断言行为一致）。
+    private static func stripBom(_ s: String) -> String {
+        s.hasPrefix("\u{FEFF}") ? String(s.dropFirst()) : s
     }
 
     // MARK: - 分页
@@ -70,10 +79,29 @@ enum Ting59ListParsers {
 
     // MARK: - 列表条目提取
 
+    /// 定位 clist 容器起始：匹配 `<div class="clist` 前缀后，校验下一字符为
+    /// 引号 / 空格 / `>` 之一（分别对应 `class="clist"`、`class="clist sear_height"`
+    /// 与无引号写法）；其他字符（如 clist2 的数字）视为同前缀类名，继续向后找。
+    private static func findClistStart(_ html: String) -> Range<String.Index>? {
+        var searchStart = html.startIndex
+        while let r = html[searchStart...].range(of: "<div class=\"clist") {
+            let after = r.upperBound
+            guard after < html.endIndex else { return nil }
+            let next = html[after]
+            if next == "\"" || next == " " || next == ">" { return r }
+            searchStart = after
+        }
+        return nil
+    }
+
     private static func extractListItems(html: String) -> [String] {
         var items: [String] = []
         // 定位 div.clist > ul 内的 li 条目
-        guard let clistStart = html.range(of: "<div class=\"clist\"") else { return items }
+        // build 37 · 反馈 4：真实搜索页形态为 <div class="clist sear_height">、
+        // 分类页为 <div class="clist">——旧实现精确匹配 `"clist"`（后紧跟引号）在
+        // 搜索页永远落空（搜索无结果的直接根因）。改为前缀匹配 + 边界校验，
+        // 两种形态都命中，且不误伤 clistX 之类同前缀类名。
+        guard let clistStart = findClistStart(html) else { return items }
         let clistSection = String(html[clistStart.lowerBound...])
         guard let ulStart = clistSection.range(of: "<ul>") else { return items }
         let ulSection = String(clistSection[ulStart.lowerBound...])

@@ -22,8 +22,11 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         // build 27（空白页候选修复）：悦听站点对 WebView 默认 UA 的响应差异——
-        // 显式带上 Safari/WebKit 标识（保持 iOS 真实形态，不伪装桌面 UA）
-        config.applicationNameForUserAgent = "TingYou/1.3.3 Safari/605.1.15"
+        // 显式带上 Safari/WebKit 标识（保持 iOS 真实形态，不伪装桌面 UA）。
+        // build 37 · 反馈 5：原硬编码 "TingYou/1.3.3" 版本陈旧且覆写偏旧，易被站点
+        // UA 风控误判——改为读取当前 CFBundleShortVersionString 动态拼接。
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4"
+        config.applicationNameForUserAgent = "TingYou/\(appVersion) Safari/605.1.15"
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         return webView
@@ -90,6 +93,22 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
             }
         }
 
+        /// build 37 · 反馈 5：预加载阶段失败（DNS/TLS/连接被拒/超时）此前不产生任何
+        /// 回调 UI——loading 转圈卡死、无错误提示（「验证页面加载不出来」的直接根因）。
+        /// 补齐与 didFail 一致的失败路径（错误提示 + 重试，复用 sheet 层 .id(retryToken)
+        /// 重建机制）；重试重建引发的 NSURLErrorCancelled 静默清态、不误报。
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            let ns = error as NSError
+            guard ns.code != NSURLErrorCancelled else {
+                DispatchQueue.main.async { [onLoadingChange] in onLoadingChange(false) }
+                return
+            }
+            DispatchQueue.main.async { [onLoadingChange, onLoadError] in
+                onLoadingChange(false)
+                onLoadError(ns.localizedDescription)
+            }
+        }
+
         /// build 27：导航被取消（系统侧 w/ NSURLErrorCancelled）不算失败也不算成功——
         /// 清加载态静默返回（重试场景常见，不能误报错误）。
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -112,6 +131,28 @@ struct YtysxsVerifySheet: View {
     @State private var loadErrorText: String?
     /// build 27：重试触发（更新即让 WebView updateUIView 重新 load）
     @State private var retryToken = 0
+    /// build 37 · 反馈 5：加载超时兜底任务——慢网络 / 连接挂起（无任何导航回包）时
+    /// 25 秒后提示超时可重试，不再无限转圈。随 loading 状态启停：didFinish/didFail/
+    /// didFailProvisional 任一回包即取消；重试重建 WebView 后由新一轮 loading 重新计时。
+    @State private var loadTimeoutTask: Task<Void, Never>?
+
+    /// build 37 · 反馈 5：超时兜底时长 25 秒（20~30s 建议区间取中，站点实测 3.5s/136KB）。
+    private static let loadTimeoutNanos: UInt64 = 25_000_000_000
+
+    private func startLoadTimeout() {
+        loadTimeoutTask?.cancel()
+        loadTimeoutTask = Task {
+            try? await Task.sleep(nanoseconds: Self.loadTimeoutNanos)
+            guard !Task.isCancelled else { return }
+            isLoading = false
+            loadErrorText = "验证页加载超时（25 秒），请检查网络后重试"
+        }
+    }
+
+    private func cancelLoadTimeout() {
+        loadTimeoutTask?.cancel()
+        loadTimeoutTask = nil
+    }
 
     var body: some View {
         NavigationStack {
@@ -124,7 +165,12 @@ struct YtysxsVerifySheet: View {
                     },
                     onLoadingChange: { loading in
                         isLoading = loading
-                        if loading { loadErrorText = nil }
+                        if loading {
+                            loadErrorText = nil
+                            startLoadTimeout()
+                        } else {
+                            cancelLoadTimeout()
+                        }
                     },
                     onLoadError: { text in
                         loadErrorText = text
