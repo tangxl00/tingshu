@@ -196,7 +196,10 @@ enum Ting59ListParsers {
     // MARK: - HTML 辅助
 
     private static func extractAttr(text: String, attr: String) -> String? {
-        let pattern = #"\#(attr)=\"([^\"]+)\""#
+        // NOTE(build37): 此前用 raw string 插值构造 #"\#(attr)=\"([^\"]+)\""#，
+        // 在 CI（Xcode 26.3 / iOS 26.2 SDK）上运行时触发 NSRegularExpression ObjC 异常；
+        // 改为普通字符串拼接，产出无反斜杠转义的 pattern（引号非正则元字符，无需转义）。
+        let pattern = attr + "=\"([^\"]+)\""
         let re = try! NSRegularExpression(pattern: pattern, options: [])
         let range = NSRange(text.startIndex..., in: text)
         guard let match = re.firstMatch(in: text, options: [], range: range),
