@@ -236,7 +236,8 @@ struct ShelfScreen: View {
     @ViewBuilder
     private var importedContent: some View {
         if importedBooks.isEmpty {
-            ContentUnavailableView("暂无导入书籍", systemImage: "arrow.down.circle", description: Text("点右上角「+」从B站或59听书网导入书籍"))
+            // 「+」导入按钮已下线，空态引导改为指向现存的发现页入口
+            ContentUnavailableView("暂无导入书籍", systemImage: "arrow.down.circle", description: Text("去发现页搜索或点书收藏，即可把书加入书架"))
         } else if layout == 0 {
             List {
                 ForEach(importedBooks) { book in

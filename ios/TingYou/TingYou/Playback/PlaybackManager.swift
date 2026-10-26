@@ -24,6 +24,130 @@ enum ProxiedCdnHosts {
     }
 }
 
+/// build 33 · P0-2：代理流会话 delegate——URLSession dataTask 的 didReceive 回调
+/// 按网络读取块（一次一大段 Data）respond 给 AVAssetResourceLoadingDataReceiver，
+/// 取代 build 32 的 `for try await byte in bytes` 逐字节迭代（每字节一次异步
+/// 挂起，真机上表现为长时间缓冲不播——用户 build 32 反馈"仍无法播放"的头号嫌疑）。
+/// 口径保持不变的部分：
+/// - 证书固定：质询转发给内部 PinningURLSessionDelegate，fail-closed 同
+///   build 32 的 proxySession 挂载（取证 C：bilivideo.com 在后缀白名单内）；
+/// - 媒体元信息回填：Content-Type→UTI、206 Content-Range 总长、可分段标志；
+/// - 2xx 守卫与文案、取消语义（loadingRequest.isCancelled / 外层 Task 取消
+///   均静默止流，不误报错误）。
+/// 多 loadingRequest 在同一 session 上并发（AVFoundation 信息请求+多段数据请求），
+/// 以 taskIdentifier 索引各自持有。
+private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate {
+    private let pinning = PinningURLSessionDelegate()
+    private let lock = NSLock()
+    private var loadingRequests: [Int: AVAssetResourceLoadingRequest] = [:]
+    private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
+    /// 已完成但 awaitCompletion 尚未挂起的任务（先完成后等待的边界序）
+    private var finishedEarly: Set<Int> = []
+
+    // MARK: 生命周期（PlaybackManager.proxyMedia 驱动）
+
+    func attach(_ loadingRequest: AVAssetResourceLoadingRequest, to task: URLSessionTask) {
+        lock.lock()
+        defer { lock.unlock() }
+        loadingRequests[task.taskIdentifier] = loadingRequest
+    }
+
+    /// 挂起外层 Task 直到该 URLSessionTask 完成（didComplete 唤醒）
+    func awaitCompletion(of task: URLSessionTask) async {
+        await withCheckedContinuation { cont in
+            lock.lock()
+            defer { lock.unlock() }
+            if finishedEarly.remove(task.taskIdentifier) != nil {
+                cont.resume() // 任务已先行完成（如立即 4xx）：直接放行
+            } else {
+                continuations[task.taskIdentifier] = cont
+            }
+        }
+    }
+
+    private func request(for task: URLSessionTask) -> AVAssetResourceLoadingRequest? {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadingRequests[task.taskIdentifier]
+    }
+
+    private func finish(task: URLSessionTask) {
+        lock.lock()
+        loadingRequests.removeValue(forKey: task.taskIdentifier)
+        let cont = continuations.removeValue(forKey: task.taskIdentifier)
+        if cont == nil { finishedEarly.insert(task.taskIdentifier) }
+        lock.unlock()
+        cont?.resume()
+    }
+
+    // MARK: URLSessionDataDelegate
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let request = request(for: dataTask) else {
+            completionHandler(.cancel)
+            return
+        }
+        guard let http = response as? HTTPURLResponse else {
+            request.finishLoading(with: URLError(.badServerResponse))
+            completionHandler(.cancel)
+            return
+        }
+        guard (200...299).contains(http.statusCode) else {
+            request.finishLoading(with: URLError(.badServerResponse, userInfo: [
+                NSLocalizedDescriptionKey: "音频服务器拒绝访问（HTTP \(http.statusCode)），请稍后重试",
+            ]))
+            completionHandler(.cancel)
+            return
+        }
+        // 媒体元信息（首个信息请求）：Content-Type→UTI、总长度、可分段标志（口径同 build 32）
+        if let info = request.contentInformationRequest {
+            if let mime = http.mimeType {
+                info.contentType = UTType(mimeType: mime)?.identifier ?? UTType.audio.identifier
+            }
+            if http.statusCode == 206,
+               let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
+               let total = contentRange.split(separator: "/").last.flatMap({ Int64($0) }),
+               total > 0 {
+                info.contentLength = total
+            } else {
+                info.contentLength = http.expectedContentLength
+            }
+            info.isByteRangeAccessSupported = true
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let request = request(for: dataTask) else { return }
+        guard !request.isCancelled else {
+            dataTask.cancel() // AVFoundation 已放弃本请求（seek/切章）：止流
+            return
+        }
+        request.dataRequest?.respond(with: data)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let request = request(for: task) else { return }
+        defer { finish(task: task) }
+        if request.isCancelled { return } // loadingRequest 侧取消：静默（build 32 同口径）
+        if let urlError = error as? URLError, urlError.code == .cancelled { return } // 外层 Task 取消连带止流：静默
+        if let error {
+            request.finishLoading(with: error)
+        } else {
+            request.finishLoading()
+        }
+    }
+
+    // MARK: 证书固定（fail-closed，转发内部 PinningURLSessionDelegate）
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        pinning.urlSession(session, didReceive: challenge, completionHandler: completionHandler)
+    }
+}
+
 @Observable
 final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoaderDelegate {
     private let player = AVPlayer()
@@ -55,21 +179,14 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// PlayerScreen 显示非阻断提示（含重试）；切章/重试时清空。
     private(set) var playbackError: String?
 
-    /// v1.4.3 · P0（取证 A）：B站 CDN 代理取流专用 session——带 Referer/UA（B站 CDN
-    /// 实测裸请求一律 403），并挂证书固定 delegate（代理路径同样 fail-closed，
-    /// bilivideo.com 等已在 PinnedDomainAllowlist 后缀白名单内，取证 C 核实）。
-    private let proxySession: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60 * 60 * 6 // 长音频流式，资源级放宽
-        config.httpAdditionalHeaders = [
-            "User-Agent": BiliAdapter.USER_AGENT,
-            "Referer": BiliAdapter.REFERER,
-            "Origin": BiliAdapter.REFERER,
-        ]
-        return URLSession(configuration: config, delegate: PinningURLSessionDelegate(),
-                          delegateQueue: nil)
-    }()
+    /// v1.4.3 · P0（取证 A）+ build 33 · P0-2：B站 CDN 代理取流专用 session——
+    /// 带 Referer/UA（B站 CDN 实测裸请求一律 403）；证书固定 fail-closed
+    /// （bilivideo.com 等已在 PinnedDomainAllowlist 后缀白名单内，取证 C 核实）。
+    /// build 33：delegate 升级为 ProxyStreamSessionDelegate（内部转发质询给
+    /// PinningURLSessionDelegate，挂载口径不变），dataTask 按块回调转发。
+    /// 在 init 装配：存储属性初始化器不能引用其它实例属性。
+    private let proxyStreamDelegate = ProxyStreamSessionDelegate()
+    private let proxySession: URLSession
 
     // MARK: - Bug 2 播放历史落库 + 增强 5.3 下一章预取
 
@@ -207,6 +324,20 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     init(playbackRepository: PlaybackRepository? = nil, skipStore: SkipSettingsStore = SkipSettingsStore()) {
         self.playbackRepository = playbackRepository
         self.skipStore = skipStore
+        // build 33 · P0-2：代理流 session 构造器装配（配置与 build 32 完全一致：
+        // Referer/UA/Origin 头 + 30s 请求超时 / 6h 资源超时；delegate 为
+        // ProxyStreamSessionDelegate——证书固定转发 + dataTask 按块转发）
+        let proxyConfig = URLSessionConfiguration.default
+        proxyConfig.timeoutIntervalForRequest = 30
+        proxyConfig.timeoutIntervalForResource = 60 * 60 * 6 // 长音频流式，资源级放宽
+        proxyConfig.httpAdditionalHeaders = [
+            "User-Agent": BiliAdapter.USER_AGENT,
+            "Referer": BiliAdapter.REFERER,
+            "Origin": BiliAdapter.REFERER,
+        ]
+        self.proxySession = URLSession(configuration: proxyConfig,
+                                       delegate: proxyStreamDelegate,
+                                       delegateQueue: nil)
         super.init()
         _speed = UserDefaults.standard.float(forKey: "playback_speed")
         if _speed < 0.5 || _speed > 4.0 { _speed = 1.0 }
@@ -458,8 +589,13 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     }
 
     /// v1.4.3 · P0（取证 A）：代理取流——用 proxySession（Referer/UA + 证书固定）
-    /// 请求直链，流式喂给 AVAssetResourceLoadingRequest。支持 Range（AVFoundation
+    /// 请求直链，喂给 AVAssetResourceLoadingRequest。支持 Range（AVFoundation
     /// 对自定义 scheme 资源会发分段请求：信息请求 + 多段数据请求，每次各自走本代理）。
+    /// build 33 · P0-2：转发由逐字节 for-await 改为 dataTask + delegate 按块回调
+    /// （ProxyStreamSessionDelegate 直接把网络读取块 respond 给 AVFoundation），
+    /// 消除每字节一次的异步挂起开销——真机上 build 32 表现为长时间缓冲不播。
+    /// Range 拼装、元信息回填、取消检查（loadingRequest.isCancelled / 外层 Task
+    /// 取消经 withTaskCancellationHandler 连带取消网络任务）、证书固定口径全部不变。
     private func proxyMedia(box: LoadingRequestBox, url: URL) async {
         let request = box.request
         var req = URLRequest(url: url)
@@ -473,49 +609,16 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                              forHTTPHeaderField: "Range")
             }
         }
-        do {
-            let (bytes, response) = try await proxySession.bytes(for: req)
-            guard let http = response as? HTTPURLResponse else {
-                request.finishLoading(with: URLError(.badServerResponse))
-                return
-            }
-            guard (200...299).contains(http.statusCode) else {
-                request.finishLoading(with: URLError(.badServerResponse, userInfo: [
-                    NSLocalizedDescriptionKey: "音频服务器拒绝访问（HTTP \(http.statusCode)），请稍后重试",
-                ]))
-                return
-            }
-            // 媒体元信息（首个信息请求）：Content-Type→UTI、总长度、可分段标志
-            if let info = request.contentInformationRequest {
-                if let mime = http.mimeType {
-                    info.contentType = UTType(mimeType: mime)?.identifier ?? UTType.audio.identifier
-                }
-                if http.statusCode == 206,
-                   let contentRange = http.value(forHTTPHeaderField: "Content-Range"),
-                   let total = contentRange.split(separator: "/").last.flatMap({ Int64($0) }),
-                   total > 0 {
-                    info.contentLength = total
-                } else {
-                    info.contentLength = http.expectedContentLength
-                }
-                info.isByteRangeAccessSupported = true
-            }
-            // 流式转发：64KB 一批 respond；加载请求被取消（seek/切章）即止
-            var buffer = [UInt8]()
-            buffer.reserveCapacity(64 * 1024)
-            for try await byte in bytes {
-                if request.isCancelled || Task.isCancelled { return } // 已取消：静默止流
-                buffer.append(byte)
-                if buffer.count >= 64 * 1024 {
-                    request.dataRequest?.respond(with: Data(buffer))
-                    buffer.removeAll(keepingCapacity: true)
-                }
-            }
-            if !buffer.isEmpty { request.dataRequest?.respond(with: Data(buffer)) }
-            request.finishLoading()
-        } catch {
-            if request.isCancelled { return }
-            request.finishLoading(with: error)
+        let task = proxySession.dataTask(with: req)
+        proxyStreamDelegate.attach(request, to: task)
+        // 挂起至网络任务完成；外层 loader Task 被取消（切章/停止播放）时连带取消网络任务。
+        // resume 放进 operation 块：确保取消 handler 先于网络启动装好（resume 在 handler
+        // 挂载前调用会有取消竞态），且 dataTask 不 resume 不发请求。
+        await withTaskCancellationHandler {
+            task.resume()
+            await proxyStreamDelegate.awaitCompletion(of: task)
+        } onCancel: {
+            task.cancel()
         }
     }
 

@@ -4,6 +4,15 @@ struct MineScreen: View {
     @Environment(\.appContainer) private var container
     @State private var showSourceManage = false
 
+    /// 展示版本号：动态读 Bundle 的 CFBundleShortVersionString / CFBundleVersion，
+    /// 与 project.yml 构建设置永远同源，杜绝静态字面量漂移。
+    static var displayVersion: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "unknown"
+        let build = info["CFBundleVersion"] as? String ?? "unknown"
+        return "\(short) (\(build))"
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -41,7 +50,8 @@ struct MineScreen: View {
                     HStack {
                         Text("版本")
                         Spacer()
-                        Text("1.4.3 (32)")
+                        // 从 Bundle 动态读版本号，杜绝静态字面量与构建版本漂移
+                        Text("\(Self.displayVersion)")
                             .foregroundStyle(.secondary)
                     }
                 }

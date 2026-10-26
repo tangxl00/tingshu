@@ -14,7 +14,8 @@ import XCTest
 final class PlayerSheetPresentationTests: XCTestCase {
 
     /// switch 映射槽位——编译器保证穷尽，测试锁定四 case 各占唯一槽位。
-    private func slot(_ s: PlayerSheet) -> Int {
+    /// PlayerSheet 已重构为 PlayerScreen 的嵌套类型，测试统一以全限定名引用。
+    private func slot(_ s: PlayerScreen.PlayerSheet) -> Int {
         switch s {
         case .speed: 1
         case .chapters: 2
@@ -27,16 +28,16 @@ final class PlayerSheetPresentationTests: XCTestCase {
 
     func testPlayerSheetIdReturnsSelf() {
         // id = Self 写法：id 与 case 一一对应，identity 稳定
-        XCTAssertEqual(PlayerSheet.speed.id, .speed)
-        XCTAssertEqual(PlayerSheet.chapters.id, .chapters)
-        XCTAssertEqual(PlayerSheet.sleepTimer.id, .sleepTimer)
-        XCTAssertEqual(PlayerSheet.settings.id, .settings)
+        XCTAssertEqual(PlayerScreen.PlayerSheet.speed.id, .speed)
+        XCTAssertEqual(PlayerScreen.PlayerSheet.chapters.id, .chapters)
+        XCTAssertEqual(PlayerScreen.PlayerSheet.sleepTimer.id, .sleepTimer)
+        XCTAssertEqual(PlayerScreen.PlayerSheet.settings.id, .settings)
     }
 
     func testPlayerSheetIdsAreMutuallyDistinct() {
         // 四个 case 的 id 互异——sheet(item:) 靠 id 变化触发新呈现，
         // 若两个 case 的 id 相同则从 A 切到 B 不会重新呈现（这正是本次修复要杜绝的）
-        let all: [PlayerSheet] = [.speed, .chapters, .sleepTimer, .settings]
+        let all: [PlayerScreen.PlayerSheet] = [.speed, .chapters, .sleepTimer, .settings]
         XCTAssertEqual(Set(all.map { "\($0.id)" }).count, 4, "四个弹窗 case 的 id 必须互异")
         XCTAssertEqual(all.map(slot), [1, 2, 3, 4], "四 case 各占唯一 switch 槽位，不新增不遗漏")
     }
@@ -45,13 +46,13 @@ final class PlayerSheetPresentationTests: XCTestCase {
 
     func testPlayerSheetEqualitySemantics() {
         // 同 case 相等（nil → case 触发呈现；case → nil 关闭）
-        XCTAssertEqual(PlayerSheet.speed, .speed)
-        XCTAssertEqual(PlayerSheet.chapters, .chapters)
-        XCTAssertEqual(PlayerSheet.sleepTimer, .sleepTimer)
-        XCTAssertEqual(PlayerSheet.settings, .settings)
+        XCTAssertEqual(PlayerScreen.PlayerSheet.speed, .speed)
+        XCTAssertEqual(PlayerScreen.PlayerSheet.chapters, .chapters)
+        XCTAssertEqual(PlayerScreen.PlayerSheet.sleepTimer, .sleepTimer)
+        XCTAssertEqual(PlayerScreen.PlayerSheet.settings, .settings)
         // 不同 case 不等（A 呈现中切 B：item 变化触发重呈现）
-        XCTAssertNotEqual(PlayerSheet.speed, .settings)
-        XCTAssertNotEqual(PlayerSheet.chapters, .sleepTimer)
-        XCTAssertNotEqual(PlayerSheet.sleepTimer, .speed)
+        XCTAssertNotEqual(PlayerScreen.PlayerSheet.speed, .settings)
+        XCTAssertNotEqual(PlayerScreen.PlayerSheet.chapters, .sleepTimer)
+        XCTAssertNotEqual(PlayerScreen.PlayerSheet.sleepTimer, .speed)
     }
 }
