@@ -48,6 +48,15 @@ private final class FakeSearcher: SourceSearching, @unchecked Sendable {
         if let error = failures[src] { throw error }
         return results[src] ?? []
     }
+
+    /// build 35（测试编译修复）：searchedSources 为 private(set)，
+    /// 测试方法外部 removeAll() 是 setter 访问被拒（CI test.log build 34）；
+    /// 以同一锁保护的复位方法保留「二次搜索前清空」语义。
+    func resetSearchLog() {
+        lock.lock()
+        defer { lock.unlock() }
+        searchedSources.removeAll()
+    }
 }
 
 final class AggregateSearchTests: XCTestCase {
@@ -146,7 +155,7 @@ final class AggregateSearchTests: XCTestCase {
         XCTAssertEqual(before.albums.count, 2)
 
         store.setEnabled(SourceRegistry.TING15, false)
-        searcher.searchedSources.removeAll()
+        searcher.resetSearchLog()
         let after = await AggregateSearcher(searcher: searcher, enabledStore: store).search(keyword: "k")
         XCTAssertEqual(after.albums.count, 1, "关听十五后其结果消失")
         XCTAssertEqual(after.albums.first?.title, "a")

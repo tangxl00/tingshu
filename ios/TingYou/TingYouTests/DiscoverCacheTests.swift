@@ -45,7 +45,7 @@ final class DiscoverCacheTests: XCTestCase {
         }
         func removeAll() {
             lock.lock(); defer { lock.unlock() }
-            storage.removeAll(keepCapacity: false)
+            storage.removeAll(keepingCapacity: false)
             removeAllCount += 1
         }
     }

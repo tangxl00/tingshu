@@ -3,6 +3,9 @@ import AVFoundation
 @testable import TingYou
 
 /// build 27：倍速间歇性失效加固 + 搜索历史「提交即记录」语义锁定。
+/// build 35（测试编译修复）：InterruptionType/Options.rawValue 是 UInt，
+/// shouldResumeAfterInterruption 形参为 Int——3 处调用统一包 Int(...)
+/// （与主 target PlaybackManager 通知回调处写法一致，CI test.log build 34）。
 final class Build27Tests: XCTestCase {
 
     // MARK: - 音频会话中断结束 → 重放速率（applyRate 加固的决策纯函数）
@@ -11,20 +14,20 @@ final class Build27Tests: XCTestCase {
     func testInterruptionEndedWithResumeOptionReplaysRate() {
         let ended = AVAudioSession.InterruptionType.ended.rawValue
         let resume = Int(AVAudioSession.InterruptionOptions.shouldResume.rawValue)
-        XCTAssertTrue(PlaybackManager.shouldResumeAfterInterruption(typeRaw: ended, optionsRaw: resume))
+        XCTAssertTrue(PlaybackManager.shouldResumeAfterInterruption(typeRaw: Int(ended), optionsRaw: resume))
     }
 
     /// 中断开始（来电进来）→ 不重放（此时恢复会打断通话）。
     func testInterruptionBeganDoesNotReplay() {
         let began = AVAudioSession.InterruptionType.began.rawValue
         let resume = Int(AVAudioSession.InterruptionOptions.shouldResume.rawValue)
-        XCTAssertFalse(PlaybackManager.shouldResumeAfterInterruption(typeRaw: began, optionsRaw: resume))
+        XCTAssertFalse(PlaybackManager.shouldResumeAfterInterruption(typeRaw: Int(began), optionsRaw: resume))
     }
 
     /// 中断结束但系统不建议恢复（其他 App 抢占音频后退出等）→ 不重放。
     func testInterruptionEndedWithoutResumeOptionDoesNotReplay() {
         let ended = AVAudioSession.InterruptionType.ended.rawValue
-        XCTAssertFalse(PlaybackManager.shouldResumeAfterInterruption(typeRaw: ended, optionsRaw: 0))
+        XCTAssertFalse(PlaybackManager.shouldResumeAfterInterruption(typeRaw: Int(ended), optionsRaw: 0))
     }
 
     // MARK: - 搜索历史「提交即记录」（不依赖结果成败）
