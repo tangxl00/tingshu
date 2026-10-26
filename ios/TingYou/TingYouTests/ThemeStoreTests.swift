@@ -6,6 +6,12 @@ import SwiftUI
 final class ThemeStoreTests: XCTestCase {
 
     /// 0/1/2 → 对应 ColorScheme；越界值防御性回落为跟随系统。
+    /// build 34（测试编译修复）：补 @MainActor——ThemeStore 为 @MainActor 类，
+    /// 其静态成员同样主线程隔离，非隔离测试方法同步调用属跨隔离访问，
+    /// CI（test.log build 33）在 TingYouTests 目标编译期即报错
+    /// "Call to main actor-isolated static method 'colorScheme(for:)' in a
+    /// synchronous nonisolated context" 共 4 处，本方法是文件内唯一漏标注者。
+    @MainActor
     func testColorSchemeMapping() {
         XCTAssertEqual(ThemeStore.colorScheme(for: ThemeStore.MODE_LIGHT), ColorScheme.light)
         XCTAssertEqual(ThemeStore.colorScheme(for: ThemeStore.MODE_DARK), ColorScheme.dark)

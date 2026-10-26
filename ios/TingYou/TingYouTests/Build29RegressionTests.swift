@@ -96,7 +96,7 @@ final class Build29RegressionTests: XCTestCase {
     /// `ios/TingYou/project.yml`（测试文件在 TingYouTests/ 下，上溯两级即工程目录，
     /// 与 CI checkout 布局一致），逐行解析 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`
     /// 首个定义并断言精确值。版本号忘改或格式漂移即测试红（CI 兜底）。
-    /// v1.4.4：断言值随 build 33 同步升位（1.4.4 / 33）。
+    /// v1.4.4：断言值随 build 34 同步升位（1.4.4 / 34）。
     func testMarketingVersionIs144() {
         // #filePath = …/ios/TingYou/TingYouTests/Build29RegressionTests.swift
         // 上溯两级：TingYouTests → TingYou（project.yml 所在，与 xcodegen 读取位置一致）
@@ -114,8 +114,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "33",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 33（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "34",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 34（升版本时同步改此断言）")
     }
 
     /// 从缩进 YAML 文本提取 `key: value` 首个定义的值：
