@@ -96,11 +96,14 @@ struct DiscoverScreen: View {
                     }
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                // build 46 · 反馈 2（布局）：搜索栏内外纵向 padding 8 → 4——
+                // 压缩「发现」大标题与搜索栏、搜索栏与历史区之间的留白
+                //（真机反馈：搜索框整体上移、压缩顶部空白）。
+                .padding(.vertical, 4)
                 .background(Color(.systemGray6))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .padding(.horizontal)
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
                 // build 45 · 反馈 4：此前的「搜索栏容器 simultaneousGesture +
                 // 间距区 onTapGesture」两处局部收焦挂载已删除——全局收键盘改走
                 // window 级 UIKit recognizer（GlobalKeyboardDismiss，
@@ -162,7 +165,11 @@ struct DiscoverScreen: View {
             // 折到下一行（多行流式排布，b44 反馈 4 的另一半诉求保留）。
             // 滚动展示保留（ScrollView + maxHeight 200）。
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                // build 46 · 反馈 2（布局）：历史区间距收敛（VStack/Grid spacing
+                // 8 → 6、maxHeight 200 → 160）——真机反馈「最近搜索与筛选栏
+                // /书库列表之间空白过大」。ScrollView 本身高度随内容自适应
+                //（1 条时只占一行高），maxHeight 只防极端多历史挤压书库。
+                VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text("最近搜索")
                             .font(.subheadline.bold())
@@ -173,7 +180,7 @@ struct DiscoverScreen: View {
                         }
                         .font(.caption)
                     }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 6) {
                         ForEach(history, id: \.self) { kw in
                             // chip 主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
                             HStack(spacing: 4) {
@@ -196,19 +203,20 @@ struct DiscoverScreen: View {
                                 }
                             }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
+                            .padding(.vertical, 4)
                             .background(Capsule().fill(Color(.systemGray5)))
                             .fixedSize()
                         }
                     }
                 }
                 .padding(.horizontal)
-                .padding(.vertical, 8)
+                // build 46 · 反馈 2（布局）：历史区外层纵向 padding 8 → 4
+                .padding(.vertical, 4)
                 // build 45 · 反馈 4：b44 的历史区背景 onTapGesture 局部收焦挂载
                 // 已删除——全局收键盘走 window 级 recognizer（不吞事件，chips
                 // 与行导航照常激活）。
             }
-            .frame(maxHeight: 200)
+            .frame(maxHeight: 160)
         }
     }
 

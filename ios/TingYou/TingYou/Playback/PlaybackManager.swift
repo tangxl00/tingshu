@@ -40,6 +40,8 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
     private let pinning = PinningURLSessionDelegate()
     private let lock = NSLock()
     private var loadingRequests: [Int: AVAssetResourceLoadingRequest] = [:]
+    /// build 46：taskIdentifier → 原始 Range 头（重定向重建用，见 attach 注释）
+    private var taskRanges: [Int: String] = [:]
     private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
     /// 已完成但 awaitCompletion 尚未挂起的任务（先完成后等待的边界序）
     private var finishedEarly: Set<Int> = []
@@ -47,9 +49,16 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
     /// 由 statusObserver .failed 拼进 playbackError——替代被 AVFoundation 吞成
     /// 裸「Cannot Open」的黑盒。仅记录，不影响 finishLoading 语义。
     private let failureRecorder: (@Sendable (String) -> Void)?
+    /// build 46 · 反馈 1 增强：取流层元信息回传（HTTP 状态 + Content-Type +
+    /// 实际服务域名）——成功路径也记录。下次失败时一眼看出喂给 AVPlayer 的
+    /// 是「video/mp4 @ cn-sh-cc-xx.bilivideo.com」还是别的（真机 -12847 取证
+    /// 的关键盲区：proxy 2xx 有内容但 AVPlayer 拒收，此前无法知道内容是什么）。
+    private let metaRecorder: (@Sendable (String) -> Void)?
 
-    init(failureRecorder: (@Sendable (String) -> Void)? = nil) {
+    init(failureRecorder: (@Sendable (String) -> Void)? = nil,
+         metaRecorder: (@Sendable (String) -> Void)? = nil) {
         self.failureRecorder = failureRecorder
+        self.metaRecorder = metaRecorder
         super.init()
     }
 
@@ -59,6 +68,30 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         lock.lock()
         defer { lock.unlock() }
         loadingRequests[task.taskIdentifier] = loadingRequest
+        // build 46 · B站真机 -12847 根因修复：attach 时保存本 loadingRequest 的
+        // Range 头——重定向后 URLSession 构造的新请求不保证保留自定义头；
+        // Range 丢失时 CDN 返回 200 全量数据，respond 给期望偏移的 dataRequest
+        // 造成数据错位，AVFoundation 报 -12847「media format is not supported」
+        //（真机证据：player · -11828 Cannot Open {底层 -12847}；沙箱分离实验
+        //  证实 CDN 对 Range 请求正确回 206 partial，问题在 App 侧转发链）。
+        if let dr = loadingRequest.dataRequest {
+            taskRanges[task.taskIdentifier] = Self.rangeHeader(for: dr)
+        }
+    }
+
+    /// build 46：按 dataRequest 组装 Range 头（口径与 proxyMedia 一致）。
+    static func rangeHeader(for dr: AVAssetResourceLoadingDataRequest) -> String? {
+        if dr.requestsAllDataToEndOfResource {
+            return "bytes=\(dr.requestedOffset)-"
+        }
+        let end = dr.requestedOffset + Int64(dr.requestedLength) - 1
+        return "bytes=\(dr.requestedOffset)-\(max(end, dr.requestedOffset))"
+    }
+
+    private func rangeHeader(for task: URLSessionTask) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return taskRanges[task.taskIdentifier]
     }
 
     /// 挂起外层 Task 直到该 URLSessionTask 完成（didComplete 唤醒）
@@ -83,6 +116,7 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
     private func finish(task: URLSessionTask) {
         lock.lock()
         loadingRequests.removeValue(forKey: task.taskIdentifier)
+        taskRanges.removeValue(forKey: task.taskIdentifier)
         let cont = continuations.removeValue(forKey: task.taskIdentifier)
         if cont == nil { finishedEarly.insert(task.taskIdentifier) }
         lock.unlock()
@@ -114,6 +148,9 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
             completionHandler(.cancel)
             return
         }
+        // build 46 · 反馈 1 增强：元信息回传（成功路径也记）——HTTP 状态 +
+        // Content-Type + 实际服务域名进诊断（失败时可见「喂的是什么」）。
+        metaRecorder?("play · HTTP \(http.statusCode) \(http.mimeType ?? "?") @ \(http.url?.host ?? "?")")
         // 媒体元信息（首个信息请求）：Content-Type→UTI、总长度、可分段标志（口径同 build 32）
         if let info = request.contentInformationRequest {
             if let mime = http.mimeType {
@@ -173,6 +210,17 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         if let targetUrl = targetUrl {
             PlaybackManager.applyBiliCdnHeaders(to: &req, url: targetUrl)
         }
+        // build 46 · B站真机 -12847 根因修复：重定向重建 Range——URLSession 的
+        // 重定向新请求不保证保留 Range 头（b45 只补了 Referer/UA 重注入，Range
+        // 仍是丢失面）。丢失时 CDN 对重定向后请求回 200 全量数据（沙箱实证 CDN
+        // 正确支持 206 partial），respond 给期望 bytes=X- 的 dataRequest → 数据
+        // 错位 → AVFoundation -12847「media format is not supported」（真机
+        // Cannot Open 的底层错误）。直连节点（无 302）不受影响——与「部分稿件
+        // 能播、部分不能」的真机现象吻合。
+        if let range = rangeHeader(for: task),
+           req.value(forHTTPHeaderField: "Range") != range {
+            req.setValue(range, forHTTPHeaderField: "Range")
+        }
         completionHandler(req)
     }
 
@@ -220,6 +268,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// NSLock 保护：loader 队列并发写、主线程读。
     private let failureRecordLock = NSLock()
     private var loaderFailureRecord: String?
+    /// build 46 · 反馈 1 增强：loader 元信息（成功路径也记，见 recordLoaderMeta）
+    private var loaderMetaRecord: String?
 
     /// build 45 · 反馈 1a（错误透传）：loader 层失败原文写入（NSLock 保护）。
     /// 供 ProxyStreamSessionDelegate 的 recorder 闭包调用（loader 队列）。
@@ -244,7 +294,22 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private func clearLoaderFailureRecord() {
         failureRecordLock.lock()
         loaderFailureRecord = nil
+        loaderMetaRecord = nil
         failureRecordLock.unlock()
+    }
+
+    /// build 46 · 反馈 1 增强：loader 层元信息槽（HTTP 状态 + Content-Type +
+    /// 域名；resolve 直链域名也入此槽）——失败/超时诊断时拼出「喂的是什么」。
+    private func recordLoaderMeta(_ message: String) {
+        failureRecordLock.lock()
+        loaderMetaRecord = message
+        failureRecordLock.unlock()
+    }
+
+    private func takeLoaderMetaRecord() -> String? {
+        failureRecordLock.lock()
+        defer { failureRecordLock.unlock() }
+        return loaderMetaRecord
     }
 
     /// build 45 · CI 第一轮（反馈 2a）：章节加载中间态——点章到 readyToPlay
@@ -423,9 +488,13 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         // 必须放在 super.init() 之后（Swift 两阶段初始化：super.init 前
         // 不允许读取 self）。
         super.init()
-        let proxyDelegate = ProxyStreamSessionDelegate(failureRecorder: { [weak self] message in
-            self?.recordLoaderFailure(message)
-        })
+        let proxyDelegate = ProxyStreamSessionDelegate(
+            failureRecorder: { [weak self] message in
+                self?.recordLoaderFailure(message)
+            },
+            metaRecorder: { [weak self] message in
+                self?.recordLoaderMeta(message)
+            })
         self.proxyStreamDelegate = proxyDelegate
         self.proxySession = URLSession(configuration: proxyConfig,
                                        delegate: proxyDelegate,
@@ -652,6 +721,12 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 if !diagnostic.isEmpty {
                     diagnostic.insert("B站取证：截图反馈此段", at: 0)
                 }
+                // build 46 · 反馈 1 增强：loader 元信息（HTTP 状态/Content-Type/
+                // 域名 + resolve 直链域）一并拼进诊断——失败时直接可见
+                //「喂给 AVPlayer 的是什么、从哪个域拿的」。
+                if let meta = self?.takeLoaderMetaRecord() {
+                    diagnostic.append(meta)
+                }
                 let fullMessage = message + (diagnostic.isEmpty ? "" : " [诊断] " + diagnostic.joined(separator: " | "))
                 Task { @MainActor [weak self] in
                     self?.playbackError = fullMessage
@@ -688,6 +763,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             let loaderRecord = self.takeLoaderFailureRecord()
             var diagnostic = ["取流超时 · 20 秒内条目未就绪（缓冲挂起，AVFoundation 未报 .failed）"]
             if let loaderRecord { diagnostic.append(loaderRecord) }
+            if let meta = self.takeLoaderMetaRecord() { diagnostic.append(meta) }
             diagnostic.insert("B站取证：截图反馈此段", at: 0)
             let fullMessage = "加载超时，请重试 [诊断] " + diagnostic.joined(separator: " | ")
             self.playbackWatchdog = nil
@@ -736,6 +812,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                     detailPath: self?.currentAlbum?.detailPath)
                 // 解析结果顺手入缓存（同一章 seek/重开不再重复解析）
                 self?.storeResolved(key: cacheKey, url: playUrl)
+                // build 46 · 反馈 1 增强：resolve 出的直链域名入元信息槽——
+                // 失败诊断可见「resolve 到了哪个域」（cn-sh-cc-*/upos-*/akamaized）。
+                if let host = URL(string: playUrl)?.host {
+                    self?.recordLoaderMeta("resolve · 直链域名 \(host)")
+                }
                 guard let resolvedSelf = self else { return }
                 // v1.4.3 · P0：解析完成同样按域名分流服务
                 if !resolvedSelf.serveResolved(box, playUrl: playUrl) {

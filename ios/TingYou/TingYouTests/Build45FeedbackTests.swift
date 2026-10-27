@@ -53,6 +53,24 @@ final class Build45FeedbackTests: XCTestCase {
         XCTAssertTrue(pm.contains("applyBiliCdnHeaders"), "重定向后必须重注入 B站 CDN 请求头（Referer/UA）")
         XCTAssertTrue(pm.contains("取流被拒 HTTP"), "取流 4xx 必须以人话 + 状态码原文记录")
         XCTAssertTrue(pm.contains("B站取证：截图反馈此段"), "失败文案必须带取证指引（用户截图即可定位坏在哪一层）")
+        // build 46 · 反馈 1：真机 -11828/-12847 根因守卫——proxy 重定向后
+        // URLSession 重建的请求不保证保留 Range 头 → CDN 回 200 全量 →
+        // 数据与 dataRequest 期望偏移错位 → moov 解析失败被判「格式不支持」。
+        // 修复形态：attach 时按 dataRequest 存 Range（taskRanges），
+        // willPerformHTTPRedirection 重建时 setValue 回填。
+        XCTAssertTrue(pm.contains("taskRanges"), "必须保存 taskIdentifier → Range 映射（重定向重建依据）")
+        XCTAssertTrue(pm.contains("Self.rangeHeader(for: dr)"), "attach 时必须按 dataRequest 组装 Range 头（口径与 proxyMedia 一致）")
+        XCTAssertTrue(pm.contains("rangeHeader(for: task)"), "重定向回调必须能按 task 取回原始 Range")
+        XCTAssertTrue(pm.contains(#"req.setValue(range, forHTTPHeaderField: "Range")"#),
+                      "willPerformHTTPRedirection 重建请求时必须回填 Range 头（-12847 根因修复）")
+        // build 46 · 反馈 1 增强：loader 元信息——resolve 直链域名 + loader 收到
+        // 的 HTTP 状态/Content-Type 入诊断（下次失败一层看出喂的是什么）。
+        XCTAssertTrue(pm.contains("metaRecorder"), "proxy delegate 必须持 metaRecorder 闭包（HTTP 状态/类型/域名入口）")
+        XCTAssertTrue(pm.contains("recordLoaderMeta"), "PlaybackManager 必须有 recordLoaderMeta 元信息槽")
+        XCTAssertTrue(pm.contains("loaderMetaRecord"), "元信息槽字段必须在（与 failure 槽同生命周期清理）")
+        XCTAssertTrue(pm.contains("直链域名"), "resolve 成功必须记「resolve · 直链域名」入诊断")
+        XCTAssertTrue(pm.contains("HTTP \\(http.statusCode) \\(http.mimeType"),
+                      "didReceive response 必须记「play · HTTP 状态 类型」入诊断")
     }
 
     /// 播放失败文案结构：人话 + [诊断] 分层原文（resolve · / play · / player ·），

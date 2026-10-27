@@ -109,7 +109,7 @@ final class Build44FeedbackTests: XCTestCase {
         }
         let section = String(src[start.lowerBound..<rest.lowerBound])
         XCTAssertTrue(section.contains("ScrollView{"), "历史搜索必须可滚动展示全部记录")
-        XCTAssertTrue(section.contains("maxHeight:200"), "滚动区必须有高度上限（防历史过多挤压书库列表）")
+        XCTAssertTrue(section.contains("maxHeight:160"), "滚动区必须有高度上限（build 46 收敛 200→160，防历史过多挤压书库列表）")
         // build 45 · CI 第一轮（反馈 2）：删除 b44 的两条对立断言（不得
         // lineLimit(1) / 不得 fixedSize）——b44 换行方案已被竖排回归证伪，
         // b45 回归 lineLimit(1) + 整体 fixedSize 横排形态，权威守卫在
