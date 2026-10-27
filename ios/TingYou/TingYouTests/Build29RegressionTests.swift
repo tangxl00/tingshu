@@ -125,41 +125,68 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "39",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 39（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "40",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 40（升版本时同步改此断言）")
     }
 
-    /// build 39 · 回归守卫：发现页收焦方案不得回归 build 37 的容器包裹形态——
-    /// 「Group + contentShape(Rectangle()) + 父级 tap 手势」整体包裹内容区会在
-    /// 真机上吞掉 List 行点击（点书无反应）并引入内容穿透 tab bar 的几何漂移
-    /// （用户验收 build 38 反馈的 ①②两回归）。合法形态：List 本体挂
-    /// tap 收焦 + 滚动收起（与 SearchScreen 同款）。
-    /// 判定：DiscoverScreen.swift 按 whitespace 归一化后，
-    /// ① 不得出现「.contentShape(Rectangle())」紧跟「.onTapGesture」的组合；
-    /// ② scrollDismissesKeyboard 不得少于 2 处（两个 List 的滚动收起保留）。
-    func testDiscoverKeyboardDismissDoesNotWrapContentRegion() {
+    /// build 39-40 · 回归守卫：键盘收焦方案形态约束（防 build 37 / build 39 两次
+    /// 真机回归复发）。
+    /// build 37 形态（禁止①）：容器级「contentShape(Rectangle()) + 父级 onTapGesture」
+    /// 整体包裹内容区——父手势抢占行点击 + contentShape 整域命中引入几何漂移
+    ///（用户验收 build 38 反馈：点书无反应 + 布局穿透 tab bar）。
+    /// build 39 形态（禁止②）：List 本体直接挂 onTapGesture——挂 List 的 tap 手势
+    /// 抢占行内 NavigationLink 激活（用户复测反馈：点书=键盘收起+无导航）。
+    /// 合法形态（要求③）：simultaneousGesture(TapGesture()…)——与行导航并行识别；
+    /// DiscoverScreen 需 ≥3 处（两个 List 本体 + 内容区外层空白覆盖），
+    /// SearchScreen 需 ≥1 处（List 本体）。
+    /// 判定：各文件按 whitespace 归一化后逐项断言。
+    func testKeyboardDismissGestureFormGuards() {
         // #filePath = …/TingYouTests/Build29RegressionTests.swift，
         // 上溯两级：TingYouTests → TingYou（工程目录，与 testMarketingVersionIs144 同款定位）
         let testDir = (#filePath as NSString).deletingLastPathComponent
         let projectDir = (testDir as NSString).deletingLastPathComponent
-        let srcPath = projectDir + "/TingYou/UI/Discover/DiscoverScreen.swift"
-        guard FileManager.default.fileExists(atPath: srcPath) else {
-            XCTFail("DiscoverScreen.swift 不存在：\(srcPath)——路径布局变化时请同步修正本测试")
-            return
+        for rel in ["TingYou/UI/Discover/DiscoverScreen.swift",
+                    "TingYou/UI/Search/SearchScreen.swift"] {
+            let srcPath = projectDir + "/" + rel
+            guard FileManager.default.fileExists(atPath: srcPath) else {
+                XCTFail("\(rel) 不存在：\(srcPath)——路径布局变化时请同步修正本测试")
+                return
+            }
+            guard let src = try? String(contentsOfFile: srcPath, encoding: .utf8) else {
+                XCTFail("\(rel) 不可读：\(srcPath)")
+                return
+            }
+            // 归一化前先剔除整行注释（trim 后以 // 开头）：注释行夹在修饰链中间
+            // 会把链拆断，导致旧形态漏检（build 39 阴性对照实测暴露此缺陷）；
+            // 行尾内联注释不影响下方各匹配（均以 ASCII '.' 前缀锚定，注释文字无该前缀）。
+            let codeOnly = src.split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.hasPrefix("//") }
+                .joined(separator: "\n")
+            let normalized = codeOnly
+                .components(separatedBy: .whitespacesAndNewlines)
+                .joined()
+            // 禁①容器级包裹（build 37 形态）
+            XCTAssertFalse(
+                normalized.contains(".contentShape(Rectangle()).onTapGesture"),
+                "\(rel)：禁止 contentShape(Rectangle()) 紧跟 onTapGesture 的容器级收焦包裹（build 37 真机回归：点书无反应 + 布局穿透 tab bar）")
+            // 禁②List 直接挂 tap（build 39 形态：List 修饰链上的 onTapGesture）
+            XCTAssertFalse(
+                normalized.contains(".scrollDismissesKeyboard(.immediately).onTapGesture"),
+                "\(rel)：禁止 List 本体直接挂 onTapGesture（build 39 真机回归：tap 抢占行内 NavigationLink，点书=收焦+无导航）；收焦必须用 simultaneousGesture")
+            // 要求③ simultaneousGesture 形态（带 '.' 前缀锚定，注释文字不计数）
+            let required = rel.hasSuffix("DiscoverScreen.swift") ? 3 : 1
+            let actual = normalized.components(separatedBy: ".simultaneousGesture(").count - 1
+            XCTAssertGreaterThanOrEqual(
+                actual, required,
+                "\(rel)：.simultaneousGesture( 不得少于 \(required) 处（Discover = 两个 List 本体 + 内容区外层；Search = List 本体）")
+            // 两个 List 的滚动收起保留（DiscoverScreen 口径）
+            if rel.hasSuffix("DiscoverScreen.swift") {
+                let scrollCount = normalized.components(separatedBy: ".scrollDismissesKeyboard").count - 1
+                XCTAssertGreaterThanOrEqual(scrollCount, 2,
+                    "发现页两个 List 的滚动收起（scrollDismissesKeyboard）不得少于 2 处")
+            }
         }
-        guard let src = try? String(contentsOfFile: srcPath, encoding: .utf8) else {
-            XCTFail("DiscoverScreen.swift 不可读：\(srcPath)")
-            return
-        }
-        let normalized = src
-            .components(separatedBy: .whitespacesAndNewlines)
-            .joined()
-        XCTAssertFalse(
-            normalized.contains(".contentShape(Rectangle()).onTapGesture"),
-            "发现页内容区禁止再出现 contentShape(Rectangle()) 紧跟 onTapGesture 的容器级收焦包裹（build 37 真机回归：点书无反应 + 布局穿透 tab bar）；收焦只能挂 List 本体")
-        let scrollCount = normalized.components(separatedBy: "scrollDismissesKeyboard").count - 1
-        XCTAssertGreaterThanOrEqual(scrollCount, 2,
-            "发现页两个 List 的滚动收起（scrollDismissesKeyboard）不得少于 2 处")
     }
 
     /// 从缩进 YAML 文本提取 `key: value` 首个定义的值：

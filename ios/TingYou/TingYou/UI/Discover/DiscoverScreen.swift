@@ -97,17 +97,10 @@ struct DiscoverScreen: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
 
-                // build 39 · 修复 build 37 引入的两处真机回归（验收 build 38 反馈）：
-                // ① 点书无反应——build 37 用「Group + contentShape(Rectangle()) +
-                //    父级 tap 手势」把整个内容区包起来收焦，父手势与 List 行内
-                //    NavigationLink 形成手势竞争且父手势胜出，书籍行点击被吞
-                //    （交付时「子视图点击优先于父手势」的假设在 List 场景被真机
-                //    证伪）。回归 build 36 的裸结构：内容区不再加容器包裹、不整体
-                //    挂手势；收焦改挂到两个 List 本体（与搜索页 SearchScreen 同款，
-                //    build 37/38 真机已验证不吞行点击）+ 保留 List 滚动收起。
-                // ② 布局整体上移、列表内容穿透 tab bar——由该容器包裹（contentShape
-                //    改变整域命中几何）引入，随结构回退一并消除，恢复 build 36 视觉。
-                // 硬验收口径：点书进详情、点空白收键盘、滚动收键盘，三者同时成立。
+                // build 40：内容区整体挂 simultaneousGesture——补回 build 39 丢掉的
+                // List 外空白区（分类面板、间距）收焦：simultaneous 对内部 Button/
+                // DisclosureGroup/Menu/行导航无抢占（并行识别），可以安全覆盖整区；
+                // 与两个 List 本体的 simultaneousGesture 叠加，各自触发均幂等收焦。
                 if searchMode && !keyword.isEmpty {
                     searchResultsContent
                 } else {
@@ -118,6 +111,11 @@ struct DiscoverScreen: View {
                     }
                     libraryContent
                 }
+                .simultaneousGesture(TapGesture().onEnded {
+                    if searchFocused {
+                        searchFocused = false
+                    }
+                })
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
             .onAppear {
@@ -266,14 +264,16 @@ struct DiscoverScreen: View {
             }
             .listStyle(.plain)
             .scrollDismissesKeyboard(.immediately)
-            // build 39：List 级 tap 收焦——挂于 List 本体（无容器包裹、无
-            // contentShape 整域命中），行内 NavigationLink 点击不受影响，
-            // 空白区点击收起键盘（与 SearchScreen 同款方案，含修饰符顺序）。
-            .onTapGesture {
+            // build 40：List 级 tap 收焦改 simultaneousGesture——build 39 真机证伪
+            // 了「List 本体挂 onTapGesture 不吞行点击」：挂 List 的 tap 手势会抢占
+            // 行内 NavigationLink 激活（点书=键盘收起+无导航，正是用户反馈现象）。
+            // simultaneous 语义 = 手势与行激活并行识别、互不抢占：键盘弹起时点书，
+            // 收焦与导航同时发生。
+            .simultaneousGesture(TapGesture().onEnded {
                 if searchFocused {
                     searchFocused = false
                 }
-            }
+            })
         }
     }
 
@@ -372,13 +372,13 @@ struct DiscoverScreen: View {
                 }
                 .listStyle(.plain)
                 .scrollDismissesKeyboard(.immediately)
-                // build 39：List 级 tap 收焦（同 searchResultsContent：滚动收起 +
-                // 空白区点击收焦，行点击不受影响，方案与 SearchScreen 一致）。
-                .onTapGesture {
+                // build 40：List 级 tap 收焦改 simultaneousGesture（同
+                // searchResultsContent：不抢占行内 NavigationLink，收焦与导航并行）。
+                .simultaneousGesture(TapGesture().onEnded {
                     if searchFocused {
                         searchFocused = false
                     }
-                }
+                })
             }
         }
         .task {

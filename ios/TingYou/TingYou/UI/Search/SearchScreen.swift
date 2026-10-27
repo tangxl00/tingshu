@@ -54,14 +54,14 @@ struct SearchScreen: View {
             }
         }
         .listStyle(.plain)
-        // build 37 · 反馈 2：点击搜索框以外区域收起输入法——
-        // List 滚动收起 + 列表空白区 tap 主动 resignFirstResponder
-        //（NavigationLink 行点击优先于父手势，不受影响）。
+        // build 40：tap 收焦改 simultaneousGesture——build 39 真机证伪「List 挂
+        // onTapGesture 不吞行点击」：挂 List 的 tap 会抢占行内 NavigationLink 激活
+        //（点书=键盘收起+无导航）。simultaneous 与行导航并行识别、互不抢占。
         .scrollDismissesKeyboard(.immediately)
-        .onTapGesture {
+        .simultaneousGesture(TapGesture().onEnded {
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                             to: nil, from: nil, for: nil)
-        }
+        })
         .searchable(text: $keyword)
         .onSubmit(of: .search) {
             Task { await search() }
