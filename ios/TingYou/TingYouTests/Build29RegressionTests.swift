@@ -231,7 +231,9 @@ final class Build29RegressionTests: XCTestCase {
     /// 四要素必须齐备：① App 启动调用 installOnce；② UITapGestureRecognizer
     /// 挂 window；③ cancelsTouchesInView = false（不吞事件——与被证伪的
     /// SwiftUI 容器手势的本质差异，List 行导航照常激活）；④ endEditing 动作 +
-    /// delegate 跳过 UITextField 命中（防「先收再聚焦」键盘闪烁）。
+    /// delegate 跳过 UITextField 命中（防「先收再聚焦」键盘闪烁）；⑤ 并行识别
+    /// shouldRecognizeSimultaneouslyWith（CI 第一轮 C/新 G 失败根因：控件内部
+    /// 手势独占认领把 window recognizer 排除，键盘永不收）。
     func testGlobalKeyboardDismissInstalled() {
         let testDir = (#filePath as NSString).deletingLastPathComponent
         let projectDir = (testDir as NSString).deletingLastPathComponent
@@ -244,7 +246,8 @@ final class Build29RegressionTests: XCTestCase {
               "cancelsTouchesInView = false",
               "endEditing",
               "UITextField",
-              "UIGestureRecognizerDelegate"],
+              "UIGestureRecognizerDelegate",
+              "shouldRecognizeSimultaneouslyWith"],
              "全局收键盘实现必须包含 window 级 recognizer 四要素"),
         ]
         for pair in pairs {

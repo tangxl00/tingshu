@@ -56,12 +56,22 @@ final class Build45FeedbackTests: XCTestCase {
     }
 
     /// 播放失败文案结构：人话 + [诊断] 分层原文（resolve · / play · / player ·），
-    /// 拒绝只给「Cannot Open」。
+    /// 拒绝只给「Cannot Open」。CI 第一轮 H 空窗补位（反馈 2）：取流看门狗 +
+    /// 加载中间态 + 可断言锚（「暂停」accessibilityLabel——此前播放按钮只有
+    /// SF Symbol，XCUITest 断言永不命中）。
     func testPlaybackErrorDiagnosticFormatGuard() {
         let pm = Self.loadSource("TingYou/Playback/PlaybackManager.swift")
         XCTAssertTrue(pm.contains("[诊断]"), "失败文案必须拼接 [诊断] 分段")
         XCTAssertTrue(pm.contains("resolve ·"), "resolve 阶段失败必须带阶段前缀原文")
         XCTAssertTrue(pm.contains("player ·"), "player 层失败必须带 AVFoundation NSError 原文段")
+        // 反馈 2a/2b：中间态 + 看门狗（缓冲挂起不得静默 20s 以上）
+        XCTAssertTrue(pm.contains("isChapterLoading"), "必须有章节加载中间态（H 空窗根因之一）")
+        XCTAssertTrue(pm.contains("playbackWatchdog"), "必须有取流看门狗（缓冲挂起按失败透传）")
+        XCTAssertTrue(pm.contains("取流超时"), "看门狗文案必须含「取流超时」人话")
+        // 反馈 2c：PlayerScreen 可断言锚
+        let ps = Self.loadSource("TingYou/UI/Player/PlayerScreen.swift")
+        XCTAssertTrue(ps.contains("加载中…"), "PlayerScreen 必须显示加载中间态")
+        XCTAssertTrue(ps.contains(#""暂停""#), "播放/暂停按钮必须有「暂停」accessibilityLabel（XCUITest 锚）")
     }
 
     // MARK: - 反馈 2 · 历史搜索词条横排

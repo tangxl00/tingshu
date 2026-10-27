@@ -247,6 +247,16 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         failureRecordLock.unlock()
     }
 
+    /// build 45 · CI 第一轮（反馈 2a）：章节加载中间态——点章到 readyToPlay
+    /// 之间的可感知反馈（PlayerScreen「加载中…」）。CI 用例 H 30 秒空窗的
+    /// 一半根因：既无播放态也无错误文案的静默区间，现在至少有中间态或超时诊断。
+    private(set) var isChapterLoading = false
+    /// build 45 · CI 第一轮（反馈 2b）：取流看门狗——20s 内条目未 readyToPlay
+    /// 且未 .failed，按失败透传处理（「取流超时」+ [诊断] loader 原文）。
+    /// AVFoundation 缓冲挂起不主动报错，这是 H 空窗的另一半根因。
+    /// readyToPlay / .failed / 切章 / 重试 四处取消。
+    private var playbackWatchdog: DispatchWorkItem?
+
     /// v1.4.3 · P0（取证 A）+ build 33 · P0-2：B站 CDN 代理取流专用 session——
     /// 带 Referer/UA（B站 CDN 实测裸请求一律 403）；证书固定 fail-closed
     /// （bilivideo.com 等已在 PinnedDomainAllowlist 后缀白名单内，取证 C 核实）。
@@ -548,6 +558,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         // build 45 · 反馈 1a（错误透传）：同步清 loader 层失败记录槽
         //（防上一章的旧诊断原文拼进本章错误文案）。
         clearLoaderFailureRecord()
+        // build 45 · CI 第一轮（反馈 2a/2b）：新章加载置中间态 + 重置看门狗
+        //（切章/重试共用入口，旧看门狗必须作废——否则上一章的超时会误报进新章）。
+        playbackWatchdog?.cancel()
+        playbackWatchdog = nil
+        isChapterLoading = true
         let ch = currentChapters[currentChapterIdx]
         currentChapterTitle = ch.title
         currentChapterIdx = currentChapters.firstIndex(where: { $0.chapterId == ch.chapterId }) ?? currentChapterIdx
@@ -598,6 +613,10 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 let durSec = item.duration.seconds
                 self?.durationMs = durSec.isFinite ? Int64(durSec * 1000) : 0
                 self?.updateNowPlaying()
+                // build 45 · CI 第一轮（反馈 2a/2b）：就绪即清中间态 + 撤看门狗
+                self?.playbackWatchdog?.cancel()
+                self?.playbackWatchdog = nil
+                self?.isChapterLoading = false
                 // build 27（倍速加固）：条目替换后 AVFoundation 将 rate 归零——
                 // 新条目就绪时按当前 speed 与播放态重放（暂停态不起播）。
                 self?.applyRate()
@@ -611,6 +630,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 // 的原始失败（HTTP 状态/OSStatus/NSURLError 原文）全部丢失。此处把
                 // loader 层记录槽原文拼进 playbackError：格式「人话 + [诊断] 阶段原文」，
                 // 用户截图即可直接定位坏在哪一层（resolve 解析 / play 取流）。
+                self?.playbackWatchdog?.cancel()
+                self?.playbackWatchdog = nil
+                self?.isChapterLoading = false
                 let loaderRecord = self?.takeLoaderFailureRecord()
                 // build 45 · 反馈 1a：player 层 NSError 原文（OSStatus domain/code +
                 // userInfo）一并透出——AVFoundation 会把取流错误改写成黑盒
@@ -658,6 +680,24 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         recordHistory(force: true, positionMs: startMs)
         // 增强 5.3：预取下一章直链（提前解析 + AVFoundation 预热），切章零等待
         scheduleNextChapterPrefetch()
+        // build 45 · CI 第一轮（反馈 2b）：取流看门狗——20s 未就绪且未报错，
+        // 视为取流挂起（缓冲态 AVFoundation 不主动 .failed），按失败透传：
+        // 「取流超时」+ [诊断] loader 层原文 + 取证指引（H 判定窗口 30s 内必达）。
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard let self, self.playbackError == nil else { return }
+            let loaderRecord = self.takeLoaderFailureRecord()
+            var diagnostic = ["取流超时 · 20 秒内条目未就绪（缓冲挂起，AVFoundation 未报 .failed）"]
+            if let loaderRecord { diagnostic.append(loaderRecord) }
+            diagnostic.insert("B站取证：截图反馈此段", at: 0)
+            let fullMessage = "加载超时，请重试 [诊断] " + diagnostic.joined(separator: " | ")
+            self.playbackWatchdog = nil
+            Task { @MainActor [weak self] in
+                self?.isChapterLoading = false
+                self?.playbackError = fullMessage
+            }
+        }
+        playbackWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: watchdog)
     }
 
     // MARK: - AVAssetResourceLoaderDelegate（P0-1 真实解析）

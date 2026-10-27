@@ -110,8 +110,10 @@ final class Build44FeedbackTests: XCTestCase {
         let section = String(src[start.lowerBound..<rest.lowerBound])
         XCTAssertTrue(section.contains("ScrollView{"), "历史搜索必须可滚动展示全部记录")
         XCTAssertTrue(section.contains("maxHeight:200"), "滚动区必须有高度上限（防历史过多挤压书库列表）")
-        XCTAssertFalse(section.contains("lineLimit(1)"), "历史 chips 不得单行截断（用户反馈「单条文字被截断」的旧形态）")
-        XCTAssertFalse(section.contains("fixedSize(horizontal:true"), "不得水平 fixedSize 锁死宽度（换行展示被抑制）")
+        // build 45 · CI 第一轮（反馈 2）：删除 b44 的两条对立断言（不得
+        // lineLimit(1) / 不得 fixedSize）——b44 换行方案已被竖排回归证伪，
+        // b45 回归 lineLimit(1) + 整体 fixedSize 横排形态，权威守卫在
+        // Build45FeedbackTests.testHistoryChipsHorizontalLayoutGuard。
     }
 
     // MARK: - 工具

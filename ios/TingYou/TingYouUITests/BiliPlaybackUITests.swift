@@ -40,7 +40,9 @@ final class BiliPlaybackUITests: XCTestCase {
             firstCell.tap()
         }
 
-        // 判定窗口 30s：播放态（暂停按钮出现）或失败态（[诊断] 错误文案透传）
+        // 判定窗口 30s：播放态（「暂停」按钮——b45.1 起播放/暂停按钮带
+        // accessibilityLabel「暂停/播放」，此前只有 SF Symbol 断言永不命中）或
+        // 失败态（[诊断] 错误文案透传；取流挂起 20s 看门狗兜底，30s 内必达其一）
         let paused = app.buttons["暂停"].firstMatch
         let diag = app.staticTexts
             .matching(NSPredicate(format: "label CONTAINS '[诊断]'")).firstMatch

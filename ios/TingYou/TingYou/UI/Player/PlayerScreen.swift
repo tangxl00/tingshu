@@ -51,6 +51,14 @@ struct PlayerScreen: View {
                         .padding(.horizontal, 24)
                     }
 
+                    // build 45 · CI 第一轮（反馈 2a）：加载中间态——点章到就绪之间
+                    // 的可感知反馈；此前这段区间完全静默（H 空窗根因之一）。
+                    if pm?.isChapterLoading == true, pm?.playbackError == nil {
+                        Text("加载中…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
                     DotProgress(
                         value: (pm?.durationMs ?? 0) > 0 ? Double(pm?.currentPositionMs ?? 0) / Double(pm!.durationMs) : 0,
                         onSeek: { pct in
@@ -63,6 +71,7 @@ struct PlayerScreen: View {
 
                     HStack {
                         Text(formatMs(pm?.currentPositionMs ?? 0)).font(.caption).monospacedDigit()
+                            .accessibilityIdentifier("player_time_label")
                         Spacer()
                         Text(formatMs(pm?.durationMs ?? 0)).font(.caption).monospacedDigit()
                     }
@@ -76,6 +85,12 @@ struct PlayerScreen: View {
                             Image(systemName: (pm?.isPlaying ?? false) ? "pause.circle.fill" : "play.circle.fill")
                                 .font(.system(size: 64))
                         }
+                        // build 45 · CI 第一轮（反馈 2c）：播放/暂停按钮此前只有 SF
+                        // Symbol 无文本——XCUITest「暂停」断言永不命中（H 播放态判据
+                        // 锚错）。补 accessibilityLabel（同时是 VoiceOver 正确行为）
+                        // + 稳定 identifier。
+                        .accessibilityLabel((pm?.isPlaying ?? false) ? "暂停" : "播放")
+                        .accessibilityIdentifier("player_play_pause")
                         Button { pm?.nextChapter() } label: {
                             Image(systemName: "forward.end.fill").font(.title2)
                         }

@@ -39,6 +39,17 @@ private final class KeyboardDismissSkipTextInputs: NSObject, UIGestureRecognizer
         }
         return true
     }
+
+    /// build 45 · CI 第一轮（反馈 4 修复）：并行识别——window 级 recognizer
+    /// 必须与 SwiftUI 交互控件（Button/DisclosureGroup/Menu/NavigationLink 行）
+    /// 的内部手势同时识别。缺这条时控件手势独占认领、window recognizer 被排除，
+    /// endEditing 永不触发——CI 证据：旧 G（非交互空白区）过、C（「分类」交互
+    /// 控件）与新 G 交互点位败。cancelsTouchesInView=false 已保证不吞事件，
+    /// 并行识别只补「识别权」不补「事件权」，行导航照常。
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        return true
+    }
 }
 
 enum GlobalKeyboardDismiss {
