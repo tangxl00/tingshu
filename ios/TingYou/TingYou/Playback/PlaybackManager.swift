@@ -406,14 +406,17 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         ]
         // build 45 · 反馈 1a（错误透传）：先构造 delegate（recorder 闭包把
         // 取流层失败原文写入 loaderFailureRecord），再构造 session——
-        // 属性已改为 var + 隐式解包，必须在 session 构造前完成赋值。
-        self.proxyStreamDelegate = ProxyStreamSessionDelegate(failureRecorder: { [weak self] message in
+        // 属性已改为 var + 隐式解包。注意：delegate 构造含 self 捕获，
+        // 必须放在 super.init() 之后（Swift 两阶段初始化：super.init 前
+        // 不允许读取 self）。
+        super.init()
+        let proxyDelegate = ProxyStreamSessionDelegate(failureRecorder: { [weak self] message in
             self?.recordLoaderFailure(message)
         })
+        self.proxyStreamDelegate = proxyDelegate
         self.proxySession = URLSession(configuration: proxyConfig,
-                                       delegate: proxyStreamDelegate,
+                                       delegate: proxyDelegate,
                                        delegateQueue: nil)
-        super.init()
         _speed = UserDefaults.standard.float(forKey: "playback_speed")
         if _speed < 0.5 || _speed > 4.0 { _speed = 1.0 }
         setupAudioSession()
