@@ -47,9 +47,6 @@ struct DiscoverScreen: View {
         if appContainer?.sourceEnabledStore.isEnabled(SourceRegistry.BILI) ?? true {
             result.append((SourceRegistry.BILI, SourceRegistry.displayName(src: SourceRegistry.BILI)))
         }
-        if appContainer?.sourceEnabledStore.isEnabled(SourceRegistry.TING59) ?? true {
-            result.append((SourceRegistry.TING59, SourceRegistry.displayName(src: SourceRegistry.TING59)))
-        }
         return result
     }
 
@@ -278,8 +275,8 @@ struct DiscoverScreen: View {
     private var libraryContent: some View {
         // build 21 · 反馈 6：分类选择折叠面板（二级折叠、默认收起）。
         // v1.4.1：分类面板标题行新增音源选择 Menu（音源：X ▾）——
-        // 听友FM（DiscoverCatalog 5 榜单分类）/ B站（BiliCategories.ALL 6 分类）/
-        // 59听书网（Ting59Categories.ALL 24 分类）；选中后下方分类与书籍列表切换为该源数据。
+        // 听友FM（DiscoverCatalog 5 榜单分类）/ B站（BiliCategories.ALL 6 分类）；
+        // build 38 · 反馈 1：59听书网（ting59）下架，音源选择器同步摘除。
         VStack(spacing: 0) {
             DisclosureGroup(isExpanded: $categoryExpanded) {
                 ScrollView(.horizontal, showsIndicators: false) {

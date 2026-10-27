@@ -23,7 +23,8 @@ final class Build29RegressionTests: XCTestCase {
     func testAggregateSearchSourcesIncludeNewSources() {
         let sources = SourceEnabledStore.searchSources
         XCTAssertTrue(sources.contains(SourceRegistry.BILI), "B站 必须在搜索源列表中")
-        XCTAssertTrue(sources.contains(SourceRegistry.TING59), "59听书网 必须在搜索源列表中")
+        // build 38 · 反馈 1：ting59（59听书网）下架——不得残留在搜索源列表中
+        XCTAssertFalse(sources.contains("ting59"), "59听书网已下架，不得残留在搜索源列表中")
     }
 
     // MARK: - R5 · PlaybackManager prepareQueue 接口未变（结构存在性）
@@ -83,9 +84,10 @@ final class Build29RegressionTests: XCTestCase {
 
     func testSourceRegistryNewSourcesRegistered() {
         XCTAssertEqual(SourceRegistry.displayName(src: "bili"), "B站")
-        XCTAssertEqual(SourceRegistry.displayName(src: "ting59"), "59听书网")
         XCTAssertTrue(SourceRegistry.isKnown(src: "bili"))
-        XCTAssertTrue(SourceRegistry.isKnown(src: "ting59"))
+        // build 38 · 反馈 1：ting59（59听书网）下架——显示名回落原始 id、isKnown 翻转
+        XCTAssertEqual(SourceRegistry.displayName(src: "ting59"), "ting59", "下架源显示名回落原始 id")
+        XCTAssertFalse(SourceRegistry.isKnown(src: "ting59"), "59听书网已下架")
     }
 
     /// build 37 · 反馈 1：ting15/mekui 下架后 MSRC 注册表清空（同 build 36 删 ting08 口径）。
@@ -123,8 +125,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "37",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 37（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "38",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 38（升版本时同步改此断言）")
     }
 
     /// 从缩进 YAML 文本提取 `key: value` 首个定义的值：
@@ -157,8 +159,7 @@ final class Build29RegressionTests: XCTestCase {
         PlaybackRepository(
             apiClient: APIClient(),
             ytysxsAdapter: YtysxsAdapter(apiClient: APIClient()),
-            biliAdapter: BiliAdapter(),
-            ting59Adapter: Ting59Adapter()
+            biliAdapter: BiliAdapter()
         )
     }
 }

@@ -274,8 +274,9 @@ struct ShelfScreen: View {
         case BiliSource.KIND:
             src = BiliSource.SRC
             detailPath = book.meta
-        case Ting59Source.KIND:
-            src = Ting59Source.SRC
+        case "ting59":
+            // build 38：Ting59Source 常量已删（音源下架），存量导入书 kind 兼容。
+            src = "ting59"
             detailPath = book.meta.map { "/mp3/\($0).html" }
         default:
             src = book.kind
@@ -553,7 +554,7 @@ struct ImportedBookRow: View {
     private var kindLabel: String {
         switch book.kind {
         case BiliSource.KIND: return "B站"
-        case Ting59Source.KIND: return "59听书网"
+        case "ting59": return "59听书网"
         default: return book.kind
         }
     }
@@ -577,7 +578,7 @@ struct ImportedBookGridItem: View {
     private var kindLabel: String {
         switch book.kind {
         case BiliSource.KIND: return "B站"
-        case Ting59Source.KIND: return "59听书网"
+        case "ting59": return "59听书网"
         default: return book.kind
         }
     }

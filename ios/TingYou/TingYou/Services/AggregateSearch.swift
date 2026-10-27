@@ -71,10 +71,6 @@ struct AggregateSearcher {
             case .failure(let error)?:
                 if let antibot = error as? AntibotException {
                     antibotKeyword = antibot.keyword.isEmpty ? keyword : antibot.keyword
-                } else if error is Ting59AntibotException {
-                    // build 36 · 反馈 1：59听书站点级验证拦截——计入失败源名并附
-                    // 明确标注，如实透出「该站点需要安全验证」，不静默吞为 0 结果。
-                    failed.append("\(SourceRegistry.displayName(src: sources[idx]))（需安全验证）")
                 } else {
                     failed.append(SourceRegistry.displayName(src: sources[idx]))
                 }

@@ -31,7 +31,8 @@ final class SourceRegistryTests: XCTestCase {
         XCTAssertTrue(SourceRegistry.isKnown(src: "tingyou"))
         XCTAssertTrue(SourceRegistry.isKnown(src: "ytysxs"))
         XCTAssertTrue(SourceRegistry.isKnown(src: "bili"))
-        XCTAssertTrue(SourceRegistry.isKnown(src: "ting59"))
+        // build 38 · 反馈 1：ting59（59听书网）下架
+        XCTAssertFalse(SourceRegistry.isKnown(src: "ting59"), "59听书网已下架")
     }
 
     func testDelistedSourcesHaveNoConfigAndFallbackDisplayName() {

@@ -55,7 +55,7 @@ final class DiscoverViewModel {
     /// v1.4.1：合法键前缀扩至 bili| / ting59|（浏览区新增两源的「src|cat」分区键，
     /// 否则每次 attach 会把上一会话写入的这两源缓存当孤儿清掉）；
     /// 单测可注入假实现验证「优先读缓存」路径。
-    func attach(apiClient: APIClient, sourceRouter: SourceRouter? = nil, cache: (any DiscoverCacheStore)? = DiskDiscoverCache(validKeyPrefixes: ["tingyou|", "bili|", "ting59|"])) {
+    func attach(apiClient: APIClient, sourceRouter: SourceRouter? = nil, cache: (any DiscoverCacheStore)? = DiskDiscoverCache(validKeyPrefixes: ["tingyou|", "bili|"])) {
         attach(loader: CombinedDiscoverLoader(
             repo: AlbumRepository(apiClient: apiClient), router: sourceRouter), cache: cache)
     }

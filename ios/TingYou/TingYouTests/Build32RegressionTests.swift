@@ -43,17 +43,17 @@ final class Build32RegressionTests: XCTestCase {
         // 取证 B 实测：xmcdn 直链已被 CDN 全面拒绝（403/404），非 App 可修——
         // 非客户端网络类错误一律按站点侧源失效提示，引导换源
         let msg = PlaybackManager.describePlaybackError(
-            URLError(.badServerResponse), source: SourceRegistry.TING59)
+            URLError(.badServerResponse), source: "ting59")
         XCTAssertTrue(msg.contains("59听书网音频源当前不可用"), "ting59 失效应给出站点侧失效文案：\(msg)")
         XCTAssertTrue(msg.contains("换用其他音源"), "应引导换源：\(msg)")
     }
 
     func testTing59NetworkFailureReportsNetworkIssue() {
         let offline = PlaybackManager.describePlaybackError(
-            URLError(.notConnectedToInternet), source: SourceRegistry.TING59)
+            URLError(.notConnectedToInternet), source: "ting59")
         XCTAssertTrue(offline.contains("网络"), "客户端断网不能误报站点失效：\(offline)")
         let timeout = PlaybackManager.describePlaybackError(
-            URLError(.timedOut), source: SourceRegistry.TING59)
+            URLError(.timedOut), source: "ting59")
         XCTAssertTrue(timeout.contains("网络"), "超时属客户端网络问题：\(timeout)")
     }
 

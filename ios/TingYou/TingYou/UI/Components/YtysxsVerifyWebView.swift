@@ -9,6 +9,18 @@ import WebKit
 /// 3. 每次导航结束经 WKWebsiteDataStore.httpCookieStore 捕获 be_captcha_token；
 /// 4. token 写入 KeychainTokenStore（Keychain 主体 + 24h Max-Age 元数据）；
 /// 5. 有效期内原生请求（YtysxsAdapter.fetchHtml）自动携带 Cookie 放行。
+///
+/// build 38 · 反馈 2（用户第二次反馈「验证页加载不出来」深修）：
+/// ① makeUIView 初始 frame 不再用 .zero——部分 iOS 版本下零尺寸 WKWebView 可能
+///    不触发 provisional navigation（表现为永久转圈），给屏幕尺寸的防御性初始帧；
+/// ② 接入 estimatedProgress KVO → sheet 状态机，加载中显示可见进度条；
+///    25 秒超时兜底经状态机收敛（仅 loading 态可触发，迟到超时不覆盖已回包结果）；
+/// ③ didFinish 后把悦听域全部 cookie 同步进 HTTPCookieStorage.shared
+///    （YtysxsCookieSync），验证 WebView 的会话随 URLSession 请求复用——
+///    此前只传 be_captcha_token 单值，其它会话 cookie 丢失会导致验证通过后
+///    搜索再次触发验证；
+/// ④ webViewWebContentProcessDidTerminate 第一次自动 reload 一次（此前只报错，
+///    需用户手动重试）；同一 WebView 实例只自动恢复一次，再终止走人工重试。
 struct YtysxsVerifyWebView: UIViewRepresentable {
     let keyword: String
     let cookieStore: KeychainTokenStore
@@ -17,6 +29,8 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
     let onLoadingChange: (Bool) -> Void
     /// build 27：加载失败回调（错误描述 + 重试闭包由 sheet 层组装）
     let onLoadError: (String) -> Void
+    /// build 38 · 反馈 2 ②：estimatedProgress 进度回包（0.0~1.0，仅加载中回调）
+    let onProgress: (Double) -> Void
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -27,9 +41,26 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
         // UA 风控误判——改为读取当前 CFBundleShortVersionString 动态拼接。
         let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4"
         config.applicationNameForUserAgent = "TingYou/\(appVersion) Safari/605.1.15"
-        let webView = WKWebView(frame: .zero, configuration: config)
+        // build 38 · 反馈 2 ①：防御性非零初始帧——SwiftUI 布局接管前 provisional
+        // navigation 已可开始；autoresizingMask 保证布局生效后贴合容器。
+        let initialFrame = UIScreen.main.bounds
+        let webView = WKWebView(frame: initialFrame, configuration: config)
         webView.navigationDelegate = context.coordinator
+        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // build 38 · 反馈 2 ②：进度可见性——estimatedProgress KVO（dismantle 时移除）
+        webView.addObserver(context.coordinator, forKeyPath: "estimatedProgress",
+                            options: [.new], context: nil)
+        context.coordinator.isObservingProgress = true
         return webView
+    }
+
+    /// build 38 · 反馈 2 ②：视图移除（含 .id 重试重建）时移除 KVO 观察者，
+    /// 避免悬垂观察者崩溃。
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        if coordinator.isObservingProgress {
+            uiView.removeObserver(coordinator, forKeyPath: "estimatedProgress")
+            coordinator.isObservingProgress = false
+        }
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
@@ -52,7 +83,8 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(cookieStore: cookieStore, onResult: onResult,
-                   onLoadingChange: onLoadingChange, onLoadError: onLoadError)
+                   onLoadingChange: onLoadingChange, onLoadError: onLoadError,
+                   onProgress: onProgress)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
@@ -60,14 +92,32 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
         let onResult: (Bool) -> Void
         let onLoadingChange: (Bool) -> Void
         let onLoadError: (String) -> Void
+        let onProgress: (Double) -> Void
         var loadedURL: String?
+        /// build 38 · 反馈 2 ②：KVO 观察者注册标记（dismantleUIView 恰好移除一次）
+        var isObservingProgress = false
+        /// build 38 · 反馈 2 ④：进程终止自动恢复只做一次（防 reload 循环）
+        private var didAutoReloadContentProcess = false
 
         init(cookieStore: KeychainTokenStore, onResult: @escaping (Bool) -> Void,
-             onLoadingChange: @escaping (Bool) -> Void, onLoadError: @escaping (String) -> Void) {
+             onLoadingChange: @escaping (Bool) -> Void, onLoadError: @escaping (String) -> Void,
+             onProgress: @escaping (Double) -> Void) {
             self.cookieStore = cookieStore
             self.onResult = onResult
             self.onLoadingChange = onLoadingChange
             self.onLoadError = onLoadError
+            self.onProgress = onProgress
+        }
+
+        // build 38 · 反馈 2 ②：estimatedProgress KVO → 进度回包（仅加载中转发；
+        /// 导航完成后的迟到回包由 sheet 状态机丢弃，不复活加载态）
+        override func observeValue(forKeyPath keyPath: String?, of object: Any?,
+                                   change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
+            guard keyPath == "estimatedProgress",
+                  let progress = change?[.newKey] as? Double else { return }
+            DispatchQueue.main.async { [onProgress] in
+                onProgress(progress)
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -76,8 +126,11 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
             // 验证完成后从 httpCookieStore 捕获 be_captcha_token（24h 有效）
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
                 guard let self = self else { return }
-                if let token = cookies.first(where: { $0.name == "be_captcha_token" })?.value,
-                   !token.isEmpty {
+                // build 38 · 反馈 2 ③：悦听域全部 cookie 同步进 URLSession 侧
+                // （HTTPCookieStorage.shared）——验证会话随后续原生请求复用，
+                // 修复「验证通过后搜索仍再触发验证」的形态。
+                YtysxsCookieSync.sync(cookies)
+                if let token = YtysxsCookieSync.captchaToken(from: cookies) {
                     self.cookieStore.save(token: token)
                     DispatchQueue.main.async { self.onResult(true) }
                 }
@@ -111,7 +164,18 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
 
         /// build 27：导航被取消（系统侧 w/ NSURLErrorCancelled）不算失败也不算成功——
         /// 清加载态静默返回（重试场景常见，不能误报错误）。
+        /// build 38 · 反馈 2 ④：进程终止自动恢复一次（Apple 推荐的 webView.reload()），
+        /// 恢复期间回到加载态（进度/超时兜底照常接线）；同一实例只自动恢复一次，
+        /// 再次终止按原路径报错走人工重试，避免 reload 循环。
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            if !didAutoReloadContentProcess, loadedURL != nil {
+                didAutoReloadContentProcess = true
+                DispatchQueue.main.async { [onLoadingChange] in
+                    onLoadingChange(true)
+                }
+                webView.reload()
+                return
+            }
             DispatchQueue.main.async { [onLoadingChange, onLoadError] in
                 onLoadingChange(false)
                 onLoadError("网页进程已终止，请重试加载")
@@ -121,14 +185,14 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
 }
 
 /// 验证流程 sheet：标题 + 完成验证 / 取消按钮 + WebView 主体。
+/// build 38 · 反馈 2：加载/失败/超时/重试状态收敛到 VerifyLoadStateMachine（可单测），
+/// UI 全部由 machine.phase 派生。
 struct YtysxsVerifySheet: View {
     let keyword: String
     let cookieStore: KeychainTokenStore
     let onDone: (Bool) -> Void
-    /// build 27：加载状态（WebView 不可达时不再静默空白）
-    @State private var isLoading = true
-    /// build 27：加载失败描述（nil = 无失败）
-    @State private var loadErrorText: String?
+    /// build 38 · 反馈 2：加载状态机（唯一事实源）
+    @State private var machine = VerifyLoadStateMachine()
     /// build 27：重试触发（更新即让 WebView updateUIView 重新 load）
     @State private var retryToken = 0
     /// build 37 · 反馈 5：加载超时兜底任务——慢网络 / 连接挂起（无任何导航回包）时
@@ -144,8 +208,8 @@ struct YtysxsVerifySheet: View {
         loadTimeoutTask = Task {
             try? await Task.sleep(nanoseconds: Self.loadTimeoutNanos)
             guard !Task.isCancelled else { return }
-            isLoading = false
-            loadErrorText = "验证页加载超时（25 秒），请检查网络后重试"
+            // build 38：经状态机收敛——若导航已回包（phase 不再 loading），迟到超时不覆盖
+            machine.timeout()
         }
     }
 
@@ -164,28 +228,43 @@ struct YtysxsVerifySheet: View {
                         if captured { onDone(true) }
                     },
                     onLoadingChange: { loading in
-                        isLoading = loading
                         if loading {
-                            loadErrorText = nil
+                            machine.start()
                             startLoadTimeout()
                         } else {
+                            machine.finish()
                             cancelLoadTimeout()
                         }
                     },
                     onLoadError: { text in
-                        loadErrorText = text
+                        machine.fail(text)
+                    },
+                    onProgress: { progress in
+                        machine.updateProgress(progress)
                     }
                 )
                 .ignoresSafeArea(edges: .bottom)
                 .id(retryToken) // build 27：重试 = 整体重建 WebView（清空陈旧导航状态）
 
-                if isLoading && loadErrorText == nil {
-                    // build 27：加载中提示（原实现无任何反馈，慢网络下像空白页）
-                    ProgressView("正在加载验证页面…")
-                        .padding()
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                if case .loading(let progress) = machine.phase {
+                    // build 27：加载中提示（原实现无任何反馈，慢网络下像空白页）；
+                    // build 38 · 反馈 2 ②：有 estimatedProgress 回包时显示确定进度条
+                    // 与百分比，无回包时保持不确定转圈——站点 2~3s 响应也有可见进展。
+                    VStack(spacing: 10) {
+                        if let p = progress {
+                            ProgressView(value: p)
+                                .frame(maxWidth: 240)
+                            Text("正在加载验证页面… \(Int((p * 100).rounded()))%")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ProgressView("正在加载验证页面…")
+                        }
+                    }
+                    .padding()
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
                 }
-                if let text = loadErrorText {
+                if case .failed(let text) = machine.phase {
                     // build 27：加载失败提示 + 重试（原实现静默失败成空白页）
                     VStack(spacing: 12) {
                         Image(systemName: "wifi.exclamationmark")
@@ -198,9 +277,32 @@ struct YtysxsVerifySheet: View {
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                         Button("重试") {
-                            loadErrorText = nil
-                            isLoading = true
-                            retryToken += 1 // 触发 .id 变化重建 WebView 重新加载
+                            if machine.retry() {
+                                retryToken += 1 // 触发 .id 变化重建 WebView 重新加载
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .padding()
+                }
+                if case .timedOut = machine.phase {
+                    // build 38：超时从 failed 独立成态——文案明确 25 秒兜底口径
+                    VStack(spacing: 12) {
+                        Image(systemName: "clock.badge.exclamationmark")
+                            .font(.largeTitle)
+                            .foregroundStyle(.orange)
+                        Text("验证页加载超时")
+                            .font(.headline)
+                        Text("页面 25 秒内未加载完成，请检查网络后重试")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("重试") {
+                            if machine.retry() {
+                                retryToken += 1
+                            }
                         }
                         .buttonStyle(.borderedProminent)
                     }

@@ -725,10 +725,12 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 return false
             }
         }
-        if source == SourceRegistry.TING59, let ue = error as? URLError, isClientNetworkIssue(ue) {
+        // build 38：SourceRegistry.TING59 常量已删（音源下架），存量书 kind
+        // 兼容保留人话报错——指引换源收听。
+        if source == "ting59", let ue = error as? URLError, isClientNetworkIssue(ue) {
             return "网络连接异常，请检查网络后重试"
         }
-        if source == SourceRegistry.TING59 {
+        if source == "ting59" {
             return "59听书网音频源当前不可用（站点侧变更，2026-10-24 实测其音频直链已被 CDN 全面拒绝），请换用其他音源收听本书"
         }
         if let ue = error as? URLError {

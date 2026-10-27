@@ -38,14 +38,12 @@ final class AppContainer {
         ytysxsCookieStore = KeychainTokenStore()
         let biliAdapter = BiliAdapter()
         let biliSearchApi = BiliSearchApi(adapter: biliAdapter)
-        let ting59Adapter = Ting59Adapter()
         sourceRouter = SourceRouter(
             apiClient: apiClient,
             albumRepository: albumRepository,
             ytysxsAdapter: YtysxsAdapter(apiClient: apiClient, cookieStore: ytysxsCookieStore),
             biliAdapter: biliAdapter,
-            biliSearchApi: biliSearchApi,
-            ting59Adapter: ting59Adapter)
+            biliSearchApi: biliSearchApi)
         // P0-1：PlaybackManager 通过 AVAssetResourceLoaderDelegate 接管
         // tingyou-chapter:// 占位 URI，播放时实时向 PlaybackRepository 解析真实直链。
         playbackManager = PlaybackManager(playbackRepository: sourceRouter.playbackRepository)

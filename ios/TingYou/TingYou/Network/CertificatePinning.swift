@@ -18,8 +18,6 @@ enum PinnedDomainAllowlist {
         "biliapi.net",    // B站 API 备用域
         "akamaized.net",  // Akamai CDN 节点
         "hdslb.com",      // B站自建 CDN
-        "ting59.com",     // 59听书网站点
-        "xmcdn.com",      // 喜马拉雅 CDN（音频直链）
     ]
 
     /// includeSubdomains = false（精确域）

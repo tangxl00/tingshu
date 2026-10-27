@@ -4,7 +4,6 @@ enum SourceRegistry {
     static let TINGYOU = "tingyou"
     static let YTYXSX = "ytysxs"
     static let BILI = "bili"
-    static let TING59 = "ting59"
     static let IMPORT = "import"
 
     struct MsrcSourceConfig: Sendable {
@@ -25,6 +24,8 @@ enum SourceRegistry {
 
     /// build 37 · 反馈 1：听十五（ting15）/ 书音FM（mekui）已下架（同 build 36
     /// 删听吧 ting08 的模式）——常量与 config 摘除，MSRC 注册表清空。
+    /// build 38 · 反馈 1：59听书网（ting59）下架（第 4 次，同一模式）——
+    /// Ting59Adapter/解析器/导入页整体删除，常量摘除。
     /// MsrcSourceConfig 结构、MsrcAdapter / MekuiAdapter 解析器与离线解析测试保留，
     /// isKnown / configOf / imageRefererFor 对已下架源自然返回 false / nil / nil。
     static let msrcSources: [String: MsrcSourceConfig] = [:]
@@ -35,13 +36,12 @@ enum SourceRegistry {
         case IMPORT: return "导入"
         case YTYXSX: return "悦听有声书"
         case BILI: return "B站"
-        case TING59: return "59听书网"
         default: return msrcSources[src]?.name ?? src
         }
     }
 
     static func isKnown(src: String) -> Bool {
-        src == TINGYOU || msrcSources[src] != nil || src == YTYXSX || src == BILI || src == TING59
+        src == TINGYOU || msrcSources[src] != nil || src == YTYXSX || src == BILI
     }
 
     static func configOf(src: String) -> MsrcSourceConfig? { msrcSources[src] }

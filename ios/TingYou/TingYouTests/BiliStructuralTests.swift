@@ -167,8 +167,7 @@ final class BiliStructuralTests: XCTestCase {
         let repo = PlaybackRepository(
             apiClient: APIClient(),
             ytysxsAdapter: YtysxsAdapter(apiClient: APIClient()),
-            biliAdapter: BiliAdapter(),
-            ting59Adapter: Ting59Adapter()
+            biliAdapter: BiliAdapter()
         )
         XCTAssertNotNil(repo)
     }
@@ -180,8 +179,7 @@ final class BiliStructuralTests: XCTestCase {
         let router = SourceRouter(
             apiClient: APIClient(),
             biliAdapter: biliAdapter,
-            biliSearchApi: BiliSearchApi(adapter: biliAdapter),
-            ting59Adapter: Ting59Adapter()
+            biliSearchApi: BiliSearchApi(adapter: biliAdapter)
         )
         XCTAssertNotNil(router)
     }

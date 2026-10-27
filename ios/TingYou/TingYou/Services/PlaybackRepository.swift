@@ -5,20 +5,19 @@ import Foundation
 /// - ytysxs → 章节直链透传（白名单自检）；
 /// build 37 · 反馈 1：ting15（听十五）/ mekui（书音FM）下架（同 build 36 删
 /// ting08 模式）——播放路由 case 与适配器装配摘除。
+/// build 38 · 反馈 1：ting59（59听书网）下架（第 4 次）——适配器整体删除，
+/// 播放路由 case 摘除；init 4 → 3 参数。
 final class PlaybackRepository: Sendable {
     private let apiClient: APIClient
     private let ytysxsAdapter: YtysxsAdapter
     private let biliAdapter: BiliAdapter
-    private let ting59Adapter: Ting59Adapter
 
     init(apiClient: APIClient,
          ytysxsAdapter: YtysxsAdapter,
-         biliAdapter: BiliAdapter,
-         ting59Adapter: Ting59Adapter) {
+         biliAdapter: BiliAdapter) {
         self.apiClient = apiClient
         self.ytysxsAdapter = ytysxsAdapter
         self.biliAdapter = biliAdapter
-        self.ting59Adapter = ting59Adapter
     }
 
     /// 解析占位 URI 为真实音频直链（AVAssetResourceLoaderDelegate 惰性调用）。
@@ -59,19 +58,6 @@ final class PlaybackRepository: Sendable {
             }
             let streamResult = await biliAdapter.audioStreamUrl(bvid: bvid, cid: page.cid)
             return try streamResult.get()
-        case SourceRegistry.TING59:
-            // P0-2：从 detailPath 解析站点 bookId（如 "/mp3/19745.html" → "19745"），
-            // 避免使用本地自增 albumId 导致 404
-            let siteBookId: String
-            if let path = detailPath, !path.isEmpty {
-                siteBookId = path.replacingOccurrences(of: "/mp3/", with: "")
-                    .replacingOccurrences(of: ".html", with: "")
-            } else {
-                siteBookId = String(albumId)
-            }
-            let doc = try await ting59Adapter.fetchPlayPage(bookId: siteBookId, line: 0, index: chapterIdx)
-            let url = try Ting59PlayParser.extractAudioUrl(html: doc)
-            return url
         default:
             throw URLError(.unsupportedURL)
         }

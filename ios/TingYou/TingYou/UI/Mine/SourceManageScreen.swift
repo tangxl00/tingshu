@@ -168,7 +168,6 @@ final class SourceManageModel {
         Row(id: SourceRegistry.TINGYOU, name: "听友FM", note: nil),
         Row(id: SourceRegistry.YTYXSX, name: "悦听有声书", note: nil),
         Row(id: SourceRegistry.BILI, name: "B站", note: nil),
-        Row(id: SourceRegistry.TING59, name: "59听书网", note: nil),
         Row(id: SourceRegistry.IMPORT, name: "导入", note: "不参与搜索与检测"),
     ]
 
@@ -227,17 +226,11 @@ final class SourceManageModel {
                         _ = try await router.search(src: id, keyword: "三体")
                     case SourceRegistry.BILI:
                         _ = try await router.discoverCategory(src: id, categoryId: "hot", page: 1)
-                    case SourceRegistry.TING59:
-                        _ = try await router.discoverCategory(src: id, categoryId: "xuanhuan", page: 1)
                     default:
                         return .failed
                     }
                     return .ok
                 } catch is AntibotException {
-                    return .antibot
-                } catch is Ting59AntibotException {
-                    // build 36 · 反馈 1：59听书站点级验证码页（vdcode）——站点可达但被
-                    // 安全验证拦截，如实标「需验证」（与悦听同徽标，无 token 闭环）
                     return .antibot
                 } catch {
                     return .failed
