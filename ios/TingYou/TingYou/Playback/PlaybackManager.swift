@@ -255,7 +255,10 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// 在 init 装配：存储属性初始化器不能引用其它实例属性。
     /// build 45 · 反馈 1a：构造时传入错误透传 recorder（loader 层失败原文回写）。
     private var proxyStreamDelegate: ProxyStreamSessionDelegate!
-    private let proxySession: URLSession
+    /// build 45 · 反馈 1a：session 与 delegate 都改为 var + 隐式解包——delegate
+    /// 闭包捕获 self，只能在 super.init() 之后构造（Swift 两阶段初始化），
+    /// session 挂 delegate 故同批次赋值；init 尾部即完成，运行时非空。
+    private var proxySession: URLSession!
 
     // MARK: - Bug 2 播放历史落库 + 增强 5.3 下一章预取
 
