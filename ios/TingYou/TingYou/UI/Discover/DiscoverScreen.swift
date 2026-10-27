@@ -82,6 +82,8 @@ struct DiscoverScreen: View {
                         .foregroundStyle(.secondary)
                     TextField("搜索书名 / 作者 / 主播", text: $keyword)
                         .submitLabel(.search)
+                        // build 42 · 任务一：XCUITest 点击探针（DiscoverNavigationUITests 定位用）
+                        .accessibilityIdentifier("discover_search_field")
                         .onSubmit {
                             performSearch(initial: true)
                         }
@@ -115,19 +117,15 @@ struct DiscoverScreen: View {
                 // 手势，两个 List 本体不挂手势（scrollDismissesKeyboard 保留）；
                 // ④ view-based NavigationLink 保留。simultaneous 与行导航并行
                 // 识别、互不抢占，覆盖 List 内外全部空白。
-                // build 41 修：if/else 表达式不能直接链实例修饰符，须包 Group——
-                // Group 仅作 ViewBuilder 容器，不属守卫禁止形态。
-                Group {
-                    if searchMode && !keyword.isEmpty {
-                        searchResultsContent
-                    } else {
-                        // build 41：keyword 为空 && 非搜索结果态 → 显示搜索历史
-                        //（输入中 / 提交搜索即隐藏，语义保留）。
-                        if keyword.isEmpty {
-                            historySection
-                        }
-                        libraryContent
+                if searchMode && !keyword.isEmpty {
+                    searchResultsContent
+                } else {
+                    // build 41：keyword 为空 && 非搜索结果态 → 显示搜索历史
+                    //（输入中 / 提交搜索即隐藏，语义保留）。
+                    if keyword.isEmpty {
+                        historySection
                     }
+                    libraryContent
                 }
                 .simultaneousGesture(TapGesture().onEnded {
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
@@ -267,12 +265,15 @@ struct DiscoverScreen: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
-                ForEach(searchResults) { album in
+                // build 42 · 任务一：行 identifier 供 DiscoverNavigationUITests
+                // 真实点击复现「点书不导航」（键盘弹起 / 冷启动两场景）。
+                ForEach(Array(searchResults.enumerated()), id: \.element.id) { idx, album in
                     NavigationLink {
                         AlbumScreen(album: album)
                     } label: {
                         AlbumRow(album: album)
                     }
+                    .accessibilityIdentifier("discover_search_row_\(idx)")
                 }
                 if searchHasMore {
                     ProgressView()
@@ -355,12 +356,16 @@ struct DiscoverScreen: View {
                 }
             } else {
                 List {
-                    ForEach(viewModel.albums) { album in
+                    // build 42 · 任务一：行 identifier 供 DiscoverNavigationUITests
+                    // 真实点击复现「点书不导航」——冷启动场景（用例 A）即点击
+                    // discover_album_row_0，断言 AlbumScreen 推入。
+                    ForEach(Array(viewModel.albums.enumerated()), id: \.element.id) { idx, album in
                         NavigationLink {
                             AlbumScreen(album: album)
                         } label: {
                             AlbumRow(album: album)
                         }
+                        .accessibilityIdentifier("discover_album_row_\(idx)")
                     }
                     if viewModel.loadMoreFailed {
                         // build 24（存量 P2）：加载更多失败的轻量反馈——不弹窗打断，

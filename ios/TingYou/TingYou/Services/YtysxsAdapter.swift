@@ -219,37 +219,69 @@ final class YtysxsAdapter: Sendable {
 
     // ---- HTTP 基础层（带 cookie 注入；验证通过后 24h 内自动放行） ----
 
-    /// build 41 · 反馈 ②（悦听验证过了但搜索仍被拦）：
+    /// build 41 · 反馈 ②（悦听验证过了但搜索仍被拦）第 1 层：
     /// 此前仅手动拼 `Cookie: be_captcha_token=<token>` 单值头——URLSession 规则是
     /// 「请求已带 Cookie 头时不再自动附加共享 cookie storage 的 cookie」，验证
-    /// WebView 建立的会话 cookie（PHPSESSID 等，已 sync 进
-    /// HTTPCookieStorage.shared）全部不随请求发出，站点只收到 token 没收到会话
-    /// → 判定未通过。改为双源合并：取 URL 域内共享 storage 全部 cookie，与
-    /// Keychain token 合并去重（storage 已含 be_captcha_token 时不重复注入，
-    /// Keychain 兜底保留），生成单一 Cookie 头。
-    /// 同时显式带 User-Agent = APIClient.browserUA——与验证 WebView 的
-    /// customUserAgent 完全一致（WebView 侧已同步固定为该常量），避免站点把
-    /// 放行绑定 UA 指纹（验证会话与后续请求同指纹）。
+    /// WebView 建立的会话 cookie（PHPSESSID 等）全部不随请求发出。改为双源合并
+    /// 生成单一 Cookie 头。同时显式带 User-Agent = APIClient.browserUA——与验证
+    /// WebView 的 customUserAgent 完全一致，避免站点把放行绑定 UA 指纹。
+    /// build 42 · 任务二第 2 层（path 嫌疑，单测裁决见
+    /// YtysxsCookieMatchingTests）：HTTPCookieStorage.cookies(for:) 按 RFC 6265
+    /// 严格 path 匹配——服务器经 admin-ajax.php（/wp-admin/ 路径）Set-Cookie 的
+    /// cookie 若 path 非根，对搜索 URL（path=/）会被**静默漏掉**。因此不再用
+    /// cookies(for:) 过滤，改为 storage 全量取出，由 mergedCookieHeader 自实现
+    /// domain 匹配（host 精确或父域命中）+ path 放宽（域内 cookie 一律携带）。
     private func fetchHtml(_ url: String) async throws -> String {
         var headers: [String: String] = [
             "User-Agent": APIClient.browserUA,
         ]
         if let urlObj = URL(string: url) {
-            let storageCookies = HTTPCookieStorage.shared.cookies(for: urlObj) ?? []
-            var parts = storageCookies.map { "\($0.name)=\($0.value)" }
-            // Keychain 兜底双源：storage 无 be_captcha_token（早期会话 / 部分同步失败）时补上
-            if let kv = cookieStore?.cookieHeaderValue(),
-               !storageCookies.contains(where: { $0.name == "be_captcha_token" }) {
-                parts.append(kv)
-            }
-            if !parts.isEmpty {
-                headers["Cookie"] = parts.joined(separator: "; ")
+            let allCookies = HTTPCookieStorage.shared.cookies ?? []
+            if let header = Self.mergedCookieHeader(url: urlObj,
+                                                    storageCookies: allCookies,
+                                                    keychainHeaderValue: cookieStore?.cookieHeaderValue()) {
+                headers["Cookie"] = header
             }
         } else if let kv = cookieStore?.cookieHeaderValue() {
             // URL 不可解析的兜底分支（理论不可达，保留旧行为）
             headers["Cookie"] = kv
         }
         return try await apiClient.fetchHTML(url, headers: headers)
+    }
+
+    // ---- build 42 · 任务二：cookie 合并纯函数（单测注入构造 cookie 裁决） ----
+
+    /// domain 匹配（RFC 6265 放宽实现）：cookie 域去掉前导点后，与请求 host
+    /// 精确相等或为其父域（host 以 ".域" 结尾）即命中。dotless 域
+    /// （"ytysxs.com"）与带点域（".ytysxs.com"）对 www.ytysxs.com 同样命中。
+    static func domainMatches(host: String, cookieDomain: String) -> Bool {
+        let h = host.lowercased()
+        let d = cookieDomain.lowercased()
+        let trimmed = d.hasPrefix(".") ? String(d.dropFirst()) : d
+        guard !trimmed.isEmpty else { return false }
+        return h == trimmed || h.hasSuffix("." + trimmed)
+    }
+
+    /// 双源合并（build 41 引入，build 42 改 path 放宽）：
+    /// storage 域内全部 cookie（含 path 非根的——修复 cookies(for:) 静默漏发）
+    /// + Keychain be_captcha_token 兜底（storage 域内已有同名则不重复注入，
+    /// 早期会话 / 部分同步失败时由 Keychain 兜底）。
+    /// 返回单一 Cookie 头值；无任何 cookie 时返回 nil（不带 Cookie 头，
+    /// URLSession 会自动附加 storage 匹配 cookie——保持兜底行为不变）。
+    static func mergedCookieHeader(url: URL,
+                                   storageCookies: [HTTPCookie],
+                                   keychainHeaderValue: String?) -> String? {
+        let host = url.host ?? ""
+        var parts: [String] = []
+        var names = Set<String>()
+        for cookie in storageCookies where domainMatches(host: host, cookieDomain: cookie.domain) {
+            names.insert(cookie.name)
+            parts.append("\(cookie.name)=\(cookie.value)")
+        }
+        if let kv = keychainHeaderValue, !names.contains("be_captcha_token") {
+            parts.append(kv)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "; ")
     }
 
     private static func firstMatch(_ re: NSRegularExpression, _ i: Int, in s: String) -> String {

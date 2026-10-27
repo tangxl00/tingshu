@@ -12,7 +12,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tingyou.app.ios
         MARKETING_VERSION: 1.4.4
-        CURRENT_PROJECT_VERSION: 41
+        CURRENT_PROJECT_VERSION: 42
         INFOPLIST_FILE: TingYou/Info.plist
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
@@ -28,7 +28,7 @@ targets:
       path: TingYou/Info.plist
       properties:
         CFBundleShortVersionString: "1.4.4"
-        CFBundleVersion: "41"
+        CFBundleVersion: "42"
         CFBundleIconName: AppIcon
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -58,6 +58,24 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.tingyou.app.ios.tests
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
+  # build 42 · 任务一：XCUITest target——用 CI 模拟器真实点击拿
+  # 「点书不导航」的运行时证据（DiscoverNavigationUITests 用例 A/B/C）。
+  # 已挂入 TingYou scheme 的 Test action：CI 跑 xcodebuild test 即执行
+  # （若 workflow 用 -only-testing 限定 TingYouTests 则不会跑，需组长核验）。
+  TingYouUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: TingYouUITests
+    dependencies:
+      - target: TingYou
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tingyou.app.ios.uitests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: TingYou
 schemes:
   TingYou:
     build:
@@ -67,6 +85,8 @@ schemes:
       targets:
         - name: TingYouTests
           parallelizable: true
+        - name: TingYouUITests
+          parallelizable: false
       commandLineArguments:
         "-UITesting": true
 settings:

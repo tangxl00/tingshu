@@ -20,6 +20,9 @@ struct AlbumScreen: View {
                     CoverImage(url: album.coverUrl, size: 90, source: album.source)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(album.title).font(.headline).lineLimit(2)
+                            // build 42 · 任务一：专辑页特征元素标识——XCUITest 断言
+                            // NavigationLink 是否真的推入 AlbumScreen（用例 A/B 的判据）
+                            .accessibilityIdentifier("album_screen_title")
                         if let author = album.author {
                             Text(author).font(.subheadline).foregroundStyle(.secondary)
                         }
