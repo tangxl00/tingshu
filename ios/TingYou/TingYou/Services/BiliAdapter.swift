@@ -127,7 +127,7 @@ actor BiliAdapter {
         do {
             try await warmup()
             let json = try await requestJsonWithBackoff(url: Self.buildPageListUrl(apiBase: apiBase, bvid: bvid))
-            return .success(try Self.parsePageList(json))
+            return .success(try parsePageList(json))
         } catch {
             return .failure(error)
         }

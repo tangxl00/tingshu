@@ -75,7 +75,7 @@ final class DiscoverViewModel {
         }
     }
 
-    /// 统一加载入口（第 1 页）。源不支持（ mekui/ytysxs 抛 unsupportedURL）时置 loadError。
+    /// 统一加载入口（第 1 页）。源不支持（已下架源抛 unsupportedURL）时置 loadError。
     /// build 24：整页重载时同步清除加载更多的失败态。
     func load(target: LoadTarget) async {
         guard let repo = repo, !isLoading else { return }

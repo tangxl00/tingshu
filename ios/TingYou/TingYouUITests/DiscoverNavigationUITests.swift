@@ -121,9 +121,9 @@ final class DiscoverNavigationUITests: XCTestCase {
     }
 
     /// 用例 E（对照·全局导航健康）：「我的」tab → 音源管理 push →
-    /// 断言源列表出现（「悦听有声书」）。该页面链路无容器手势——
-    /// build 42 CI 真实通过，证明全局 NavigationLink 健康、问题为发现页
-    /// 特有。build 43 只动发现页手势，本用例应保持绿（回归对照）。
+    /// 断言源列表出现（「B站」；build 45 · 反馈 3 悦听下架后源行已摘除，
+    /// 断言目标改 B站）。该页面链路无容器手势——build 42 CI 真实通过，
+    /// 证明全局 NavigationLink 健康、问题为发现页特有。
     func testE_mineTabSourceManageNavigationWorks() {
         let app = XCUIApplication()
         app.launch()
@@ -132,7 +132,7 @@ final class DiscoverNavigationUITests: XCTestCase {
         XCTAssertTrue(entry.waitForExistence(timeout: 5),
                       "「我的」页音源管理入口未出现——用例前置失败")
         entry.tap()
-        XCTAssertTrue(app.staticTexts["悦听有声书"].waitForExistence(timeout: 5),
+        XCTAssertTrue(app.staticTexts["B站"].waitForExistence(timeout: 5),
                       "用例 E 失败：「我的→音源管理」push 异常——全局 NavigationLink 出现回归（对照失败，非发现页特有问题）")
     }
 

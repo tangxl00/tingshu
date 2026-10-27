@@ -125,9 +125,9 @@ final class SourceEnabledStore {
     /// 「导入」（IMPORT）不在其列——不参与搜索聚合。
     /// build 37 · 反馈 1：听十五（ting15）/ 书音FM（mekui）下架，6 → 4 源。
     /// build 38 · 反馈 1：59听书网（ting59）下架，4 → 3 源。
+    /// build 45 · 反馈 3：悦听有声书（ytysxs）下架（用户点名），3 → 2 源。
     static let searchSources: [String] = [
         SourceRegistry.TINGYOU,
-        SourceRegistry.YTYXSX,
         SourceRegistry.BILI,
     ]
 

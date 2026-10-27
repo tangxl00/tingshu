@@ -3,9 +3,10 @@ import Foundation
 /// build 21 · 反馈 4/6（增强 2/3）：发现页按原始音源拉取分类。
 /// 不再硬套 tingyou 的 6 个 section——每个源用自己的原始分类结构：
 /// - tingyou：rank API 的 5 个 section（recommend/new/hot/serial/story）；
-/// - ytysxs：全站有人机验证门（实测 /?s= 稳定返回「搜索驗證」页）→ 不支持。
 /// build 37 · 反馈 1：听十五（ting15）/ 书音FM（mekui）下架——可选音源与
 /// 分类清单摘除（同 build 36 删听吧 ting08 的模式）。
+/// build 45 · 反馈 3：悦听（ytysxs）全链摘除——可选音源/不支持集一并删除
+///（悦听发现页本来就不支持，删除后 sourceOptions 只剩实测可用的源）。
 struct DiscoverCategory: Sendable, Identifiable, Equatable {
     /// 分类 id（tingyou section 名 / HTML 源分类路径段）
     let id: String
@@ -17,13 +18,11 @@ enum DiscoverCatalog {
     /// 发现页可选音源（含不支持源——UI 如实标注，不硬造数据）
     static let sourceOptions: [(id: String, name: String)] = [
         (SourceRegistry.TINGYOU, "听友FM"),
-        (SourceRegistry.YTYXSX, "悦听有声书"),
+        (SourceRegistry.BILI, "B站"),
     ]
 
     /// 不支持发现页的源（UI 显示提示而非空列表）
-    static let unsupportedSources: Set<String> = [
-        SourceRegistry.YTYXSX, // 人机验证门，发现数据无法稳定获取
-    ]
+    static let unsupportedSources: Set<String> = []
 
     /// 各源的原始分类清单（顺序 = 站点导航顺序）
     static func categories(for src: String) -> [DiscoverCategory] {

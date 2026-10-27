@@ -23,7 +23,7 @@ struct SearchHistoryStore {
     /// 提交一次搜索时即记录：去重置顶 + 截断上限。
     /// 空白词不记录。
     /// build 27：语义从「成功发起（至少一源有结果）」放宽为「提交即记」——
-    /// 被悦听反爬拦截或全源失败的搜索词同样落库（用户复搜有记忆）。
+    /// 单源失败或全源失败的搜索词同样落库（用户复搜有记忆）。
     func add(_ rawKeyword: String) {
         let kw = rawKeyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !kw.isEmpty else { return }

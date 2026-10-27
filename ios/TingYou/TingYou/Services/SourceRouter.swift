@@ -2,34 +2,32 @@ import Foundation
 
 /// 多音源路由（安卓 SourceRouter.kt 对等，P0-3）：
 /// search / albumDetail / chapters / playUrl 四链路全部按 src 路由到真实适配器——
-/// tingyou → JSON API；ytysxs → YtysxsAdapter（WordPress + AudioIgniter，
-/// 反爬走 AntibotException）；bili → BiliAdapter/BiliSearchApi。
+/// tingyou → JSON API；bili → BiliAdapter/BiliSearchApi。
 /// build 37 · 反馈 1：ting15（听十五）/ mekui（书音FM）下架（同 build 36 删 ting08
 /// 模式）——路由 case 与适配器装配摘除，解析器文件保留供离线测试。
 /// build 38 · 反馈 1：ting59（59听书网）下架（第 4 次，同一模式）——路由 case、
 /// 适配器装配与 Ting59Adapter 整体删除（约定触发：多轮实测站点侧持续失效）。
+/// build 45 · 反馈 3：悦听有声书（ytysxs）下架（第 5 次同类下架，用户点名）——
+/// 路由 case、适配器装配、YtysxsAdapter 整体删除；存量 ytysxs 书走 default
+/// 分支抛 unsupportedURL（UI 层字符串兼容标注「源已下架」）。
 actor SourceRouter {
     private let apiClient: APIClient
     private let albumRepository: AlbumRepository
-    private let ytysxsAdapter: YtysxsAdapter
     private let biliAdapter: BiliAdapter
     let biliSearchApi: BiliSearchApi
     let playbackRepository: PlaybackRepository
 
     init(apiClient: APIClient,
          albumRepository: AlbumRepository? = nil,
-         ytysxsAdapter: YtysxsAdapter? = nil,
          biliAdapter: BiliAdapter? = nil,
          biliSearchApi: BiliSearchApi? = nil) {
         self.apiClient = apiClient
         self.albumRepository = albumRepository
             ?? AlbumRepository(apiClient: apiClient)
-        self.ytysxsAdapter = ytysxsAdapter ?? YtysxsAdapter(apiClient: apiClient)
         self.biliAdapter = biliAdapter ?? BiliAdapter()
         self.biliSearchApi = biliSearchApi ?? BiliSearchApi(adapter: self.biliAdapter)
         self.playbackRepository = PlaybackRepository(
             apiClient: apiClient,
-            ytysxsAdapter: self.ytysxsAdapter,
             biliAdapter: self.biliAdapter)
     }
 
@@ -40,9 +38,6 @@ actor SourceRouter {
         case SourceRegistry.TINGYOU:
             let result = try await albumRepository.search(keyword: keyword, page: 1)
             return result.items
-        case SourceRegistry.YTYXSX:
-            let items = try await ytysxsAdapter.search(keyword: keyword)
-            return items.map { Self.albumFromYtysxs($0) }
         case SourceRegistry.BILI:
             let page = try await biliSearchApi.searchAudiobooks(keyword: keyword, page: 1)
             return page.items.map { Self.albumFromBili($0) }
@@ -57,13 +52,6 @@ actor SourceRouter {
         switch src {
         case SourceRegistry.TINGYOU:
             return try await albumRepository.albumDetail(id: albumId)
-        case SourceRegistry.YTYXSX:
-            let d = try await ytysxsAdapter.detail(albumId: albumId)
-            return Album(albumId: albumId, title: d.title, author: nil, teller: nil,
-                         coverUrl: d.cover, intro: d.intro, category: nil, categoryId: nil,
-                         type: nil, typeId: nil, status: nil, chapterCount: nil,
-                         updatedAt: nil, playCount: nil, available: true, source: src,
-                         detailPath: "/\(albumId).html")
         case SourceRegistry.BILI:
             // B站不从此入口取详情；详情在导入环节通过 biliAdapter.videoInfo 获取
             throw URLError(.unsupportedURL)
@@ -78,11 +66,6 @@ actor SourceRouter {
         switch src {
         case SourceRegistry.TINGYOU:
             return try await albumRepository.chapters(albumId: albumId)
-        case SourceRegistry.YTYXSX:
-            let list = try await ytysxsAdapter.chapters(albumId: albumId)
-            return list.map {
-                Chapter(chapterId: Int64($0.index), index: $0.index, title: $0.title, durationSec: nil)
-            }
         case SourceRegistry.BILI:
             // v1.4.1 · 发现页点书直达：detailPath 即 bvid，章节 = 分P列表。
             // index 取 0 基（page - 1）：PlaybackRepository BILI 播放口径为
@@ -106,7 +89,7 @@ actor SourceRouter {
     // MARK: - 发现页分类（build 21 · 反馈 4/6：按原始音源分类拉取）
 
     /// 发现页分类数据：tingyou 走 rank API；bili 走分类关键词搜索口径。
-    /// 不支持的源（ytysxs）抛 unsupportedURL，由 UI 层如实标注。
+    /// 已下架源抛 unsupportedURL，由 UI 层如实标注。
     func discoverCategory(src: String, categoryId: String, page: Int) async throws -> (albums: [Album], hasMore: Bool) {
         switch src {
         case SourceRegistry.TINGYOU:
@@ -124,13 +107,6 @@ actor SourceRouter {
     }
 
     // MARK: - 映射辅助
-
-    private static func albumFromYtysxs(_ item: YtysxsAdapter.YtysxsSearchItem) -> Album {
-        Album(albumId: item.bookId, title: item.title, author: nil, teller: nil,
-              coverUrl: nil, intro: nil, category: nil, categoryId: nil, type: nil, typeId: nil,
-              status: nil, chapterCount: nil, updatedAt: nil, playCount: nil, available: true,
-              source: SourceRegistry.YTYXSX, detailPath: item.detailPath)
-    }
 
     /// v1.4.1：B站 Album 的稳定 albumId——由 bvid 计算（FNV-1a 64）。
     /// 背景：recordHistory 按 (src, albumId) 去重，此前 albumId 恒为 0 会导致

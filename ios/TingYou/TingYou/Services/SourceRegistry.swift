@@ -2,7 +2,6 @@ import Foundation
 
 enum SourceRegistry {
     static let TINGYOU = "tingyou"
-    static let YTYXSX = "ytysxs"
     static let BILI = "bili"
     static let IMPORT = "import"
 
@@ -26,6 +25,10 @@ enum SourceRegistry {
     /// 删听吧 ting08 的模式）——常量与 config 摘除，MSRC 注册表清空。
     /// build 38 · 反馈 1：59听书网（ting59）下架（第 4 次，同一模式）——
     /// Ting59Adapter/解析器/导入页整体删除，常量摘除。
+    /// build 45 · 反馈 3：悦听有声书（ytysxs）下架（第 5 次同类下架）——
+    /// 常量摘除、YtysxsAdapter/VerifyWebView/VerifySheetState/KeychainTokenStore
+    /// 全链删除；存量书架 ytysxs 来源的书保留（数据不删），播放/详情按
+    /// 字符串兼容报「源已下架」。
     /// MsrcSourceConfig 结构、MsrcAdapter / MekuiAdapter 解析器与离线解析测试保留，
     /// isKnown / configOf / imageRefererFor 对已下架源自然返回 false / nil / nil。
     static let msrcSources: [String: MsrcSourceConfig] = [:]
@@ -34,14 +37,13 @@ enum SourceRegistry {
         switch src {
         case TINGYOU: return "听友FM"
         case IMPORT: return "导入"
-        case YTYXSX: return "悦听有声书"
         case BILI: return "B站"
         default: return msrcSources[src]?.name ?? src
         }
     }
 
     static func isKnown(src: String) -> Bool {
-        src == TINGYOU || msrcSources[src] != nil || src == YTYXSX || src == BILI
+        src == TINGYOU || msrcSources[src] != nil || src == BILI
     }
 
     static func configOf(src: String) -> MsrcSourceConfig? { msrcSources[src] }

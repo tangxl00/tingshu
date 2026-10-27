@@ -555,6 +555,8 @@ struct ImportedBookRow: View {
         switch book.kind {
         case BiliSource.KIND: return "B站"
         case "ting59": return "59听书网"
+        // build 45 · 反馈 3：悦听下架，存量导入书保留可读 + 如实标注下线。
+        case "ytysxs": return "悦听（已下线）"
         default: return book.kind
         }
     }
@@ -579,6 +581,8 @@ struct ImportedBookGridItem: View {
         switch book.kind {
         case BiliSource.KIND: return "B站"
         case "ting59": return "59听书网"
+        // build 45 · 反馈 3：悦听下架，存量导入书保留可读 + 如实标注下线。
+        case "ytysxs": return "悦听（已下线）"
         default: return book.kind
         }
     }

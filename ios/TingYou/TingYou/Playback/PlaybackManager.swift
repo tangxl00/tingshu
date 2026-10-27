@@ -43,6 +43,15 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
     private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
     /// 已完成但 awaitCompletion 尚未挂起的任务（先完成后等待的边界序）
     private var finishedEarly: Set<Int> = []
+    /// build 45 · 反馈 1a（错误透传）：取流层失败原文回传（阶段 play + 原始错误），
+    /// 由 statusObserver .failed 拼进 playbackError——替代被 AVFoundation 吞成
+    /// 裸「Cannot Open」的黑盒。仅记录，不影响 finishLoading 语义。
+    private let failureRecorder: (@Sendable (String) -> Void)?
+
+    init(failureRecorder: (@Sendable (String) -> Void)? = nil) {
+        self.failureRecorder = failureRecorder
+        super.init()
+    }
 
     // MARK: 生命周期（PlaybackManager.proxyMedia 驱动）
 
@@ -95,6 +104,10 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
             return
         }
         guard (200...299).contains(http.statusCode) else {
+            // build 45 · 反馈 1a（错误透传）：HTTP 4xx/5xx 原文回传——设备侧
+            // 「Cannot Open」的头号嫌疑层（直链被 CDN 拒绝），必须让用户截图
+            // 能看到状态码而不是黑盒。
+            failureRecorder?("play · 取流被拒 HTTP \(http.statusCode)（\(http.url?.host ?? "?")），请求域: \(dataTask.originalRequest?.url?.host ?? "?")")
             request.finishLoading(with: URLError(.badServerResponse, userInfo: [
                 NSLocalizedDescriptionKey: "音频服务器拒绝访问（HTTP \(http.statusCode)），请稍后重试",
             ]))
@@ -134,10 +147,33 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         if request.isCancelled { return } // loadingRequest 侧取消：静默（build 32 同口径）
         if let urlError = error as? URLError, urlError.code == .cancelled { return } // 外层 Task 取消连带止流：静默
         if let error {
+            // build 45 · 反馈 1a（错误透传）：网络层错误原文（域名 + 状态码 + 描述）
+            // 回传——TLS/断连/超时等在设备侧的真实形态必须可见。
+            let ns = error as NSError
+            failureRecorder?("play · 网络错误 \(ns.domain) \(ns.code)：\(ns.localizedDescription)（\(task.currentRequest?.url?.host ?? task.originalRequest?.url?.host ?? "?")）")
             request.finishLoading(with: error)
         } else {
             request.finishLoading()
         }
+    }
+
+    /// build 45 · 反馈 1b（设备侧链路排查结论落地）：302 重定向后重注入
+    /// Referer/UA——URLSession 默认重定向行为**不保证保留自定义请求头**，
+    /// B站 CDN 直链常见 302 到镜像域（upos-sz-* / cn-sh-cc-*），跟随后的新请求
+    /// 若丢了 Referer 即 403 → resolve/取流失败 → AVFoundation 吞成 Cannot Open。
+    /// 初始请求带 Referer+UA 206 已实证（沙箱），此前缺的是重定向这一段——
+    /// 本回调对每个重定向后的新请求按目标域名重新注入（BiliCdnHeadersTests
+    /// 覆盖的是 applyBiliCdnHeaders 本身；本处是它在此前未被调用的路径）。
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        var req = request
+        let targetUrl = request.url ?? response.url
+        if let targetUrl = targetUrl {
+            PlaybackManager.applyBiliCdnHeaders(to: &req, url: targetUrl)
+        }
+        completionHandler(req)
     }
 
     // MARK: 证书固定（fail-closed，转发内部 PinningURLSessionDelegate）
@@ -178,6 +214,38 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// v1.4.3 · P0（取证 D）：播放失败不再静默——AVPlayerItem .failed 时置人话文案，
     /// PlayerScreen 显示非阻断提示（含重试）；切章/重试时清空。
     private(set) var playbackError: String?
+    /// build 45 · 反馈 1a（错误透传）：loader 层（resolve 解析 / play 取流）失败
+    /// 原文暂存——statusObserver .failed 时与 AVPlayerItem error 组合成完整
+    /// 诊断文案。切章/重试时清空（见 playbackError = nil 处）。
+    /// NSLock 保护：loader 队列并发写、主线程读。
+    private let failureRecordLock = NSLock()
+    private var loaderFailureRecord: String?
+
+    /// build 45 · 反馈 1a（错误透传）：loader 层失败原文写入（NSLock 保护）。
+    /// 供 ProxyStreamSessionDelegate 的 recorder 闭包调用（loader 队列）。
+    private func recordLoaderFailure(_ message: String) {
+        failureRecordLock.lock()
+        loaderFailureRecord = message
+        failureRecordLock.unlock()
+    }
+
+    /// build 45 · 反馈 1a（错误透传）：读取并清空 loader 层失败原文
+    ///（statusObserver .failed 消费；线程安全读出后清槽防重复消费）。
+    private func takeLoaderFailureRecord() -> String? {
+        failureRecordLock.lock()
+        defer { failureRecordLock.unlock() }
+        let record = loaderFailureRecord
+        loaderFailureRecord = nil
+        return record
+    }
+
+    /// build 45 · 反馈 1a（错误透传）：切章/重试入口清空记录槽
+    ///（与 playbackError = nil 同点位调用）。
+    private func clearLoaderFailureRecord() {
+        failureRecordLock.lock()
+        loaderFailureRecord = nil
+        failureRecordLock.unlock()
+    }
 
     /// v1.4.3 · P0（取证 A）+ build 33 · P0-2：B站 CDN 代理取流专用 session——
     /// 带 Referer/UA（B站 CDN 实测裸请求一律 403）；证书固定 fail-closed
@@ -185,7 +253,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// build 33：delegate 升级为 ProxyStreamSessionDelegate（内部转发质询给
     /// PinningURLSessionDelegate，挂载口径不变），dataTask 按块回调转发。
     /// 在 init 装配：存储属性初始化器不能引用其它实例属性。
-    private let proxyStreamDelegate = ProxyStreamSessionDelegate()
+    /// build 45 · 反馈 1a：构造时传入错误透传 recorder（loader 层失败原文回写）。
+    private var proxyStreamDelegate: ProxyStreamSessionDelegate!
     private let proxySession: URLSession
 
     // MARK: - Bug 2 播放历史落库 + 增强 5.3 下一章预取
@@ -335,6 +404,12 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             "Referer": BiliAdapter.REFERER,
             "Origin": BiliAdapter.REFERER,
         ]
+        // build 45 · 反馈 1a（错误透传）：先构造 delegate（recorder 闭包把
+        // 取流层失败原文写入 loaderFailureRecord），再构造 session——
+        // 属性已改为 var + 隐式解包，必须在 session 构造前完成赋值。
+        self.proxyStreamDelegate = ProxyStreamSessionDelegate(failureRecorder: { [weak self] message in
+            self?.recordLoaderFailure(message)
+        })
         self.proxySession = URLSession(configuration: proxyConfig,
                                        delegate: proxyStreamDelegate,
                                        delegateQueue: nil)
@@ -464,6 +539,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         guard currentChapterIdx < currentChapters.count else { return }
         // v1.4.3 · P0（取证 D）：新章加载即清上次播放失败提示（切章/重试共用）
         playbackError = nil
+        // build 45 · 反馈 1a（错误透传）：同步清 loader 层失败记录槽
+        //（防上一章的旧诊断原文拼进本章错误文案）。
+        clearLoaderFailureRecord()
         let ch = currentChapters[currentChapterIdx]
         currentChapterTitle = ch.title
         currentChapterIdx = currentChapters.firstIndex(where: { $0.chapterId == ch.chapterId }) ?? currentChapterIdx
@@ -521,11 +599,34 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 // v1.4.3 · P0（取证 D）：此前 .failed 完全静默——点章失败用户无感知。
                 // 现透出人话错误（URLError 常见项映射 + ting59 站点失效特化文案），
                 // Task { @MainActor } 包裹（观察回调线程不定，UI 状态须主线程更新）。
+                // build 45 · 反馈 1a（错误透传）：B站 Cannot Open 三轮未解的根因之一
+                // 是错误被 AVFoundation 吞成黑盒——item.error 只剩「Cannot Open」级
+                // 描述，取流层（ProxyStreamSessionDelegate）/解析层（loader catch）
+                // 的原始失败（HTTP 状态/OSStatus/NSURLError 原文）全部丢失。此处把
+                // loader 层记录槽原文拼进 playbackError：格式「人话 + [诊断] 阶段原文」，
+                // 用户截图即可直接定位坏在哪一层（resolve 解析 / play 取流）。
+                let loaderRecord = self?.takeLoaderFailureRecord()
+                // build 45 · 反馈 1a：player 层 NSError 原文（OSStatus domain/code +
+                // userInfo）一并透出——AVFoundation 会把取流错误改写成黑盒
+                // 「Cannot Open」描述，原文必须在拿到 item.error 的第一现场留存。
+                let playerRecord = item.error.map { error -> String in
+                    let ns = error as NSError
+                    let userInfoText = ns.userInfo
+                        .map { "\(String(describing: $0.key))=\(String(describing: $0.value))" }
+                        .joined(separator: "; ")
+                    return "player · \(ns.domain) \(ns.code)：\(ns.localizedDescription)"
+                        + (userInfoText.isEmpty ? "" : " {\(userInfoText)}")
+                }
                 let message = item.error.map {
                     PlaybackManager.describePlaybackError($0, source: failedSource)
                 } ?? "播放失败，请稍后重试"
+                var diagnostic = [playerRecord, loaderRecord].compactMap { $0 }
+                if !diagnostic.isEmpty {
+                    diagnostic.insert("B站取证：截图反馈此段", at: 0)
+                }
+                let fullMessage = message + (diagnostic.isEmpty ? "" : " [诊断] " + diagnostic.joined(separator: " | "))
                 Task { @MainActor [weak self] in
-                    self?.playbackError = message
+                    self?.playbackError = fullMessage
                 }
             }
         }
@@ -595,6 +696,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                     box.request.finishLoading(with: URLError(.badURL))
                 }
             } catch {
+                // build 45 · 反馈 1a（错误透传）：resolve 阶段失败原文先入记录槽
+                //（HTTP 状态/NSURLError 原文 + 阶段标记），供 statusObserver .failed
+                // 组合输出——否则 AVFoundation 会把它吞成黑盒 Cannot Open。
+                let ns = error as NSError
+                self?.recordLoaderFailure("resolve · 解析失败 \(ns.domain) \(ns.code)：\(ns.localizedDescription)")
                 box.request.finishLoading(with: error)
             }
             self?.removeLoaderTask(seq)
@@ -732,6 +838,12 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         }
         if source == "ting59" {
             return "59听书网音频源当前不可用（站点侧变更，2026-10-24 实测其音频直链已被 CDN 全面拒绝），请换用其他音源收听本书"
+        }
+        // build 45 · 反馈 3：悦听有声书（ytysxs）全链摘除（用户点名删除）——
+        // 常量与适配器已删，存量书架 ytysxs 来源的书保留（数据不删），播放时
+        // 按字符串兼容报「源已下架」指引换源（SourceRegistry.YTYXSX 常量不再存在）。
+        if source == "ytysxs" {
+            return "悦听有声书源已下线（2026-10-27 build 45 摘除），请换用其他音源收听本书"
         }
         if let ue = error as? URLError {
             switch ue.code {

@@ -6,8 +6,7 @@ import XCTest
 /// 覆盖口径：
 /// 1. B站分P纯函数（buildPageListUrl / parsePageList）——Cannot Open 修复的
 ///    解析层单测（网络层取证见交付说明：view 连续 3 次 412、pagelist 3 次 200）；
-/// 2. 悦听「已验证仍拦截」二轮：发现页拦截 → 验证 sheet → 验证通过重放搜索的
-///    源码形态守卫 + WebView 滑块 AJAX 后 cookie 轮询补捕获形态守卫；
+/// 2. 悦听相关用例已随 build 45 · 反馈 3（悦听全链摘除）整体移除；
 /// 3. 听友FM TLS 错误人话映射形态守卫；
 /// 4. 历史搜索滚动展示（不再单条截断 / 只见部分）形态守卫。
 /// 源码形态守卫沿用 Build29RegressionTests 的「剔除整行注释 + whitespace
@@ -78,31 +77,11 @@ final class Build44FeedbackTests: XCTestCase {
         XCTAssertTrue(src.contains("playablePages(bvid:"), "BILI 分支必须经 playablePages 复合入口取分P")
     }
 
-    // MARK: - 反馈 2 · 悦听已验证仍拦截：发现页重放路径
-
-    /// 发现页拦截处理闭环：antibotKeyword 拦截 → 弹 YtysxsVerifySheet →
-    /// 验证通过回调里重放 performSearch（重放原搜索请求，而非仅翻状态位——
-    /// 派单第 2 项的验收口径「验证后带 cookie 重放搜索」）。
-    func testDiscoverVerifySheetReplayPath() {
-        let src = Self.loadSource("TingYou/UI/Discover/DiscoverScreen.swift")
-        XCTAssertTrue(src.contains("antibotKeyword"), "搜索结果拦截必须识别 antibotKeyword")
-        XCTAssertTrue(src.contains("showVerifySheet=true"), "拦截必须当场弹验证 sheet（旧形态只置 verifyHint 引导文案）")
-        XCTAssertTrue(src.contains("YtysxsVerifySheet("), "验证 sheet 必须挂载")
-        // 重放断言：verified 回调里重新执行搜索（重放原请求而非翻状态位）
-        let replayOk = src.contains("ifverified{") && src.contains("performSearch(initial:true)")
-        XCTAssertTrue(replayOk, "验证通过回调必须重放 performSearch(initial: true)——只翻 verifyHint 状态位是 b42 未生效的旧形态")
-    }
-
-    /// WebView 滑块 AJAX 后 cookie 补捕获：didFinish 之外必须有轮询兜底
-    /// （滑块通过是页面内 AJAX，无新导航，didFinish 后才 Set 的 cookie
-    /// 永不进捕获窗口——这是「已验证仍拦截」的 cookie 链路缺口）。
-    func testVerifyWebViewCookiePollingForm() {
-        let src = Self.loadSource("TingYou/UI/Components/YtysxsVerifyWebView.swift")
-        XCTAssertTrue(src.contains("startCookiePolling(webView:"), "didFinish 后必须启动 cookie 轮询补捕获")
-        XCTAssertTrue(src.contains("cookiePollGeneration"), "轮询必须有代次失效机制（新导航后旧轮询作废）")
-        XCTAssertTrue(src.contains("didReportSuccess"), "onResult(true) 必须幂等收敛（防 sheet 关闭后搜索被重放多次）")
-        XCTAssertTrue(src.contains("reportSuccess(token:"), "token 发现路径必须统一走 reportSuccess 幂等入口")
-    }
+    // build 45 · 反馈 3：悦听（ytysxs）全链摘除——反馈 2 的两个用例
+    //（发现页验证 sheet 重放 / WebView cookie 轮询）所守卫的
+    // YtysxsVerifySheet / YtysxsVerifyWebView / antibotKeyword 闭环已整体
+    // 删除（源文件不复存在），用例一并移除（替代守卫：Build45FeedbackTests
+    // 的 testYtysxsFullyRemovedGuard 断言「源不存在」）。
 
     // MARK: - 反馈 5 · 听友FM TLS 错误人话映射
 

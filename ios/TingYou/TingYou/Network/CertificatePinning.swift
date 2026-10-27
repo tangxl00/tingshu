@@ -25,8 +25,6 @@ enum PinnedDomainAllowlist {
         "file.hgeuz.cn",
         "m.ting15.com",
         "www.ting08.com",
-        "www.ytysxs.com",
-        "mp3.ytysxs.top",
         "m.mekui.com",
         "api.mekui.com",
         "api.aikeu.com",

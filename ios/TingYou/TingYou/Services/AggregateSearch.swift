@@ -4,22 +4,22 @@ import Foundation
 /// 安卓对应物：SearchViewModel.kt 的 `SEARCH_SOURCES.filter { it in enabled }` 并行聚合。
 /// 搜索范围 = SourceEnabledStore 的启用集（「我的→音源管理」开关真正生效）；
 /// 顺序 = SourceEnabledStore.searchSources 固定序（build 36 删听吧后 6 源）；
-/// 逐源容错：单源失败收集源名如实透出、悦听 AntibotException 走人工验证闭环、
-/// 全源失败才视为整体失败（对齐安卓 anySuccess 语义）。
+/// 逐源容错：单源失败收集源名如实透出、全源失败才视为整体失败
+///（对齐安卓 anySuccess 语义）。
+/// build 45 · 反馈 3：悦听（ytysxs）全链摘除——AntibotException 人工验证闭环
+/// 与 antibotKeyword 回传字段一并删除（不再有反爬验证源）。
 protocol SourceSearching {
     func search(src: String, keyword: String) async throws -> [Album]
 }
 
 extension SourceRouter: SourceSearching {}
 
-/// 聚合搜索结果（源名透出 + 反爬关键词回传）。
+/// 聚合搜索结果（源名透出）。
 struct AggregateSearchOutcome {
     /// 按固定音源顺序拼接的聚合结果
     let albums: [Album]
     /// 本次搜索失败（不可用）的源显示名，如实透出不静默
     let failedSourceNames: [String]
-    /// 悦听命中反爬拦截时回传关键词（弹 YtysxsVerifySheet 用）
-    let antibotKeyword: String?
     /// 实际参与了搜索的源（启用集）
     let searchedSources: [String]
 
@@ -43,8 +43,7 @@ struct AggregateSearcher {
         // build 24（P2-2 · 性能）：从固定序串行改为 withTaskGroup 并行请求全部启用源，
         // 弱网总耗时 ≈ 最慢单源而非逐源求和。对外行为不变：
         // - 结果仍按 searchSources 固定序拼接（回填数组按启动序遍历组装）
-        // - 单源失败收名、allFailed 语义、悦听 antibot 透传与串行版一致
-        //   （antibot 取固定序中最后一个命中——与串行覆盖语义相同）
+        // - 单源失败收名、allFailed 语义与串行版一致
         let searcher = self.searcher
         var results: [Result<[Album], Error>?] = Array(repeating: nil, count: sources.count)
         await withTaskGroup(of: (Int, Result<[Album], Error>).self) { group in
@@ -63,17 +62,12 @@ struct AggregateSearcher {
         }
         var albums: [Album] = []
         var failed: [String] = []
-        var antibotKeyword: String?
         for (idx, result) in results.enumerated() {
             switch result {
             case .success(let items)?:
                 albums.append(contentsOf: items)
-            case .failure(let error)?:
-                if let antibot = error as? AntibotException {
-                    antibotKeyword = antibot.keyword.isEmpty ? keyword : antibot.keyword
-                } else {
-                    failed.append(SourceRegistry.displayName(src: sources[idx]))
-                }
+            case .failure:
+                failed.append(SourceRegistry.displayName(src: sources[idx]))
             case nil:
                 break // 不发生：group await 全部回填后才继续
             }
@@ -81,7 +75,6 @@ struct AggregateSearcher {
         return AggregateSearchOutcome(
             albums: albums,
             failedSourceNames: failed,
-            antibotKeyword: antibotKeyword,
             searchedSources: sources
         )
     }

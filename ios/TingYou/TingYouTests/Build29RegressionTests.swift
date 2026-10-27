@@ -12,7 +12,8 @@ final class Build29RegressionTests: XCTestCase {
     func testAggregateSearchSourcesIncludeLegacySources() {
         let sources = SourceEnabledStore.searchSources
         XCTAssertTrue(sources.contains(SourceRegistry.TINGYOU), "听友FM 必须在搜索源列表中")
-        XCTAssertTrue(sources.contains(SourceRegistry.YTYXSX), "悦听有声书 必须在搜索源列表中")
+        // build 45 · 反馈 3：悦听（ytysxs）已下架——不得再出现在搜索源列表
+        XCTAssertFalse(sources.contains("ytysxs"), "悦听已下架，不得残留在搜索源列表中")
         // build 36 · 反馈 4：听吧（ting08）已下架——不得再出现在搜索源列表
         XCTAssertFalse(sources.contains("ting08"), "听吧已下架，不得残留在搜索源列表中")
         // build 37 · 反馈 1：听十五/书音FM 已下架——不得再出现在搜索源列表
@@ -48,8 +49,9 @@ final class Build29RegressionTests: XCTestCase {
     func testLegacyPinningDomainsStillAllowed() {
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("m.ting15.com"), "ting15 旧白名单不得丢失")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.ting08.com"), "ting08 旧白名单不得丢失")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.ytysxs.com"), "悦听旧白名单不得丢失")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("mp3.ytysxs.top"), "悦听音频旧白名单不得丢失")
+        // build 45 · 反馈 3：悦听下架——pin 白名单域名同步摘除（不再需要证书锁定）
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.ytysxs.com"), "悦听已下架，域名应已从 pin 白名单摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("mp3.ytysxs.top"), "悦听音频域名应已从 pin 白名单摘除")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("m.mekui.com"), "书音FM 旧白名单不得丢失")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("tingyou.fm"), "听友FM 旧白名单不得丢失")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("guoguo.org.cn"), "guoguo 旧白名单不得丢失")
@@ -74,7 +76,9 @@ final class Build29RegressionTests: XCTestCase {
     func testSourceRegistryDisplayNamesUnchanged() {
         XCTAssertEqual(SourceRegistry.displayName(src: "tingyou"), "听友FM")
         XCTAssertFalse(SourceRegistry.isKnown(src: "ting08"), "听吧已下架，不应再注册为已知源")
-        XCTAssertEqual(SourceRegistry.displayName(src: "ytysxs"), "悦听有声书")
+        // build 45 · 反馈 3：悦听下架——isKnown 翻转、显示名回落原始 id（同 ting15/mekui/ting59 口径）
+        XCTAssertFalse(SourceRegistry.isKnown(src: "ytysxs"), "悦听已下架，不应再注册为已知源")
+        XCTAssertEqual(SourceRegistry.displayName(src: "ytysxs"), "ytysxs", "悦听下架后显示名回落原始 id")
         // build 37 · 反馈 1：听十五/书音FM 下架——不再注册，显示名回落原始 id
         XCTAssertFalse(SourceRegistry.isKnown(src: "ting15"), "听十五已下架，不应再注册为已知源")
         XCTAssertFalse(SourceRegistry.isKnown(src: "mekui"), "书音FM 已下架，不应再注册为已知源")
@@ -125,8 +129,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "44",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 44（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "45",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 45（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40
@@ -190,29 +194,25 @@ final class Build29RegressionTests: XCTestCase {
                 XCTAssertFalse(
                     normalized.contains("@FocusState"),
                     "发现页禁止使用 @FocusState 收焦（build 41 根因：状态翻转触发全 body 重渲染，丢弃进行中的 NavigationLink 行激活）；收焦必须走 UIKit resignFirstResponder")
-                // 要求⑤ resignFirstResponder 收焦形态（与搜索页对齐、零重渲染）
-                XCTAssertTrue(
-                    normalized.contains("resignFirstResponder"),
-                    "发现页收焦必须使用 resignFirstResponder（零重渲染，不打断行导航激活）")
+                // build 45 · 反馈 4：resignFirstResponder 随五处局部挂载一并移除
+                //（全局收焦走 window 级 endEditing，不再要求本文件包含该形态）。
                 // 禁⑥ List 本体挂手势（含 simultaneousGesture——build 40 形态，
                 // 虽然 simultaneous 不抢行点击，但统一收敛到非祖先小视图更可控）
                 XCTAssertFalse(
                     normalized.contains(".scrollDismissesKeyboard(.immediately).simultaneousGesture("),
                     "发现页 List 本体禁止挂任何手势（build 41 形态：收焦只挂非 List 祖先的小视图）")
-                // 要求⑦（build 44）：simultaneousGesture 恰 3 处——分类折叠面板
-                // 标题行 + 加载错误占位区 + 搜索栏容器（build 44 · 反馈 1 扩围：
-                // 含左右留白与上下 padding），均不包裹 List。b41/b42 的容器级
-                // 1 处形态（计数 1）与 b40 的 3 处分挂形态（计数 3）都会在此失败。
+                // 要求⑦（build 45 · 反馈 4 重写）：simultaneousGesture 必须为 0 处
+                //——b43/b44 五处局部收焦挂载（搜索栏容器/分类行/错误占位区/
+                // 间距区/历史区背景）全删，全局收焦改走 window 级 UIKit
+                // recognizer（安装守卫见 testGlobalKeyboardDismissInstalled）。
                 XCTAssertEqual(
-                    normalized.components(separatedBy: ".simultaneousGesture(").count - 1, 3,
-                    "发现页收焦手势必须恰为 3 处非 List 祖先小视图 simultaneousGesture（搜索栏容器 + 分类行 + 错误占位区）；容器级挂载（任何数量）都会杀死行 NavigationLink 激活（build 42 CI 六用例证据）")
-                // 要求⑧（build 44）：onTapGesture 恰 2 处——搜索栏与分类行之间
-                // 的间距收焦区（Rectangle().fill(.clear)，不包裹任何交互视图）+
-                // 历史搜索区块背景收焦（background 层透明矩形，不抢占 chips）。
-                // 锚定不带括号（尾随闭包写法 .onTapGesture { } 无括号）。
+                    normalized.components(separatedBy: ".simultaneousGesture(").count - 1, 0,
+                    "发现页局部收焦手势必须为 0 处（build 45 全局化：window 级 recognizer 兜底）；容器级挂载（任何数量）都会杀死行 NavigationLink 激活（build 42 CI 六用例证据）")
+                // 要求⑧（build 45 · 反馈 4 重写）：onTapGesture 必须为 0 处——
+                // 局部收焦挂载清零（含 b44 历史区背景 onTap）。
                 XCTAssertEqual(
-                    normalized.components(separatedBy: ".onTapGesture").count - 1, 2,
-                    "发现页 onTapGesture 必须恰为 2 处（间距收焦区 + 历史搜索区块背景）；多出即形态漂移——List 本体或容器上挂 onTapGesture 是 build 37/39 真机回归形态")
+                    normalized.components(separatedBy: ".onTapGesture").count - 1, 0,
+                    "发现页 onTapGesture 必须为 0 处（build 45 全局化）；多出即形态漂移——List 本体或容器上挂 onTapGesture 是 build 37/39 真机回归形态")
                 // 两个 List 的滚动收起保留
                 let scrollCount = normalized.components(separatedBy: ".scrollDismissesKeyboard").count - 1
                 XCTAssertGreaterThanOrEqual(scrollCount, 2,
@@ -223,6 +223,43 @@ final class Build29RegressionTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(
                     actual, 1,
                     "\(rel)：.simultaneousGesture( 不得少于 1 处（List 本体收焦）")
+            }
+        }
+    }
+
+    /// build 45 · 反馈 4 守卫：全局收键盘安装形态——window 级 UIKit 方案的
+    /// 四要素必须齐备：① App 启动调用 installOnce；② UITapGestureRecognizer
+    /// 挂 window；③ cancelsTouchesInView = false（不吞事件——与被证伪的
+    /// SwiftUI 容器手势的本质差异，List 行导航照常激活）；④ endEditing 动作 +
+    /// delegate 跳过 UITextField 命中（防「先收再聚焦」键盘闪烁）。
+    func testGlobalKeyboardDismissInstalled() {
+        let testDir = (#filePath as NSString).deletingLastPathComponent
+        let projectDir = (testDir as NSString).deletingLastPathComponent
+        let pairs: [(rel: String, needles: [String], what: String)] = [
+            ("TingYou/App/TingYouApp.swift",
+             ["GlobalKeyboardDismiss.installOnce()"],
+             "App 启动必须安装全局收键盘 recognizer"),
+            ("TingYou/App/GlobalKeyboardDismiss.swift",
+             ["UITapGestureRecognizer",
+              "cancelsTouchesInView = false",
+              "endEditing",
+              "UITextField",
+              "UIGestureRecognizerDelegate"],
+             "全局收键盘实现必须包含 window 级 recognizer 四要素"),
+        ]
+        for pair in pairs {
+            let srcPath = projectDir + "/" + pair.rel
+            guard FileManager.default.fileExists(atPath: srcPath) else {
+                XCTFail("\(pair.rel) 不存在：\(srcPath)——路径布局变化时请同步修正本测试")
+                return
+            }
+            guard let src = try? String(contentsOfFile: srcPath, encoding: .utf8) else {
+                XCTFail("\(pair.rel) 不可读：\(srcPath)")
+                return
+            }
+            for needle in pair.needles {
+                XCTAssertTrue(src.contains(needle),
+                               "\(pair.rel)：\(pair.what)——缺失 \(needle)")
             }
         }
     }
@@ -254,9 +291,9 @@ final class Build29RegressionTests: XCTestCase {
     // MARK: - 辅助
 
     private func makeDummyRepo() -> PlaybackRepository {
+        // build 45 · 反馈 3：悦听下架，PlaybackRepository init 3 → 2 参数。
         PlaybackRepository(
             apiClient: APIClient(),
-            ytysxsAdapter: YtysxsAdapter(apiClient: APIClient()),
             biliAdapter: BiliAdapter()
         )
     }

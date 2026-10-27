@@ -16,10 +16,6 @@ final class AppContainer {
     let skipSettingsStore: SkipSettingsStore
     let sourceEnabledStore: SourceEnabledStore
     let shelfLayoutStore: ShelfLayoutStore
-    /// 悦听反爬 be_captcha_token 的 Keychain 存储（P0-4）：
-    /// SearchScreen 验证页与 SourceRouter 内的 YtysxsAdapter 共享同一实例，
-    /// 人工验证完成后适配器立即带上新 token 重试。
-    let ytysxsCookieStore: KeychainTokenStore
 
     init() {
         let schema = Schema([
@@ -35,13 +31,14 @@ final class AppContainer {
 
         let ctx = modelContainer.mainContext
         albumRepository = AlbumRepository(apiClient: apiClient, modelContext: ctx)
-        ytysxsCookieStore = KeychainTokenStore()
+        // build 45 · 反馈 3：悦听有声书（ytysxs）全链摘除——
+        // ytysxsCookieStore / YtysxsAdapter 装配删除（KeychainTokenStore
+        // 专用链随源一并删除，唯一消费方即悦听验证闭环）。
         let biliAdapter = BiliAdapter()
         let biliSearchApi = BiliSearchApi(adapter: biliAdapter)
         sourceRouter = SourceRouter(
             apiClient: apiClient,
             albumRepository: albumRepository,
-            ytysxsAdapter: YtysxsAdapter(apiClient: apiClient, cookieStore: ytysxsCookieStore),
             biliAdapter: biliAdapter,
             biliSearchApi: biliSearchApi)
         // P0-1：PlaybackManager 通过 AVAssetResourceLoaderDelegate 接管

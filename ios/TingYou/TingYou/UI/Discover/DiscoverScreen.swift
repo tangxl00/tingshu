@@ -23,13 +23,6 @@ struct DiscoverScreen: View {
     @State private var failedSources: [String] = []
     @State private var searchHasMore = false
     @State private var searchPage = 1
-    /// v1.4.2 · 悦听安全验证迁移：反爬拦截不再弹验证窗（入口迁至 我的→音源管理），
-    /// 命中拦截时置位，由搜索结果/错误提示区展示引导文案。
-    @State private var verifyHint = false
-    /// build 44 · 反馈 2：发现页悦听验证 sheet（拦截当场弹出，验证通过重放搜索）
-    @State private var showVerifySheet = false
-    /// build 44 · 反馈 2：被拦截的搜索词（回传给验证 sheet 定位验证页面）
-    @State private var pendingKeyword = ""
     /// build 21 · 反馈 7：发现页搜索框同步写入搜索历史
     private let historyStore = SearchHistoryStore()
     /// v1.4.3 · 需求 2：搜索历史展示（build 41 · 反馈 ① 收焦方式重构）：
@@ -96,7 +89,6 @@ struct DiscoverScreen: View {
                             keyword = ""
                             searchMode = false
                             searchResults = []
-                            verifyHint = false
                         }) {
                             Image(systemName: "xmark.circle.fill")
                                 .foregroundStyle(.secondary)
@@ -109,31 +101,17 @@ struct DiscoverScreen: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .padding(.horizontal)
                 .padding(.vertical, 8)
-                // build 44 · 反馈 1（空白收焦补覆盖）：搜索栏整行（含左右留白与
-                // 上下 padding 区）挂 simultaneousGesture 收焦——用户点「搜索栏
-                // 左右留白 / 栏体空白」时输入法消失。simultaneous 与 TextField
-                // 聚焦并行不抢占（铁律：本手势挂在搜索栏 HStack 自身，非 List
-                // 祖先，不触碰 b43 三路收焦架构）。contentShape 保证 padding
-                // 留白区也参与命中。
-                .contentShape(Rectangle())
-                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
+                // build 45 · 反馈 4：此前的「搜索栏容器 simultaneousGesture +
+                // 间距区 onTapGesture」两处局部收焦挂载已删除——全局收键盘改走
+                // window 级 UIKit recognizer（GlobalKeyboardDismiss，
+                // cancelsTouchesInView=false 不吞事件），不再需要局部挂载。
 
-                // build 43 · 空白收焦②：搜索栏与分类行之间的非交互间距区。
-                // 收焦手势挂点之一（不包裹 List 的小视图，矩形填充透明色
-                // 参与命中测试）。三路收焦方案见下方 if/else 前注释。
-                Rectangle().fill(.clear)
-                    .frame(height: 8)
-                    .onTapGesture { dismissKeyboard() }
-
-                // build 41 · 反馈 ① 注释（build 43 更新）：本轮删除了此处原有的
-                // 容器级 simultaneousGesture——build 42 CI 六用例证据（XCUITest
-                // 真实点击）确证：任何形式的容器级 tap 手势（onTapGesture /
-                // simultaneousGesture，挂在包住 List 的 Group/VStack/ if-else
-                // 表达式上）都会杀死 List 内 NavigationLink 行激活（A/B/D 失败、
-                // E 对照页「我的→音源管理」无该手势导航正常）。收焦拆三路：
+                // build 41 · 反馈 ① 注释（build 43 更新；build 45 全局化）：
+                // 容器级 tap 手势被 build 42 CI 六用例证伪（杀死 List 行
+                // NavigationLink 激活）。build 45 起收焦不再依赖任何局部手势：
                 // ① List 滚动收焦：scrollDismissesKeyboard(.immediately)（保留）；
-                // ② 非交互空白区收焦：挂到不包裹 List 的小视图（本文件三处——
-                //    搜索栏下方间距区 / 分类折叠面板标题行 / 加载错误占位区）；
+                // ② 全局点空白收焦：window 级 UITapGestureRecognizer +
+                //    endEditing（cancelsTouchesInView=false，不吞行点击事件）；
                 // ③ 行点击：导航 push 本身收键盘（iOS 默认行为，无需代码）。
                 if searchMode && !keyword.isEmpty {
                     searchResultsContent
@@ -158,27 +136,9 @@ struct DiscoverScreen: View {
                 }
             }
         }
-        // v1.4.2 · 悦听安全验证迁移：发现页不再挂验证 sheet——
-        // 命中 AntibotException 时仅置 verifyHint，由搜索结果/错误提示区
-        // 显示「请前往 我的→音源管理 完成验证」引导文案（验证入口已迁至该页）。
-        // build 44 · 反馈 2（「已验证仍拦截」二轮）：恢复验证 sheet——拦截当场
-        // 弹出（路径比「我的→音源管理」往返短），验证通过回调重放原搜索。
-        // （sheet 修饰符非手势，不触碰 b43 容器无手势铁律。）
-        .sheet(isPresented: $showVerifySheet) {
-            YtysxsVerifySheet(
-                keyword: pendingKeyword,
-                cookieStore: appContainer?.ytysxsCookieStore ?? KeychainTokenStore()) { verified in
-                    showVerifySheet = false
-                    if verified {
-                        // 验证通过 → 重放原搜索（reAntibot 判定看响应内容，
-                        // 状态位之外必须真发一次请求才能拿到放行后的结果）
-                        verifyHint = false
-                        Task { @MainActor in
-                            performSearch(initial: true)
-                        }
-                    }
-                }
-        }
+        // v1.4.2 · 悦听安全验证迁移 → build 45 · 反馈 3：悦听（ytysxs）全链摘除——
+        // verifyHint / verify sheet / AntibotException 闭环整体删除
+        //（不再有反爬验证源，存量悦听书播放走 describePlaybackError 提示）。
     }
 
     // MARK: - 搜索历史（build 27：发现页可达展示）
@@ -190,16 +150,17 @@ struct DiscoverScreen: View {
     @ViewBuilder
     private var historySection: some View {
         if !history.isEmpty {
-            // build 44 · 反馈 4（历史搜索「依旧被截断」）：两层放开——
-            // ① 多条记录全量滚动展示：LazyVGrid 包进 ScrollView + maxHeight 200，
-            //    超出部分滚动可见（此前 VStack 固有高度直接撑开、与 List 争屏，
-            //    历史多时下半被挤压成「只看到几条」）；
-            // ② 单条长词不截断：chip 文字去 lineLimit(1)，fixedSize 改
-            //    horizontal: false + vertical: true——长书名/人名换行完整展示
-            //    （此前 lineLimit(1)+fixedSize 强制单行，「凡人修仙传田老魔说」
-            //    一类长词显示成「凡人修仙…」）。
-            // 存储层无截断（SearchHistoryStore limit=20 上限、显示层此前即全量
-            // ForEach）；图 02 仅 1 条=用户当期历史即 1 条。
+            // build 44 · 反馈 4（历史搜索「依旧被截断」）→ build 45 · 反馈 2 返修：
+            // b44 把 chip 文字改成 fixedSize(horizontal: false, vertical: true)
+            //（允许宽度任意压缩）+ 去 lineLimit——LazyVGrid adaptive(minimum: 44)
+            // 顺势把 chip 压到 44pt 单字宽，逐字竖排、模糊不可读（真机 b44 截图，
+            // b44 自引入回归）。
+            // build 45 修复：对齐 SearchScreen.historySection 的既有线上形态
+            //（build 36 以来无截断/无竖排投诉）：Text lineLimit(1) + chip 整体
+            // .fixedSize()——chip 报告完整固有宽度（长词单行完整显示不截断，
+            // b44 反馈 4 的诉求保留），grid 列宽自适应、一行放不下整颗 chip
+            // 折到下一行（多行流式排布，b44 反馈 4 的另一半诉求保留）。
+            // 滚动展示保留（ScrollView + maxHeight 200）。
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -222,7 +183,7 @@ struct DiscoverScreen: View {
                                 } label: {
                                     Text(kw)
                                         .foregroundStyle(.primary)
-                                        .fixedSize(horizontal: false, vertical: true)
+                                        .lineLimit(1)
                                 }
                                 .buttonStyle(.pressable)
                                 Button {
@@ -237,21 +198,15 @@ struct DiscoverScreen: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                             .background(Capsule().fill(Color(.systemGray5)))
-                            .fixedSize(horizontal: false, vertical: true)
+                            .fixedSize()
                         }
                     }
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
-                // build 44 · 反馈 1（空白收焦补覆盖）：历史搜索区块背景收焦——
-                // 透明矩形填充本身参与命中测试（chips 之间的空隙与区块空白点击
-                // 收键盘），挂在 background 层不抢占前景 chips 按钮（铁律：非
-                // List 祖先小视图；写法与 b43 间距区同款，不用 contentShape——
-                // 避开守卫禁①「contentShape 紧跟 onTapGesture」形态锚）。
-                .background(
-                    Rectangle().fill(.clear)
-                        .onTapGesture { dismissKeyboard() }
-                )
+                // build 45 · 反馈 4：b44 的历史区背景 onTapGesture 局部收焦挂载
+                // 已删除——全局收键盘走 window 级 recognizer（不吞事件，chips
+                // 与行导航照常激活）。
             }
             .frame(maxHeight: 200)
         }
@@ -309,13 +264,6 @@ struct DiscoverScreen: View {
             List {
                 if !failedSources.isEmpty {
                     Text("以下音源本次搜索不可用：\(failedSources.joined(separator: "、"))")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                // v1.4.2 · 悦听安全验证迁移：拦截不弹窗，列表头部给引导文案
-                //（其余源有结果时用户仍可继续浏览，悦听结果待验证后可见）
-                if verifyHint {
-                    Text("悦听有声书需要安全验证，请前往「我的→音源管理」完成验证后重试")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
@@ -396,11 +344,9 @@ struct DiscoverScreen: View {
                         .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
-                // build 43 · 空白收焦②：分类折叠面板标题行收焦挂点——不包裹
-                // List 的小视图（simultaneous 与 DisclosureGroup 展开切换、
-                // 右侧音源 Menu 并行识别互不抢占；build 42 CI 用例 C 证实
-                // 此前外层容器手势存在覆盖空洞，且容器形态杀死行导航）。
-                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
+                // build 45 · 反馈 4：b43 的分类折叠面板标题行收焦挂载已删除——
+                // 全局 window 级 recognizer 兜底（contentShape 保留，供按钮
+                // 整行命中展开/Menu）。
             }
             .buttonStyle(.plain)
             .padding(.horizontal)
@@ -413,9 +359,8 @@ struct DiscoverScreen: View {
                     Button("重试") { Task { await loadCurrent() } }
                     Spacer()
                 }
-                // build 43 · 空白收焦②：加载错误占位区收焦挂点——不包裹 List
-                // 的小视图（simultaneous 与「重试」Button 并行互不抢占）。
-                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
+                // build 45 · 反馈 4：b43 的加载错误占位区收焦挂载已删除——
+                // 全局 window 级 recognizer 兜底（sim 删除后「重试」Button 照常）。
             } else {
                 List {
                     // build 42 · 任务一：行 identifier 供 DiscoverNavigationUITests
@@ -463,13 +408,9 @@ struct DiscoverScreen: View {
         }
     }
 
-    /// build 41 · 收焦实现（build 43 沿用）：UIKit resignFirstResponder 零重渲染，
-    /// 不打断任何进行中的手势识别与导航激活。build 43 起调用点收敛为三处
-    /// 非交互小视图挂点（间距区 / 分类行 / 错误占位区），不再有容器级手势。
-    private func dismissKeyboard() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                        to: nil, from: nil, for: nil)
-    }
+    /// build 41 · 收焦实现（build 43 沿用）：UIKit resignFirstResponder 零重渲染。
+    /// build 45 · 反馈 4：五处局部挂载全删后已无调用点，方法一并移除——
+    /// 全局收焦走 GlobalKeyboardDismiss（window 级 endEditing）。
 
     /// build 22 · 对齐安卓：聚合搜索读 SourceEnabledStore 启用集（与搜索页同一套 AggregateSearcher）。
     private func performSearch(initial: Bool) {
@@ -484,9 +425,8 @@ struct DiscoverScreen: View {
             failedSources = []
             searchPage = 1
             searchResults = []
-            verifyHint = false
             // build 27：提交搜索时即记录（非空关键词即记，不依赖结果成败）——
-            // 被悦听反爬拦截或全源失败的搜索词同样落库（原「至少一源有结果才记」
+            // 被反爬拦截或全源失败的搜索词同样落库（原「至少一源有结果才记」
             // 会丢失被拦截场景的词，用户复搜无记忆）。
             historyStore.add(kw)
             history = historyStore.all
@@ -511,23 +451,7 @@ struct DiscoverScreen: View {
             failedSources = outcome.failedSourceNames
             searchHasMore = false // 多源聚合首页后不再翻页（与旧行为一致）
             isSearching = false
-            // v1.4.2 · 悦听安全验证迁移：反爬拦截不再弹窗——置提示态由结果区展示引导文案；
-            // 无结果时直接给可操作文案（点重试前先去 我的→音源管理 完成验证）
-            // build 44 · 反馈 2（悦听「已验证仍拦截」二轮）：发现页对齐 SearchScreen——
-            // 拦截当场弹出 YtysxsVerifySheet（比「去我的→音源管理」往返路径短），
-            // 验证通过回调里**重放原搜索请求**（此前只置 verifyHint 引导文案，
-            // 用户验证完须手动重搜——搜索界面「需要验证」判定看 reAntibot 响应命中、
-            // 音源管理页「已验证」看本地标记，两处数据源不同，仅翻状态位不重放
-            // 会让用户继续看到拦截文案）。文案保留作为 sheet 失败时的兜底引导。
-            if let blockedKeyword = outcome.antibotKeyword {
-                verifyHint = true
-                pendingKeyword = blockedKeyword
-                if outcome.albums.isEmpty {
-                    searchError = "悦听有声书需要安全验证，请完成验证后自动重试"
-                }
-                showVerifySheet = true
-            }
-            if outcome.allFailed && searchError == nil {
+            if outcome.allFailed {
                 searchError = "搜索失败：所有启用音源均不可用，请稍后重试"
             }
         }

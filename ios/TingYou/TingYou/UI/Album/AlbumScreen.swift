@@ -1,8 +1,10 @@
 import SwiftUI
 
 /// 专辑详情页：章节列表按专辑来源走 SourceRouter 真实路由（P0-3）——
-/// tingyou 走 JSON API；ting15/悦听/书音FM 各自适配器解析；
+/// tingyou 走 JSON API；
 /// 点击章节经 PlaybackManager 播放（占位 URI 由 AVAssetResourceLoaderDelegate 惰性解析直链）。
+/// build 45 · 反馈 3：悦听（ytysxs）摘除——AntibotException 拦截文案删除
+///（存量 ytysxs 书 chapters 走 default 分支报「源已下架」）。
 struct AlbumScreen: View {
     let album: Album
     @State private var chapters: [Chapter] = []
@@ -121,8 +123,6 @@ struct AlbumScreen: View {
                 src: album.source,
                 albumId: album.albumId,
                 detailPath: album.detailPath)
-        } catch let error as AntibotException {
-            loadError = "悦听反爬拦截：请在搜索页完成人工验证后重试"
         } catch let error as PaidChapterException {
             loadError = "该专辑为付费内容，已拦截"
         } catch {

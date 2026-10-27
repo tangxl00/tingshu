@@ -164,9 +164,9 @@ final class BiliStructuralTests: XCTestCase {
 
     func testPlaybackRepositoryAcceptsBiliAdapter() {
         // 若能成功构造（含 biliAdapter 参数）即证明装配点存在
+        // build 45 · 反馈 3：悦听下架，PlaybackRepository init 3 → 2 参数。
         let repo = PlaybackRepository(
             apiClient: APIClient(),
-            ytysxsAdapter: YtysxsAdapter(apiClient: APIClient()),
             biliAdapter: BiliAdapter()
         )
         XCTAssertNotNil(repo)

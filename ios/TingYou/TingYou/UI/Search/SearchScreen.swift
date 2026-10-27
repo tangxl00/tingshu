@@ -4,8 +4,10 @@ import SwiftUI
 /// 搜索页（build 22 · 对齐安卓 v1.3.3）：
 /// 一次搜索聚合「全部启用音源」的结果（AggregateSearcher，
 /// 范围 = SourceEnabledStore 启用集，「我的→音源管理」开关真正控制搜索范围）。
-/// 单源失败如实透出源名、悦听反爬弹 YtysxsVerifySheet 人工验证、全源失败才报整体错误。
+/// 单源失败如实透出源名、全源失败才报整体错误。
 /// build 21 · 反馈 7：搜索历史记忆——成功发起的搜索词本地保存（去重置顶、上限 20 条）。
+/// build 45 · 反馈 3：悦听（ytysxs）全链摘除——反爬验证 sheet 与
+/// antibotKeyword 消费一并删除（不再有反爬验证源）。
 struct SearchScreen: View {
     @Environment(\.appContainer) private var appContainer
     @State private var keyword = ""
@@ -14,8 +16,6 @@ struct SearchScreen: View {
     @State private var errorMessage: String?
     /// build 22：聚合搜索失败源透出（单源失败不拖垮整体）
     @State private var failedSources: [String] = []
-    @State private var showAntibotSheet = false
-    @State private var pendingKeyword = ""
     /// build 21 · 反馈 7：搜索历史（页内变更即时刷新）
     @State private var history: [String] = []
     private let historyStore = SearchHistoryStore()
@@ -68,16 +68,6 @@ struct SearchScreen: View {
         }
         .onAppear { history = historyStore.all }
         .navigationTitle("搜索")
-        .sheet(isPresented: $showAntibotSheet) {
-            YtysxsVerifySheet(
-                keyword: pendingKeyword,
-                cookieStore: appContainer?.ytysxsCookieStore ?? KeychainTokenStore()) { verified in
-                    showAntibotSheet = false
-                    if verified {
-                        Task { await search() } // 验证通过后自动重试原搜索
-                    }
-                }
-        }
     }
 
     // MARK: - 搜索历史（build 21 · 反馈 7）
@@ -193,10 +183,6 @@ struct SearchScreen: View {
 
         if outcome.allFailed {
             errorMessage = "搜索失败：所有启用音源均不可用，请稍后重试"
-        }
-        if let antibot = outcome.antibotKeyword {
-            pendingKeyword = antibot
-            showAntibotSheet = true // 引导人工验证（不自动破解）
         }
     }
 }

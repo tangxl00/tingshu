@@ -30,7 +30,7 @@ final class ShelfMappingTests: XCTestCase {
 
     func testFavoriteModelToAlbumKeepsRoutingKeys() {
         let f = FavoriteModel(
-            src: "ytysxs",
+            src: "bili",  // build 45 · 反馈 3：悦听下架，样本改 B站
             albumId: 998,
             title: "凡人修仙传",
             author: "忘语",
@@ -42,7 +42,7 @@ final class ShelfMappingTests: XCTestCase {
             detailPath: "book/998")
         let album = f.toAlbum()
 
-        XCTAssertEqual(album.source, "ytysxs")
+        XCTAssertEqual(album.source, "bili")
         XCTAssertEqual(album.albumId, 998)
         XCTAssertEqual(album.title, "凡人修仙传")
         XCTAssertEqual(album.author, "忘语")

@@ -2,21 +2,20 @@ import Foundation
 
 /// 播放地址解析仓库（安卓 PlaybackRepository.kt 对等）：按 src 路由 getPlayUrl。
 /// - tingyou → API play 端点；
-/// - ytysxs → 章节直链透传（白名单自检）；
 /// build 37 · 反馈 1：ting15（听十五）/ mekui（书音FM）下架（同 build 36 删
 /// ting08 模式）——播放路由 case 与适配器装配摘除。
 /// build 38 · 反馈 1：ting59（59听书网）下架（第 4 次）——适配器整体删除，
 /// 播放路由 case 摘除；init 4 → 3 参数。
+/// build 45 · 反馈 3：悦听有声书（ytysxs）下架（第 5 次同类下架，用户点名）——
+/// 适配器整体删除、播放路由 case 摘除、init 3 → 2 参数。存量 ytysxs 书走
+/// default 抛 unsupportedURL（describePlaybackError 字符串兼容报「源已下架」）。
 final class PlaybackRepository: Sendable {
     private let apiClient: APIClient
-    private let ytysxsAdapter: YtysxsAdapter
     private let biliAdapter: BiliAdapter
 
     init(apiClient: APIClient,
-         ytysxsAdapter: YtysxsAdapter,
          biliAdapter: BiliAdapter) {
         self.apiClient = apiClient
-        self.ytysxsAdapter = ytysxsAdapter
         self.biliAdapter = biliAdapter
     }
 
@@ -40,12 +39,6 @@ final class PlaybackRepository: Sendable {
                 throw URLError(.badServerResponse)
             }
             return url
-        case SourceRegistry.YTYXSX:
-            let chapters = try await ytysxsAdapter.chapters(albumId: albumId)
-            guard let chapter = chapters.first(where: { $0.index == chapterIdx }) else {
-                throw URLError(.resourceUnavailable)
-            }
-            return try ytysxsAdapter.playUrl(chapter: chapter)
         case SourceRegistry.BILI:
             // B站播放：detailPath 即 bvid，章节 index 映射到分P cid
             guard let bvid = detailPath, !bvid.isEmpty else {

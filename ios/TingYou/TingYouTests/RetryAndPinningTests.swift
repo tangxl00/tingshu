@@ -187,7 +187,7 @@ final class RetryAndPinningTests: XCTestCase {
         // 非连接级 URLError 与非 URLError 一律不重试
         XCTAssertFalse(RetryConfig.isConnectionError(URLError(.cancelled)))
         XCTAssertFalse(RetryConfig.isConnectionError(URLError(.badURL)))
-        XCTAssertFalse(RetryConfig.isConnectionError(AntibotException(keyword: "三体")))
+        // build 45 · 反馈 3：AntibotException 类型随悦听摘除整体删除（此处不再可构造）
         // 固定重试预算：2 次重试（共 3 次尝试），三种 config 一致
         XCTAssertEqual(RetryConfig.standard.connectionMaxRetries, 2)
         XCTAssertEqual(RetryConfig.msrc.connectionMaxRetries, 2)
@@ -269,7 +269,7 @@ final class RetryAndPinningTests: XCTestCase {
     func testAllowlistExactDomains() {
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"))
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("m.ting15.com"))
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("mp3.ytysxs.top"))
+        // build 45 · 反馈 3：悦听音频域名已从 pin 白名单摘除（Build29 R6 同口径）
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("api.aikeu.com"))
         // 精确域名的子域不在白名单内（仅 5 个后缀域支持子域）
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("x.file.hgeuz.cn"))

@@ -111,8 +111,8 @@ final class DiscoverCatalogTests: XCTestCase {
     }
 
     func testUnsupportedSources() {
-        XCTAssertTrue(DiscoverCatalog.unsupportedSources.contains(SourceRegistry.YTYXSX))
-        XCTAssertFalse(DiscoverCatalog.unsupportedSources.contains(SourceRegistry.TINGYOU))
+        // build 45 · 反馈 3：悦听下架——unsupportedSources 集合已清空（空集守卫）
+        XCTAssertTrue(DiscoverCatalog.unsupportedSources.isEmpty, "下架源随全链摘除退出 unsupported 集合，集合应为空")
     }
 
     func testCategoryPageURLBuiltCorrectly() {
