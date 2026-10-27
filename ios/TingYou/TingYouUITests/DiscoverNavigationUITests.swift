@@ -1,12 +1,16 @@
 import XCTest
 
-/// build 42 · 任务一（XCUITest 真实点击复现「点书不导航」）：
-/// 用户真机四条全败，其中「冷启动不点搜索框直接点推荐书也进不了详情页」
-/// 是决定性证据——该场景键盘从未弹起、无焦点状态、无重渲染竞争，
-/// FocusState 理论被证伪。静态分析已穷尽（NavigationStack/List/行结构、
-/// AlbumRow/CoverImage、ContentView/MiniPlayerBar 均干净），本轮改用
-/// CI 模拟器真实点击拿运行时证据；XCUITest 失败自动截图与失败附件，
-/// 即为下一步修复的定位依据。
+/// build 42 · 任务一 + build 43 · 判据升级：XCUITest 真实点击六用例。
+///
+/// build 42 CI（run 40454528757，iOS 26.2 模拟器）证据链已闭合：
+/// A/B/D 失败（单击/键盘弹起点行均不导航）· C 失败（容器手势覆盖空洞）·
+/// F 语义反转（title.exists || navBars.count>0 平凡真——双击也不导航）·
+/// E 对照真实通过（「我的→音源管理」push 正常，全局 NavigationLink 健康）。
+/// 结论：任何容器级 tap 手势挂在包住 List 的祖先上都会杀死行 NavigationLink
+/// 激活——build 43 已删除容器手势，收焦拆三路（滚动/空白小视图/导航自带）。
+///
+/// build 43 最终判据：A/B/C 转绿（真实点击导航恢复 + 空白收键），
+/// E/F/D 保持绿（F 断言已修正为严格形态，无平凡真）。
 /// 口径注意：CI 模拟器 iOS 26.2 + deployment target 17；用户真机 iOS 版本
 /// 未知——若 CI 全过而用户真机失败，结论为版本相关行为（届时向用户要设备版本）。
 final class DiscoverNavigationUITests: XCTestCase {
@@ -48,19 +52,19 @@ final class DiscoverNavigationUITests: XCTestCase {
     }
 
     /// 用例 A（冷启动复现·决定性场景）：键盘从未弹起、无焦点状态——
-    /// 直接点推荐书行，断言推入 AlbumScreen。若本用例失败，
-    /// 「点书不导航」在无任何键盘/焦点变量参与的情况下即复现。
+    /// 直接点推荐书行，断言推入 AlbumScreen。build 42 CI 失败（59.2s），
+    /// build 43 删除容器手势后应转绿——本用例是本轮修复的最终判据之一。
     func testA_coldStartTapRecommendRowNavigates() {
         let app = XCUIApplication()
         let row = launchAndDiscoverRow(app)
         row.tap()
         XCTAssertTrue(albumTitleElement(app).waitForExistence(timeout: 3),
-                      "用例 A 失败：冷启动直接点推荐书未推入 AlbumScreen——「点书不导航」在 CI 模拟器复现（失败截图即运行时证据）")
+                      "用例 A 失败：冷启动直接点推荐书未推入 AlbumScreen（失败截图即运行时证据）")
     }
 
     /// 用例 B（键盘场景）：点搜索框弹键盘 → 输入（不提交——searchMode 仍为
     /// false，书库列表仍在屏）→ 点书行 → 断言导航 + 键盘收起。
-    /// 与用户「键盘弹起时点书」完全同构；若 A 过而 B 败，键盘/焦点变量参与。
+    /// build 42 CI 失败（51.6s），build 43 后应转绿。
     func testB_keyboardUpTapRowNavigatesAndDismisses() {
         let app = XCUIApplication()
         let row = launchAndDiscoverRow(app)
@@ -75,16 +79,14 @@ final class DiscoverNavigationUITests: XCTestCase {
         XCTAssertTrue(keyboardGone(app, within: 2), "导航发生后键盘未收起")
     }
 
-    /// 用例 C（空白收焦）：点搜索框弹键盘 → 点内容区空白带（搜索栏下方的
-    /// 分类折叠行区域，非 List 行）→ 断言键盘收起。
-    /// 解读线索：外层 Group 的 simultaneousGesture 逐子视图应用——若本用例
-    /// 失败而 B 通过，说明手势覆盖存在空洞（子视图间隙不属任何手势区），
-    /// 对应用户「点空白不收键盘」；届时修法指向背景层挂手势
-    ///（Color.clear.contentShape(Rectangle()).simultaneousGesture），先拿证据再改。
+    /// 用例 C（空白收焦）：点搜索框弹键盘 → 点分类折叠面板标题行
+    /// （List 行之外的非交互区域，build 43 收焦挂点之一）→ 断言键盘收起。
+    /// build 42 CI 失败（25.3s）证实外层容器手势覆盖空洞；build 43 手势
+    /// 改挂具体小视图后应转绿。
     func testC_blankAreaTapDismissesKeyboard() {
         let app = XCUIApplication()
         _ = launchAndDiscoverRow(app)
-        // 前置：分类折叠行应已出现（确认点击坐标落点在内容区而非导航栏/搜索栏）
+        // 前置：分类折叠行应已出现（本轮点击目标即该行——收焦挂点）
         let categoryLabel = app.staticTexts["分类：推荐"]
         XCTAssertTrue(categoryLabel.waitForExistence(timeout: 3),
                       "分类行未出现——发现页结构与预期不符")
@@ -92,9 +94,61 @@ final class DiscoverNavigationUITests: XCTestCase {
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3),
                       "点击搜索框后键盘未弹起——用例前置失败")
-        // 点分类行区域（内容区空白带；dx 0.25 避开右侧音源 Menu，防误开菜单）
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.22)).tap()
+        // 点分类行（非 List 行、非键盘区域）：simultaneous 收焦挂点应触发
+        categoryLabel.tap()
         XCTAssertTrue(keyboardGone(app, within: 2),
-                      "用例 C 失败：点内容区空白带键盘不收——外层手势覆盖存在空洞（Group 逐子视图应用的已知线索）")
+                      "用例 C 失败：点分类行区域键盘不收——收焦挂点未生效")
+    }
+
+    /// 用例 D（视图树 triage）：单击行后等 5 秒，断言 AlbumScreen 出现；
+    /// 失败时附加 app.debugDescription 视图树快照 + 失败截图（运行时证据）。
+    /// build 42 CI 失败（单击后 5 秒 title 仍不存在）；build 43 后应转绿。
+    func testD_singleTapThenViewTreeTriage() {
+        let app = XCUIApplication()
+        let row = launchAndDiscoverRow(app)
+        row.tap()
+        let title = albumTitleElement(app)
+        let ok = title.waitForExistence(timeout: 5)
+        if !ok {
+            // triage 证据：视图树快照随失败报告携带（截图由 XCUITest 自动附加）
+            let attachment = XCTAttachment(string: app.debugDescription)
+            attachment.name = "view_tree_after_single_tap"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        XCTAssertTrue(ok,
+                      "用例 D 失败：单击行后 5 秒 AlbumScreen 未出现（视图树快照已附加，见失败附件）")
+    }
+
+    /// 用例 E（对照·全局导航健康）：「我的」tab → 音源管理 push →
+    /// 断言源列表出现（「悦听有声书」）。该页面链路无容器手势——
+    /// build 42 CI 真实通过，证明全局 NavigationLink 健康、问题为发现页
+    /// 特有。build 43 只动发现页手势，本用例应保持绿（回归对照）。
+    func testE_mineTabSourceManageNavigationWorks() {
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["我的"].tap()
+        let entry = app.staticTexts["音源管理"]
+        XCTAssertTrue(entry.waitForExistence(timeout: 5),
+                      "「我的」页音源管理入口未出现——用例前置失败")
+        entry.tap()
+        XCTAssertTrue(app.staticTexts["悦听有声书"].waitForExistence(timeout: 5),
+                      "用例 E 失败：「我的→音源管理」push 异常——全局 NavigationLink 出现回归（对照失败，非发现页特有问题）")
+    }
+
+    /// 用例 F（双击实验·严格断言）：同一行最多点两次，断言 AlbumScreen
+    /// 出现。build 42 版断言 `title.exists || navBars.count > 0` 语义反转
+    /// （navBars 平凡真——发现页自身 NavigationStack 带 navigationTitle
+    /// 「发现」恒 ≥1），build 43 修正为仅判 album_screen_title。
+    /// 首击若已导航（title 1 秒内出现）则跳过第二击——push 后原行不可点。
+    func testF_doubleTapRowNavigates() {
+        let app = XCUIApplication()
+        let row = launchAndDiscoverRow(app)
+        row.tap()
+        if !albumTitleElement(app).waitForExistence(timeout: 1) {
+            row.tap()
+        }
+        XCTAssertTrue(albumTitleElement(app).waitForExistence(timeout: 3),
+                      "用例 F 失败：双击行后 AlbumScreen 未出现——严格断言（无平凡真），首击与次击均未激活导航")
     }
 }

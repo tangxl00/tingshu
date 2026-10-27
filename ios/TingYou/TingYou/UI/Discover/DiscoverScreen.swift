@@ -106,35 +106,33 @@ struct DiscoverScreen: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
 
-                // build 41 · 反馈 ①（点书无反应 · 第 5 轮系统性根因修复）：
-                // 四轮「手势挂哪」修复无效的真变量是收焦实现方式——此前 FocusState
-                // 状态翻转收焦触发全 body 重渲染，键盘弹起时点书行，「移除历史条件
-                // 视图 + List 布局同帧扰动」丢弃进行中的 NavigationLink 行激活
-                //（用户看到「键盘收起但不导航」正是重渲染发生的证据）。搜索页用
-                // UIKit resignFirstResponder（零重渲染）所以从未出问题。
-                // 本轮：① 收焦统一 resignFirstResponder（与搜索页对齐）；② 删除
-                // FocusState，历史区块改 keyword 驱动；③ 只保留本处一处容器级
-                // 手势，两个 List 本体不挂手势（scrollDismissesKeyboard 保留）；
-                // ④ view-based NavigationLink 保留。simultaneous 与行导航并行
-                // 识别、互不抢占，覆盖 List 内外全部空白。
-                //（组长修：if/else 表达式不能直接链实例修饰符，须包 Group——
-                //  Group 仅作 ViewBuilder 容器，不属守卫禁止形态。）
-                Group {
-                    if searchMode && !keyword.isEmpty {
-                        searchResultsContent
-                    } else {
-                        // build 41：keyword 为空 && 非搜索结果态 → 显示搜索历史
-                        //（输入中 / 提交搜索即隐藏，语义保留）。
-                        if keyword.isEmpty {
-                            historySection
-                        }
-                        libraryContent
+                // build 43 · 空白收焦②：搜索栏与分类行之间的非交互间距区。
+                // 收焦手势挂点之一（不包裹 List 的小视图，矩形填充透明色
+                // 参与命中测试）。三路收焦方案见下方 if/else 前注释。
+                Rectangle().fill(.clear)
+                    .frame(height: 8)
+                    .onTapGesture { dismissKeyboard() }
+
+                // build 41 · 反馈 ① 注释（build 43 更新）：本轮删除了此处原有的
+                // 容器级 simultaneousGesture——build 42 CI 六用例证据（XCUITest
+                // 真实点击）确证：任何形式的容器级 tap 手势（onTapGesture /
+                // simultaneousGesture，挂在包住 List 的 Group/VStack/ if-else
+                // 表达式上）都会杀死 List 内 NavigationLink 行激活（A/B/D 失败、
+                // E 对照页「我的→音源管理」无该手势导航正常）。收焦拆三路：
+                // ① List 滚动收焦：scrollDismissesKeyboard(.immediately)（保留）；
+                // ② 非交互空白区收焦：挂到不包裹 List 的小视图（本文件三处——
+                //    搜索栏下方间距区 / 分类折叠面板标题行 / 加载错误占位区）；
+                // ③ 行点击：导航 push 本身收键盘（iOS 默认行为，无需代码）。
+                if searchMode && !keyword.isEmpty {
+                    searchResultsContent
+                } else {
+                    // build 41：keyword 为空 && 非搜索结果态 → 显示搜索历史
+                    //（输入中 / 提交搜索即隐藏，语义保留）。
+                    if keyword.isEmpty {
+                        historySection
                     }
+                    libraryContent
                 }
-                .simultaneousGesture(TapGesture().onEnded {
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                                    to: nil, from: nil, for: nil)
-                })
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
             .onAppear {
@@ -346,6 +344,11 @@ struct DiscoverScreen: View {
                         .foregroundStyle(.secondary)
                 }
                 .contentShape(Rectangle())
+                // build 43 · 空白收焦②：分类折叠面板标题行收焦挂点——不包裹
+                // List 的小视图（simultaneous 与 DisclosureGroup 展开切换、
+                // 右侧音源 Menu 并行识别互不抢占；build 42 CI 用例 C 证实
+                // 此前外层容器手势存在覆盖空洞，且容器形态杀死行导航）。
+                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
             }
             .buttonStyle(.plain)
             .padding(.horizontal)
@@ -358,6 +361,9 @@ struct DiscoverScreen: View {
                     Button("重试") { Task { await loadCurrent() } }
                     Spacer()
                 }
+                // build 43 · 空白收焦②：加载错误占位区收焦挂点——不包裹 List
+                // 的小视图（simultaneous 与「重试」Button 并行互不抢占）。
+                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
             } else {
                 List {
                     // build 42 · 任务一：行 identifier 供 DiscoverNavigationUITests
@@ -403,6 +409,14 @@ struct DiscoverScreen: View {
                 await loadCurrent()
             }
         }
+    }
+
+    /// build 41 · 收焦实现（build 43 沿用）：UIKit resignFirstResponder 零重渲染，
+    /// 不打断任何进行中的手势识别与导航激活。build 43 起调用点收敛为三处
+    /// 非交互小视图挂点（间距区 / 分类行 / 错误占位区），不再有容器级手势。
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
     }
 
     /// build 22 · 对齐安卓：聚合搜索读 SourceEnabledStore 启用集（与搜索页同一套 AggregateSearcher）。
