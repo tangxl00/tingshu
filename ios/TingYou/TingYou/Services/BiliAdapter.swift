@@ -53,6 +53,10 @@ actor BiliAdapter {
     /// WBI 签名密钥缓存（密钥每日轮换，TTL 沿用搜索侧 BiliSearchApi.WBI_KEY_TTL_MS）
     private var cachedWbiKey: String?
     private var wbiKeyFetchedAt: UInt64 = 0
+    /// build 44 · 反馈 3（B站 Cannot Open）：分P列表进程内缓存（bvid → pages）。
+    /// 分P 结构（cid/page/part）对已发布视频不变，命中后切章零请求——每章播放
+    /// 原先都要重拉 view（3 请求/章 + 预取放大），是风控 412 的主要消耗方。
+    private var pageCache: [String: [BiliPage]] = [:]
 
     init(apiBase: String = "https://api.bilibili.com",
          homeBase: String = "https://www.bilibili.com",
@@ -106,6 +110,77 @@ actor BiliAdapter {
         } catch {
             return .failure(error)
         }
+    }
+
+    // MARK: - build 44 · 反馈 3（B站 Cannot Open）：分P获取改走 pagelist
+
+    /// /x/player/pagelist 接口 URL 构造（纯函数，供单测断言）。
+    static func buildPageListUrl(apiBase: String, bvid: String) -> String {
+        "\(apiBase)/x/player/pagelist?bvid=\(bvid)"
+    }
+
+    /// 分P列表获取（abts pageList 同款接口）。build 44 沙箱取证（2026-10-27）：
+    /// /x/web-interface/view 对匿名高频连续请求稳定 412（3 连 3 败），
+    /// /x/player/pagelist 连续 3 次全部 200 零风控——播放链路的分P获取从 view
+    /// 迁移到本接口，view 仅作为兜底保留。
+    func pageList(bvid: String) async -> Result<[BiliPage], Error> {
+        do {
+            try await warmup()
+            let json = try await requestJsonWithBackoff(url: Self.buildPageListUrl(apiBase: apiBase, bvid: bvid))
+            return .success(try parsePageList(json))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// 播放链路分P获取复合入口：缓存命中（零请求）→ pagelist（轻接口零风控）→
+    /// view 兜底（接口本身有 412 风险，仅在 pagelist 失败时使用）。结果写缓存。
+    /// 分P 结构对已发布视频不变，缓存进程内有效（切章/重播/预取全部命中）。
+    func playablePages(bvid: String) async -> Result<[BiliPage], Error> {
+        if let cached = pageCache[bvid], !cached.isEmpty {
+            return .success(cached)
+        }
+        let pagelist = await pageList(bvid: bvid)
+        if case .success(let pages) = pagelist, !pages.isEmpty {
+            pageCache[bvid] = pages
+            return pagelist
+        }
+        // 兜底：pagelist 失败（如个别视频 pagelist 空返回）走 view（原路径）
+        let info = await videoInfo(bvid: bvid)
+        switch info {
+        case .success(let v):
+            if !v.pages.isEmpty {
+                pageCache[bvid] = v.pages
+            }
+            return .success(v.pages)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    /// pagelist 响应解析（纯函数注入 json 供单测）：
+    /// data[] 元素含 cid/page/part/duration，映射口径与 parseVideoInfo 的
+    /// pages 分支一致（cid>0 过滤、part 缺省 P<n>）。
+    static func parsePageList(_ json: [String: Any]) throws -> [BiliPage] {
+        guard let arr = json["data"] as? [[String: Any]] else {
+            throw URLError(.badServerResponse,
+                           userInfo: [NSLocalizedDescriptionKey: "B站分P列表缺少 data 字段"])
+        }
+        var pages: [BiliPage] = []
+        for (i, p) in arr.enumerated() {
+            let cid = (p["cid"] as? NSNumber)?.int64Value ?? -1
+            guard cid > 0 else { continue }
+            let part = (p["part"] as? String)?.trimmingCharacters(in: .whitespaces)
+                ?? "P\(p["page"] as? Int ?? i + 1)"
+            pages.append(BiliPage(cid: cid,
+                                   page: p["page"] as? Int ?? i + 1,
+                                   part: part))
+        }
+        guard !pages.isEmpty else {
+            throw URLError(.badServerResponse,
+                           userInfo: [NSLocalizedDescriptionKey: "B站分P列表为空"])
+        }
+        return pages
     }
 
     // MARK: - DASH 音轨直链

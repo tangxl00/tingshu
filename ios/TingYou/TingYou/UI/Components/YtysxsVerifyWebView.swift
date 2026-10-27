@@ -98,6 +98,14 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
         var isObservingProgress = false
         /// build 38 · 反馈 2 ④：进程终止自动恢复只做一次（防 reload 循环）
         private var didAutoReloadContentProcess = false
+        /// build 44 · 反馈 2（「已验证仍拦截」二轮）：滑块通过是页面内 AJAX/fetch，
+        /// 不产生新导航——didFinish 后才 Set 的会话 cookie 永不进捕获窗口。
+        /// 补救：didFinish 后 15 秒内每 2 秒轮询一次 httpCookieStore，新 cookie
+        /// 立即同步 + 发现 token 即回包。轮询代次标记使旧轮询在新导航后失效。
+        private var cookiePollGeneration = 0
+        /// build 44 · 反馈 2：onResult(true) 只回包一次——didFinish 与轮询两条
+        /// 路径都可能发现 token，重复回包会导致 sheet 关闭后搜索被重放多次。
+        private var didReportSuccess = false
 
         init(cookieStore: KeychainTokenStore, onResult: @escaping (Bool) -> Void,
              onLoadingChange: @escaping (Bool) -> Void, onLoadError: @escaping (String) -> Void,
@@ -131,10 +139,42 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
                 // 修复「验证通过后搜索仍再触发验证」的形态。
                 YtysxsCookieSync.sync(cookies)
                 if let token = YtysxsCookieSync.captchaToken(from: cookies) {
-                    self.cookieStore.save(token: token)
-                    DispatchQueue.main.async { self.onResult(true) }
+                    self.reportSuccess(token: token)
                 }
             }
+            // build 44 · 反馈 2（「已验证仍拦截」二轮）：滑块 AJAX 后补捕获——
+            // 见 cookiePollGeneration 声明处注释。didFinish 时滑块大概率未过，
+            // 放行 cookie 要等用户拖完滑块才 Set，必须靠轮询兜住。
+            startCookiePolling(webView: webView)
+        }
+
+        /// build 44 · 反馈 2：didFinish 后 15 秒轮询（2 秒间隔共 8 轮）——
+        /// 每轮全量同步悦听域 cookie；新出现 captchaToken 即保存并回包。
+        /// 代次失效：新一轮 didFinish（重试/重新加载）使旧轮询闭包作废；
+        /// dismantle 后 Coordinator 释放（[weak self]），轮询自然终止。
+        private func startCookiePolling(webView: WKWebView) {
+            cookiePollGeneration += 1
+            let generation = cookiePollGeneration
+            for tick in 1...8 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(tick) * 2.0) { [weak self] in
+                    guard let self = self, generation == self.cookiePollGeneration else { return }
+                    webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                        YtysxsCookieSync.sync(cookies)
+                        if let token = YtysxsCookieSync.captchaToken(from: cookies) {
+                            self.reportSuccess(token: token)
+                        }
+                    }
+                }
+            }
+        }
+
+        /// build 44 · 反馈 2：成功回包幂等收敛（见 didReportSuccess 声明处注释）。
+        /// token 始终重新保存——轮询发现的「迟到 token」可能是滑块后刷新的新值。
+        private func reportSuccess(token: String) {
+            cookieStore.save(token: token)
+            guard !didReportSuccess else { return }
+            didReportSuccess = true
+            DispatchQueue.main.async { self.onResult(true) }
         }
 
         /// build 27（空白页修复）：加载失败此前无任何 UI 反馈，静默成空白页——

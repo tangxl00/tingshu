@@ -125,8 +125,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "43",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 43（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "44",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 44（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40
@@ -139,11 +139,12 @@ final class Build29RegressionTests: XCTestCase {
     /// 挂在包住 List 的 if/else / Group / VStack 上——build 42 CI 六用例
     /// （XCUITest 真实点击）确证：任何形式的容器级 tap 手势都会杀死 List 内
     /// NavigationLink 行激活（A/B/D 失败；E 对照页无该手势导航正常）。
-    /// build 43 形态约束（发现页专用）：
+    /// build 43 形态约束（发现页专用；build 44 · 反馈 1 扩围后计数更新）：
     /// 禁④ @FocusState；要求⑤ resignFirstResponder；禁⑥ List 本体挂任何手势；
-    /// 要求⑦ .simultaneousGesture( 恰 2 处（分类折叠面板标题行 + 加载错误
-    /// 占位区——均不包裹 List 的小视图）；要求⑧ .onTapGesture( 恰 1 处
-    ///（搜索栏与分类行之间的间距收焦区）；scrollDismissesKeyboard ≥2 保留。
+    /// 要求⑦ .simultaneousGesture( 恰 3 处（分类折叠面板标题行 + 加载错误
+    /// 占位区 + 搜索栏容器——均不包裹 List 的小视图）；要求⑧ .onTapGesture(
+    /// 恰 2 处（搜索栏与分类行之间的间距收焦区 + 历史搜索区块背景收焦）；
+    /// scrollDismissesKeyboard ≥2 保留。
     /// 行点击收焦交给导航 push 本身（iOS 默认行为）。
     /// SearchScreen 无 @FocusState、收焦本就是 resignFirstResponder，保持
     /// b40 形态约束（禁①② + simultaneousGesture ≥1）。
@@ -198,18 +199,20 @@ final class Build29RegressionTests: XCTestCase {
                 XCTAssertFalse(
                     normalized.contains(".scrollDismissesKeyboard(.immediately).simultaneousGesture("),
                     "发现页 List 本体禁止挂任何手势（build 41 形态：收焦只挂非 List 祖先的小视图）")
-                // 要求⑦（build 43）：simultaneousGesture 恰 2 处——分类折叠面板
-                // 标题行 + 加载错误占位区，均不包裹 List。b41/b42 的容器级 1 处
-                // 形态（计数 1）与 b40 的 3 处分挂形态（计数 3）都会在此失败。
+                // 要求⑦（build 44）：simultaneousGesture 恰 3 处——分类折叠面板
+                // 标题行 + 加载错误占位区 + 搜索栏容器（build 44 · 反馈 1 扩围：
+                // 含左右留白与上下 padding），均不包裹 List。b41/b42 的容器级
+                // 1 处形态（计数 1）与 b40 的 3 处分挂形态（计数 3）都会在此失败。
                 XCTAssertEqual(
-                    normalized.components(separatedBy: ".simultaneousGesture(").count - 1, 2,
-                    "发现页收焦手势必须恰为 2 处非 List 祖先小视图 simultaneousGesture（分类行 + 错误占位区）；容器级挂载（任何数量）都会杀死行 NavigationLink 激活（build 42 CI 六用例证据）")
-                // 要求⑧（build 43）：onTapGesture 恰 1 处——搜索栏与分类行之间
-                // 的间距收焦区（Rectangle().fill(.clear)，不包裹任何交互视图）。
+                    normalized.components(separatedBy: ".simultaneousGesture(").count - 1, 3,
+                    "发现页收焦手势必须恰为 3 处非 List 祖先小视图 simultaneousGesture（搜索栏容器 + 分类行 + 错误占位区）；容器级挂载（任何数量）都会杀死行 NavigationLink 激活（build 42 CI 六用例证据）")
+                // 要求⑧（build 44）：onTapGesture 恰 2 处——搜索栏与分类行之间
+                // 的间距收焦区（Rectangle().fill(.clear)，不包裹任何交互视图）+
+                // 历史搜索区块背景收焦（background 层透明矩形，不抢占 chips）。
                 // 锚定不带括号（尾随闭包写法 .onTapGesture { } 无括号）。
                 XCTAssertEqual(
-                    normalized.components(separatedBy: ".onTapGesture").count - 1, 1,
-                    "发现页 onTapGesture 必须恰为 1 处（间距收焦区）；多出即形态漂移——List 本体或容器上挂 onTapGesture 是 build 37/39 真机回归形态")
+                    normalized.components(separatedBy: ".onTapGesture").count - 1, 2,
+                    "发现页 onTapGesture 必须恰为 2 处（间距收焦区 + 历史搜索区块背景）；多出即形态漂移——List 本体或容器上挂 onTapGesture 是 build 37/39 真机回归形态")
                 // 两个 List 的滚动收起保留
                 let scrollCount = normalized.components(separatedBy: ".scrollDismissesKeyboard").count - 1
                 XCTAssertGreaterThanOrEqual(scrollCount, 2,

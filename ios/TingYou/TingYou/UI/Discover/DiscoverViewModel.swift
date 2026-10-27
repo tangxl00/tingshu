@@ -149,6 +149,13 @@ final class DiscoverViewModel {
         if let urlError = error as? URLError, urlError.code == .unsupportedURL {
             return "该源暂不支持发现页"
         }
+        // build 44 · 反馈 5（听友FM TLS）：实测该音源证书链有效（Google Trust Services WE1，
+        // 在本地 27 锚点集合内且锚点为 additive 模式），失败为外部间歇性 TLS 握手问题，
+        // 客户端无法根治——把原始「A TLS error caused the secure connection to fail」
+        // 映射成人话 + 规避建议（换音源），避免用户误以为 App 故障。
+        if let urlError = error as? URLError, urlError.code == .secureConnectionFailed {
+            return "安全连接失败：该音源服务器暂时无法建立加密连接，请稍后重试或切换其他音源"
+        }
         return "加载失败：\(error.localizedDescription)"
     }
 }

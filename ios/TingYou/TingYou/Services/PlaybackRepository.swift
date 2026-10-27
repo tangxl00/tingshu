@@ -51,9 +51,14 @@ final class PlaybackRepository: Sendable {
             guard let bvid = detailPath, !bvid.isEmpty else {
                 throw URLError(.badURL)
             }
-            let infoResult = await biliAdapter.videoInfo(bvid: bvid)
-            let info = try infoResult.get()
-            guard let page = info.pages.first(where: { $0.page == chapterIdx + 1 }) else {
+            // build 44 · 反馈 3（Cannot Open）：分P获取改走 playablePages
+            //（缓存 → pagelist 轻接口 → view 兜底）。原先每章都拉 view：
+            // 3 请求/章 + 预取放大触发 412 风控，resolve 失败后 AVFoundation
+            // 吞掉错误显示 Cannot Open。沙箱取证：view 连续 3 次 412，
+            // pagelist 连续 3 次 200（2026-10-27）。
+            let pagesResult = await biliAdapter.playablePages(bvid: bvid)
+            let pages = try pagesResult.get()
+            guard let page = pages.first(where: { $0.page == chapterIdx + 1 }) else {
                 throw URLError(.resourceUnavailable)
             }
             let streamResult = await biliAdapter.audioStreamUrl(bvid: bvid, cid: page.cid)

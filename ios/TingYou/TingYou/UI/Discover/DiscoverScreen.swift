@@ -26,6 +26,10 @@ struct DiscoverScreen: View {
     /// v1.4.2 · 悦听安全验证迁移：反爬拦截不再弹验证窗（入口迁至 我的→音源管理），
     /// 命中拦截时置位，由搜索结果/错误提示区展示引导文案。
     @State private var verifyHint = false
+    /// build 44 · 反馈 2：发现页悦听验证 sheet（拦截当场弹出，验证通过重放搜索）
+    @State private var showVerifySheet = false
+    /// build 44 · 反馈 2：被拦截的搜索词（回传给验证 sheet 定位验证页面）
+    @State private var pendingKeyword = ""
     /// build 21 · 反馈 7：发现页搜索框同步写入搜索历史
     private let historyStore = SearchHistoryStore()
     /// v1.4.3 · 需求 2：搜索历史展示（build 41 · 反馈 ① 收焦方式重构）：
@@ -105,6 +109,14 @@ struct DiscoverScreen: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .padding(.horizontal)
                 .padding(.vertical, 8)
+                // build 44 · 反馈 1（空白收焦补覆盖）：搜索栏整行（含左右留白与
+                // 上下 padding 区）挂 simultaneousGesture 收焦——用户点「搜索栏
+                // 左右留白 / 栏体空白」时输入法消失。simultaneous 与 TextField
+                // 聚焦并行不抢占（铁律：本手势挂在搜索栏 HStack 自身，非 List
+                // 祖先，不触碰 b43 三路收焦架构）。contentShape 保证 padding
+                // 留白区也参与命中。
+                .contentShape(Rectangle())
+                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
 
                 // build 43 · 空白收焦②：搜索栏与分类行之间的非交互间距区。
                 // 收焦手势挂点之一（不包裹 List 的小视图，矩形填充透明色
@@ -149,6 +161,24 @@ struct DiscoverScreen: View {
         // v1.4.2 · 悦听安全验证迁移：发现页不再挂验证 sheet——
         // 命中 AntibotException 时仅置 verifyHint，由搜索结果/错误提示区
         // 显示「请前往 我的→音源管理 完成验证」引导文案（验证入口已迁至该页）。
+        // build 44 · 反馈 2（「已验证仍拦截」二轮）：恢复验证 sheet——拦截当场
+        // 弹出（路径比「我的→音源管理」往返短），验证通过回调重放原搜索。
+        // （sheet 修饰符非手势，不触碰 b43 容器无手势铁律。）
+        .sheet(isPresented: $showVerifySheet) {
+            YtysxsVerifySheet(
+                keyword: pendingKeyword,
+                cookieStore: appContainer?.ytysxsCookieStore ?? KeychainTokenStore()) { verified in
+                    showVerifySheet = false
+                    if verified {
+                        // 验证通过 → 重放原搜索（reAntibot 判定看响应内容，
+                        // 状态位之外必须真发一次请求才能拿到放行后的结果）
+                        verifyHint = false
+                        Task { @MainActor in
+                            performSearch(initial: true)
+                        }
+                    }
+                }
+        }
     }
 
     // MARK: - 搜索历史（build 27：发现页可达展示）
@@ -160,48 +190,70 @@ struct DiscoverScreen: View {
     @ViewBuilder
     private var historySection: some View {
         if !history.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("最近搜索")
-                        .font(.subheadline.bold())
-                    Spacer()
-                    Button("清空") {
-                        historyStore.clear()
-                        history = []
-                    }
-                    .font(.caption)
-                }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
-                    ForEach(history, id: \.self) { kw in
-                        // chip 主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
-                        HStack(spacing: 4) {
-                            Button {
-                                keyword = kw
-                                performSearch(initial: true)
-                            } label: {
-                                Text(kw)
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                            }
-                            .buttonStyle(.pressable)
-                            Button {
-                                historyStore.remove(kw)
-                                history = historyStore.all
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(Color(.systemGray3))
-                                    .font(.caption)
-                            }
+            // build 44 · 反馈 4（历史搜索「依旧被截断」）：两层放开——
+            // ① 多条记录全量滚动展示：LazyVGrid 包进 ScrollView + maxHeight 200，
+            //    超出部分滚动可见（此前 VStack 固有高度直接撑开、与 List 争屏，
+            //    历史多时下半被挤压成「只看到几条」）；
+            // ② 单条长词不截断：chip 文字去 lineLimit(1)，fixedSize 改
+            //    horizontal: false + vertical: true——长书名/人名换行完整展示
+            //    （此前 lineLimit(1)+fixedSize 强制单行，「凡人修仙传田老魔说」
+            //    一类长词显示成「凡人修仙…」）。
+            // 存储层无截断（SearchHistoryStore limit=20 上限、显示层此前即全量
+            // ForEach）；图 02 仅 1 条=用户当期历史即 1 条。
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("最近搜索")
+                            .font(.subheadline.bold())
+                        Spacer()
+                        Button("清空") {
+                            historyStore.clear()
+                            history = []
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(Color(.systemGray5)))
-                        .fixedSize()
+                        .font(.caption)
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
+                        ForEach(history, id: \.self) { kw in
+                            // chip 主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
+                            HStack(spacing: 4) {
+                                Button {
+                                    keyword = kw
+                                    performSearch(initial: true)
+                                } label: {
+                                    Text(kw)
+                                        .foregroundStyle(.primary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .buttonStyle(.pressable)
+                                Button {
+                                    historyStore.remove(kw)
+                                    history = historyStore.all
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(Color(.systemGray3))
+                                        .font(.caption)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(Color(.systemGray5)))
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                // build 44 · 反馈 1（空白收焦补覆盖）：历史搜索区块背景收焦——
+                // 透明矩形填充本身参与命中测试（chips 之间的空隙与区块空白点击
+                // 收键盘），挂在 background 层不抢占前景 chips 按钮（铁律：非
+                // List 祖先小视图；写法与 b43 间距区同款，不用 contentShape——
+                // 避开守卫禁①「contentShape 紧跟 onTapGesture」形态锚）。
+                .background(
+                    Rectangle().fill(.clear)
+                        .onTapGesture { dismissKeyboard() }
+                )
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+            .frame(maxHeight: 200)
         }
     }
 
@@ -461,11 +513,19 @@ struct DiscoverScreen: View {
             isSearching = false
             // v1.4.2 · 悦听安全验证迁移：反爬拦截不再弹窗——置提示态由结果区展示引导文案；
             // 无结果时直接给可操作文案（点重试前先去 我的→音源管理 完成验证）
-            if outcome.antibotKeyword != nil {
+            // build 44 · 反馈 2（悦听「已验证仍拦截」二轮）：发现页对齐 SearchScreen——
+            // 拦截当场弹出 YtysxsVerifySheet（比「去我的→音源管理」往返路径短），
+            // 验证通过回调里**重放原搜索请求**（此前只置 verifyHint 引导文案，
+            // 用户验证完须手动重搜——搜索界面「需要验证」判定看 reAntibot 响应命中、
+            // 音源管理页「已验证」看本地标记，两处数据源不同，仅翻状态位不重放
+            // 会让用户继续看到拦截文案）。文案保留作为 sheet 失败时的兜底引导。
+            if let blockedKeyword = outcome.antibotKeyword {
                 verifyHint = true
+                pendingKeyword = blockedKeyword
                 if outcome.albums.isEmpty {
-                    searchError = "悦听有声书需要安全验证，请前往「我的→音源管理」完成验证后重试"
+                    searchError = "悦听有声书需要安全验证，请完成验证后自动重试"
                 }
+                showVerifySheet = true
             }
             if outcome.allFailed && searchError == nil {
                 searchError = "搜索失败：所有启用音源均不可用，请稍后重试"

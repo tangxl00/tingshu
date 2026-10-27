@@ -151,4 +151,32 @@ final class DiscoverNavigationUITests: XCTestCase {
         XCTAssertTrue(albumTitleElement(app).waitForExistence(timeout: 3),
                       "用例 F 失败：双击行后 AlbumScreen 未出现——严格断言（无平凡真），首击与次击均未激活导航")
     }
+
+    /// 用例 G（build 44 · 反馈 1 空白收焦补覆盖）：点搜索框弹键盘 →
+    /// 点「搜索栏上方空白」（搜索栏外层 .padding(.vertical, 8) 区，即
+    /// 「发现」标题与搜索框之间的留白）→ 断言键盘收起。
+    /// build 43 只挂了三处（间距区/分类行/错误占位区），用户真机点
+    /// 「页面上方空白」仍不收——build 44 把搜索栏容器整行（含 padding
+    /// 留白）纳入 contentShape + simultaneousGesture，本用例是该扩围的
+    /// 真机对齐判据。坐标取搜索框上沿上方 10pt（外层 8pt padding 命中区），
+    /// 顶部安全区兜底。
+    func testG_tapAboveSearchBarDismissesKeyboard() {
+        let app = XCUIApplication()
+        _ = launchAndDiscoverRow(app)
+        let field = searchField(app)
+        XCTAssertTrue(field.waitForExistence(timeout: 3),
+                      "搜索框未出现——发现页结构与预期不符")
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3),
+                      "点击搜索框后键盘未弹起——用例前置失败")
+        // 搜索栏上方空白坐标：field 上沿 -10pt（落在搜索栏容器外层 padding 区），
+        // 横向取 field 中线；顶部兜底不越过安全区上沿
+        let f = field.frame
+        let dy = max(f.minY - 10, f.minY > 0 ? 2 : 0)
+        let coord = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            .withOffset(CGVector(dx: f.midX, dy: dy))
+        coord.tap()
+        XCTAssertTrue(keyboardGone(app, within: 2),
+                      "用例 G 失败：点搜索栏上方空白键盘不收——搜索栏容器收焦挂点未覆盖 padding 留白区")
+    }
 }
