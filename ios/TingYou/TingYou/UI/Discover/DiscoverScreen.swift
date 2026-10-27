@@ -97,28 +97,26 @@ struct DiscoverScreen: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
 
-                // build 37 · 反馈 2：点击搜索框以外区域收起输入法——
-                // 搜索框下方内容区整体挂 tap 收焦手势（Button/NavigationLink 等
-                // 子视图点击优先于父手势，历史 chip 与列表行点击行为不受影响），
-                // 并叠加两个 List 的滚动收起（.scrollDismissesKeyboard，
-                // 等价 UIScrollView.keyboardDismissMode.onDrag）。
-                Group {
-                    if searchMode && !keyword.isEmpty {
-                        searchResultsContent
-                    } else {
-                        // v1.4.3 · 需求 2：搜索历史仅聚焦搜索框时显示——此前常驻显示，
-                        // 失焦或提交搜索（searchMode）即隐藏；未聚焦的默认浏览态不再出现。
-                        if searchFocused {
-                            historySection
-                        }
-                        libraryContent
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
+                // build 39 · 修复 build 37 引入的两处真机回归（验收 build 38 反馈）：
+                // ① 点书无反应——build 37 用「Group + contentShape(Rectangle()) +
+                //    父级 tap 手势」把整个内容区包起来收焦，父手势与 List 行内
+                //    NavigationLink 形成手势竞争且父手势胜出，书籍行点击被吞
+                //    （交付时「子视图点击优先于父手势」的假设在 List 场景被真机
+                //    证伪）。回归 build 36 的裸结构：内容区不再加容器包裹、不整体
+                //    挂手势；收焦改挂到两个 List 本体（与搜索页 SearchScreen 同款，
+                //    build 37/38 真机已验证不吞行点击）+ 保留 List 滚动收起。
+                // ② 布局整体上移、列表内容穿透 tab bar——由该容器包裹（contentShape
+                //    改变整域命中几何）引入，随结构回退一并消除，恢复 build 36 视觉。
+                // 硬验收口径：点书进详情、点空白收键盘、滚动收键盘，三者同时成立。
+                if searchMode && !keyword.isEmpty {
+                    searchResultsContent
+                } else {
+                    // v1.4.3 · 需求 2：搜索历史仅聚焦搜索框时显示——此前常驻显示，
+                    // 失焦或提交搜索（searchMode）即隐藏；未聚焦的默认浏览态不再出现。
                     if searchFocused {
-                        searchFocused = false
+                        historySection
                     }
+                    libraryContent
                 }
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
@@ -268,6 +266,14 @@ struct DiscoverScreen: View {
             }
             .listStyle(.plain)
             .scrollDismissesKeyboard(.immediately)
+            // build 39：List 级 tap 收焦——挂于 List 本体（无容器包裹、无
+            // contentShape 整域命中），行内 NavigationLink 点击不受影响，
+            // 空白区点击收起键盘（与 SearchScreen 同款方案，含修饰符顺序）。
+            .onTapGesture {
+                if searchFocused {
+                    searchFocused = false
+                }
+            }
         }
     }
 
@@ -366,6 +372,13 @@ struct DiscoverScreen: View {
                 }
                 .listStyle(.plain)
                 .scrollDismissesKeyboard(.immediately)
+                // build 39：List 级 tap 收焦（同 searchResultsContent：滚动收起 +
+                // 空白区点击收焦，行点击不受影响，方案与 SearchScreen 一致）。
+                .onTapGesture {
+                    if searchFocused {
+                        searchFocused = false
+                    }
+                }
             }
         }
         .task {
