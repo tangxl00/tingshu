@@ -101,15 +101,19 @@ struct DiscoverScreen: View {
                 // List 外空白区（分类面板、间距）收焦：simultaneous 对内部 Button/
                 // DisclosureGroup/Menu/行导航无抢占（并行识别），可以安全覆盖整区；
                 // 与两个 List 本体的 simultaneousGesture 叠加，各自触发均幂等收焦。
-                if searchMode && !keyword.isEmpty {
-                    searchResultsContent
-                } else {
-                    // v1.4.3 · 需求 2：搜索历史仅聚焦搜索框时显示——此前常驻显示，
-                    // 失焦或提交搜索（searchMode）即隐藏；未聚焦的默认浏览态不再出现。
-                    if searchFocused {
-                        historySection
+                // （build 40 修：if/else 表达式不能直接链实例修饰符，须包 Group——
+                //  Group 仅作 ViewBuilder 容器，无 contentShape 整域命中，不属守卫禁①形态。）
+                Group {
+                    if searchMode && !keyword.isEmpty {
+                        searchResultsContent
+                    } else {
+                        // v1.4.3 · 需求 2：搜索历史仅聚焦搜索框时显示——此前常驻显示，
+                        // 失焦或提交搜索（searchMode）即隐藏；未聚焦的默认浏览态不再出现。
+                        if searchFocused {
+                            historySection
+                        }
+                        libraryContent
                     }
-                    libraryContent
                 }
                 .simultaneousGesture(TapGesture().onEnded {
                     if searchFocused {
