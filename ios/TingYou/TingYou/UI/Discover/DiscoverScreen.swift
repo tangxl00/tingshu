@@ -117,15 +117,19 @@ struct DiscoverScreen: View {
                 // 手势，两个 List 本体不挂手势（scrollDismissesKeyboard 保留）；
                 // ④ view-based NavigationLink 保留。simultaneous 与行导航并行
                 // 识别、互不抢占，覆盖 List 内外全部空白。
-                if searchMode && !keyword.isEmpty {
-                    searchResultsContent
-                } else {
-                    // build 41：keyword 为空 && 非搜索结果态 → 显示搜索历史
-                    //（输入中 / 提交搜索即隐藏，语义保留）。
-                    if keyword.isEmpty {
-                        historySection
+                //（组长修：if/else 表达式不能直接链实例修饰符，须包 Group——
+                //  Group 仅作 ViewBuilder 容器，不属守卫禁止形态。）
+                Group {
+                    if searchMode && !keyword.isEmpty {
+                        searchResultsContent
+                    } else {
+                        // build 41：keyword 为空 && 非搜索结果态 → 显示搜索历史
+                        //（输入中 / 提交搜索即隐藏，语义保留）。
+                        if keyword.isEmpty {
+                            historySection
+                        }
+                        libraryContent
                     }
-                    libraryContent
                 }
                 .simultaneousGesture(TapGesture().onEnded {
                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
