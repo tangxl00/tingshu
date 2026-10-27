@@ -219,10 +219,35 @@ final class YtysxsAdapter: Sendable {
 
     // ---- HTTP 基础层（带 cookie 注入；验证通过后 24h 内自动放行） ----
 
+    /// build 41 · 反馈 ②（悦听验证过了但搜索仍被拦）：
+    /// 此前仅手动拼 `Cookie: be_captcha_token=<token>` 单值头——URLSession 规则是
+    /// 「请求已带 Cookie 头时不再自动附加共享 cookie storage 的 cookie」，验证
+    /// WebView 建立的会话 cookie（PHPSESSID 等，已 sync 进
+    /// HTTPCookieStorage.shared）全部不随请求发出，站点只收到 token 没收到会话
+    /// → 判定未通过。改为双源合并：取 URL 域内共享 storage 全部 cookie，与
+    /// Keychain token 合并去重（storage 已含 be_captcha_token 时不重复注入，
+    /// Keychain 兜底保留），生成单一 Cookie 头。
+    /// 同时显式带 User-Agent = APIClient.browserUA——与验证 WebView 的
+    /// customUserAgent 完全一致（WebView 侧已同步固定为该常量），避免站点把
+    /// 放行绑定 UA 指纹（验证会话与后续请求同指纹）。
     private func fetchHtml(_ url: String) async throws -> String {
-        var headers: [String: String] = [:]
-        if let cookie = cookieStore?.cookieHeaderValue() {
-            headers["Cookie"] = cookie
+        var headers: [String: String] = [
+            "User-Agent": APIClient.browserUA,
+        ]
+        if let urlObj = URL(string: url) {
+            let storageCookies = HTTPCookieStorage.shared.cookies(for: urlObj) ?? []
+            var parts = storageCookies.map { "\($0.name)=\($0.value)" }
+            // Keychain 兜底双源：storage 无 be_captcha_token（早期会话 / 部分同步失败）时补上
+            if let kv = cookieStore?.cookieHeaderValue(),
+               !storageCookies.contains(where: { $0.name == "be_captcha_token" }) {
+                parts.append(kv)
+            }
+            if !parts.isEmpty {
+                headers["Cookie"] = parts.joined(separator: "; ")
+            }
+        } else if let kv = cookieStore?.cookieHeaderValue() {
+            // URL 不可解析的兜底分支（理论不可达，保留旧行为）
+            headers["Cookie"] = kv
         }
         return try await apiClient.fetchHTML(url, headers: headers)
     }

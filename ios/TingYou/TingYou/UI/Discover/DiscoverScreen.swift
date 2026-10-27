@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 发现页（build 22 · 对齐安卓 v1.3.3；v1.4.1 音源整合改造）：
 /// 浏览区支持音源选择（听友FM 主源 + B站 + 59听书网，后两者受「我的→音源管理」开关控制），
@@ -27,11 +28,18 @@ struct DiscoverScreen: View {
     @State private var verifyHint = false
     /// build 21 · 反馈 7：发现页搜索框同步写入搜索历史
     private let historyStore = SearchHistoryStore()
+    /// v1.4.3 · 需求 2：搜索历史展示（build 41 · 反馈 ① 收焦方式重构）：
+    /// 此前由 FocusState 驱动——但 FocusState 状态翻转收焦会触发全 body 重渲染，
+    /// 键盘弹起时点书行，「移除条件视图 + List 布局同帧扰动」会丢弃进行中的
+    /// NavigationLink 行激活（四轮手势挂点修复无效的真根因，搜索页用 UIKit
+    /// resignFirstResponder 零重渲染所以从未出问题）。build 41 删除 FocusState，
+    /// 显隐改为 keyword 驱动：keyword 为空且非搜索结果态显示历史，输入中或
+    /// 提交搜索（searchResultsContent 占位）即隐藏。
     /// build 27：发现页搜索历史展示（页内变更即时刷新；形态参考 SearchScreen.historySection）
     @State private var history: [String] = []
-    /// v1.4.3 · 需求 2：搜索历史仅聚焦时出现——未聚焦（默认浏览态）不显示，
-    /// 聚焦/开始输入时显示，失焦或提交搜索（searchMode）后隐藏；输入联想逻辑不动。
-    @FocusState private var searchFocused: Bool
+    /// build 41 · 反馈 ①：删除 FocusState——收焦统一走 UIKit resignFirstResponder
+    ///（零重渲染，不打断进行中的 NavigationLink 行激活）。历史区块显隐改由
+    /// keyword 驱动（见 history 声明处注释）。
     /// v1.4.1：浏览区当前音源（听友FM / B站 / 59听书网），默认主源
     @State private var browseSource = SourceRegistry.TINGYOU
 
@@ -74,7 +82,6 @@ struct DiscoverScreen: View {
                         .foregroundStyle(.secondary)
                     TextField("搜索书名 / 作者 / 主播", text: $keyword)
                         .submitLabel(.search)
-                        .focused($searchFocused)
                         .onSubmit {
                             performSearch(initial: true)
                         }
@@ -97,28 +104,30 @@ struct DiscoverScreen: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
 
-                // build 40：内容区整体挂 simultaneousGesture——补回 build 39 丢掉的
-                // List 外空白区（分类面板、间距）收焦：simultaneous 对内部 Button/
-                // DisclosureGroup/Menu/行导航无抢占（并行识别），可以安全覆盖整区；
-                // 与两个 List 本体的 simultaneousGesture 叠加，各自触发均幂等收焦。
-                // （build 40 修：if/else 表达式不能直接链实例修饰符，须包 Group——
-                //  Group 仅作 ViewBuilder 容器，无 contentShape 整域命中，不属守卫禁①形态。）
-                Group {
-                    if searchMode && !keyword.isEmpty {
-                        searchResultsContent
-                    } else {
-                        // v1.4.3 · 需求 2：搜索历史仅聚焦搜索框时显示——此前常驻显示，
-                        // 失焦或提交搜索（searchMode）即隐藏；未聚焦的默认浏览态不再出现。
-                        if searchFocused {
-                            historySection
-                        }
-                        libraryContent
+                // build 41 · 反馈 ①（点书无反应 · 第 5 轮系统性根因修复）：
+                // 四轮「手势挂哪」修复无效的真变量是收焦实现方式——此前 FocusState
+                // 状态翻转收焦触发全 body 重渲染，键盘弹起时点书行，「移除历史条件
+                // 视图 + List 布局同帧扰动」丢弃进行中的 NavigationLink 行激活
+                //（用户看到「键盘收起但不导航」正是重渲染发生的证据）。搜索页用
+                // UIKit resignFirstResponder（零重渲染）所以从未出问题。
+                // 本轮：① 收焦统一 resignFirstResponder（与搜索页对齐）；② 删除
+                // FocusState，历史区块改 keyword 驱动；③ 只保留本处一处容器级
+                // 手势，两个 List 本体不挂手势（scrollDismissesKeyboard 保留）；
+                // ④ view-based NavigationLink 保留。simultaneous 与行导航并行
+                // 识别、互不抢占，覆盖 List 内外全部空白。
+                if searchMode && !keyword.isEmpty {
+                    searchResultsContent
+                } else {
+                    // build 41：keyword 为空 && 非搜索结果态 → 显示搜索历史
+                    //（输入中 / 提交搜索即隐藏，语义保留）。
+                    if keyword.isEmpty {
+                        historySection
                     }
+                    libraryContent
                 }
                 .simultaneousGesture(TapGesture().onEnded {
-                    if searchFocused {
-                        searchFocused = false
-                    }
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                                    to: nil, from: nil, for: nil)
                 })
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
@@ -268,16 +277,8 @@ struct DiscoverScreen: View {
             }
             .listStyle(.plain)
             .scrollDismissesKeyboard(.immediately)
-            // build 40：List 级 tap 收焦改 simultaneousGesture——build 39 真机证伪
-            // 了「List 本体挂 onTapGesture 不吞行点击」：挂 List 的 tap 手势会抢占
-            // 行内 NavigationLink 激活（点书=键盘收起+无导航，正是用户反馈现象）。
-            // simultaneous 语义 = 手势与行激活并行识别、互不抢占：键盘弹起时点书，
-            // 收焦与导航同时发生。
-            .simultaneousGesture(TapGesture().onEnded {
-                if searchFocused {
-                    searchFocused = false
-                }
-            })
+            // build 41：List 本体不挂手势——收焦统一由内容区外层容器级
+            // simultaneousGesture 处理（resignFirstResponder 零重渲染）。
         }
     }
 
@@ -376,13 +377,8 @@ struct DiscoverScreen: View {
                 }
                 .listStyle(.plain)
                 .scrollDismissesKeyboard(.immediately)
-                // build 40：List 级 tap 收焦改 simultaneousGesture（同
-                // searchResultsContent：不抢占行内 NavigationLink，收焦与导航并行）。
-                .simultaneousGesture(TapGesture().onEnded {
-                    if searchFocused {
-                        searchFocused = false
-                    }
-                })
+                // build 41：List 本体不挂手势——收焦统一由内容区外层容器级
+                // simultaneousGesture 处理（同 searchResultsContent）。
             }
         }
         .task {

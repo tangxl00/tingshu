@@ -69,21 +69,31 @@ final class Build32RegressionTests: XCTestCase {
         XCTAssertTrue(badServer.contains("响应异常"))
     }
 
-    // MARK: - 需求 2 · 搜索历史聚焦态（源码结构断言：仅聚焦时挂载 historySection）
+    // MARK: - 需求 2 · 搜索历史显隐（build 41 · 收焦方式重构后：keyword 驱动）
 
-    func testDiscoverHistoryMountsOnlyWhenFocused() throws {
+    /// v1.4.3 · 需求 2 原形态：@FocusState 驱动「仅聚焦时挂载 historySection」。
+    /// build 41 · 反馈 ①：@FocusState 状态翻转收焦触发全 body 重渲染，键盘弹起时
+    /// 点书行的 NavigationLink 激活被同帧布局扰动丢弃（点书无反应的第 5 轮根因），
+    /// 已删除 @FocusState、收焦改 UIKit resignFirstResponder（零重渲染）。
+    /// 历史显隐语义演进为 keyword 驱动：keyword 为空且非搜索结果态 → 挂载
+    /// historySection；输入中或提交搜索（searchResultsContent 占位）即隐藏
+    ///（「提交搜索即隐藏」的语义保留）。
+    func testDiscoverHistoryVisibilityKeywordDriven() throws {
         let source = try loadSource("DiscoverScreen")
-        // 需求 2：@FocusState 接线存在
-        XCTAssertTrue(source.contains("@FocusState private var searchFocused: Bool"),
-                      "搜索框须有聚焦态标记")
-        XCTAssertTrue(source.contains(".focused($searchFocused)"),
-                      "TextField 须绑定聚焦态")
-        // historySection 的挂载被 searchFocused 条件包住（不再常驻）
-        XCTAssertTrue(source.contains("if searchFocused {"),
-                      "historySection 应仅在聚焦分支内挂载")
+        // build 41：收焦方式重构——@FocusState 须已删除（重渲染根因）
+        XCTAssertFalse(source.contains("@FocusState"),
+                       "发现页不得再使用 @FocusState（build 41 根因：状态翻转收焦触发全 body 重渲染，丢弃行导航激活）")
+        XCTAssertFalse(source.contains(".focused($searchFocused)"),
+                       "TextField 不得再绑定聚焦态标记")
+        // 收焦走 UIKit resignFirstResponder（与搜索页对齐、零重渲染）
+        XCTAssertTrue(source.contains("resignFirstResponder"),
+                      "收焦须使用 resignFirstResponder")
+        // historySection 的挂载由 keyword 条件包住（keyword 为空 && 非搜索结果态）
+        XCTAssertTrue(source.contains("if keyword.isEmpty {"),
+                      "historySection 应由 keyword.isEmpty 条件挂载")
         // 无条件的常驻挂载形态应已消失（旧形态为「historySection\n                    libraryContent」紧邻）
         XCTAssertFalse(source.contains("                    historySection\n                    libraryContent"),
-                       "historySection 不应再无条件常驻挂载")
+                       "historySection 不应无条件常驻挂载")
     }
 
     // MARK: - 需求 1 · 书架导入入口删除（源码结构断言）

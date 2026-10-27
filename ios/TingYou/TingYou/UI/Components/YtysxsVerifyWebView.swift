@@ -35,16 +35,16 @@ struct YtysxsVerifyWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
-        // build 27（空白页候选修复）：悦听站点对 WebView 默认 UA 的响应差异——
-        // 显式带上 Safari/WebKit 标识（保持 iOS 真实形态，不伪装桌面 UA）。
-        // build 37 · 反馈 5：原硬编码 "TingYou/1.3.3" 版本陈旧且覆写偏旧，易被站点
-        // UA 风控误判——改为读取当前 CFBundleShortVersionString 动态拼接。
-        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.4"
-        config.applicationNameForUserAgent = "TingYou/\(appVersion) Safari/605.1.15"
+        // build 41 · 反馈 ②（UA 指纹对齐）：验证会话与后续 URLSession 请求必须同 UA——
+        // 此前 WebView 用 applicationNameForUserAgent 追加（完整 UA 运行时随系统版本
+        // 变化），适配器请求走 APIClient.browserUA，两端不一致，站点若把放行绑定 UA
+        // 指纹则验证形同虚设。改为 webView 创建后 customUserAgent 固定为同一常量
+        //（完整覆盖、两端完全相同）。build 37 的动态版本拼接（TingYou/<version>）退役。
         // build 38 · 反馈 2 ①：防御性非零初始帧——SwiftUI 布局接管前 provisional
         // navigation 已可开始；autoresizingMask 保证布局生效后贴合容器。
         let initialFrame = UIScreen.main.bounds
         let webView = WKWebView(frame: initialFrame, configuration: config)
+        webView.customUserAgent = APIClient.browserUA
         webView.navigationDelegate = context.coordinator
         webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         // build 38 · 反馈 2 ②：进度可见性——estimatedProgress KVO（dismantle 时移除）

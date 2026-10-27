@@ -260,7 +260,9 @@ final class SourceManageModel {
 
     private static func elapsedMs(_ d: Duration) -> Int {
         let comps = d.components
-        return Int(comps.seconds) * 1000 + Int(comps.attoseconds / 1_000_000_000_000)
+        // build 41 · P2：分母 10^12（attosecond→微秒）误标毫秒，延迟显示放大 1000 倍
+        //（截图 375,625ms 实为 375.625ms）——修正为 10^15（attosecond→毫秒）。
+        return Int(comps.seconds) * 1000 + Int(comps.attoseconds / 1_000_000_000_000_000)
     }
 
     private var enabledMap: [String: Bool] = [:]

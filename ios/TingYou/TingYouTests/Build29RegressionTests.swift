@@ -125,21 +125,24 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "40",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 40（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "41",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 41（升版本时同步改此断言）")
     }
 
-    /// build 39-40 · 回归守卫：键盘收焦方案形态约束（防 build 37 / build 39 两次
-    /// 真机回归复发）。
-    /// build 37 形态（禁止①）：容器级「contentShape(Rectangle()) + 父级 onTapGesture」
-    /// 整体包裹内容区——父手势抢占行点击 + contentShape 整域命中引入几何漂移
-    ///（用户验收 build 38 反馈：点书无反应 + 布局穿透 tab bar）。
-    /// build 39 形态（禁止②）：List 本体直接挂 onTapGesture——挂 List 的 tap 手势
-    /// 抢占行内 NavigationLink 激活（用户复测反馈：点书=键盘收起+无导航）。
-    /// 合法形态（要求③）：simultaneousGesture(TapGesture()…)——与行导航并行识别；
-    /// DiscoverScreen 需 ≥3 处（两个 List 本体 + 内容区外层空白覆盖），
-    /// SearchScreen 需 ≥1 处（List 本体）。
-    /// 判定：各文件按 whitespace 归一化后逐项断言。
+    /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40
+    /// 三轮真机回归复发）。
+    /// build 37 形态（禁①）：容器级「contentShape(Rectangle()) + 父级 onTapGesture」
+    /// 整体包裹——父手势抢占行点击 + contentShape 整域命中引入几何漂移。
+    /// build 39 形态（禁②）：List 本体直接挂 onTapGesture——tap 抢占行内
+    /// NavigationLink 激活（点书=键盘收起+无导航）。
+    /// build 41 形态约束（发现页专用，针对第 5 轮系统性根因「@FocusState 状态翻转
+    /// 收焦触发全 body 重渲染、丢弃进行中的行激活」）：
+    /// 禁④ 发现页使用 @FocusState；要求⑤ 收焦必须是 UIKit resignFirstResponder
+    ///（零重渲染）；要求⑥ 发现页 List 本体不挂任何手势（收焦只挂外层一处
+    /// 容器级 simultaneousGesture，精确 1 处）；scrollDismissesKeyboard ≥2 保留。
+    /// SearchScreen 无 @FocusState、收焦本就是 resignFirstResponder，保持
+    /// b40 形态约束（禁①② + simultaneousGesture ≥1）。
+    /// 判定：各文件剔除整行注释后按 whitespace 归一化，逐项断言。
     func testKeyboardDismissGestureFormGuards() {
         // #filePath = …/TingYouTests/Build29RegressionTests.swift，
         // 上溯两级：TingYouTests → TingYou（工程目录，与 testMarketingVersionIs144 同款定位）
@@ -166,6 +169,7 @@ final class Build29RegressionTests: XCTestCase {
             let normalized = codeOnly
                 .components(separatedBy: .whitespacesAndNewlines)
                 .joined()
+            let isDiscover = rel.hasSuffix("DiscoverScreen.swift")
             // 禁①容器级包裹（build 37 形态）
             XCTAssertFalse(
                 normalized.contains(".contentShape(Rectangle()).onTapGesture"),
@@ -174,17 +178,35 @@ final class Build29RegressionTests: XCTestCase {
             XCTAssertFalse(
                 normalized.contains(".scrollDismissesKeyboard(.immediately).onTapGesture"),
                 "\(rel)：禁止 List 本体直接挂 onTapGesture（build 39 真机回归：tap 抢占行内 NavigationLink，点书=收焦+无导航）；收焦必须用 simultaneousGesture")
-            // 要求③ simultaneousGesture 形态（带 '.' 前缀锚定，注释文字不计数）
-            let required = rel.hasSuffix("DiscoverScreen.swift") ? 3 : 1
-            let actual = normalized.components(separatedBy: ".simultaneousGesture(").count - 1
-            XCTAssertGreaterThanOrEqual(
-                actual, required,
-                "\(rel)：.simultaneousGesture( 不得少于 \(required) 处（Discover = 两个 List 本体 + 内容区外层；Search = List 本体）")
-            // 两个 List 的滚动收起保留（DiscoverScreen 口径）
-            if rel.hasSuffix("DiscoverScreen.swift") {
+            if isDiscover {
+                // 禁④ build 41：@FocusState 状态翻转收焦触发全 body 重渲染，
+                // 键盘弹起时点书行的导航激活被同帧布局扰动丢弃（第 5 轮根因）。
+                XCTAssertFalse(
+                    normalized.contains("@FocusState"),
+                    "发现页禁止使用 @FocusState 收焦（build 41 根因：状态翻转触发全 body 重渲染，丢弃进行中的 NavigationLink 行激活）；收焦必须走 UIKit resignFirstResponder")
+                // 要求⑤ resignFirstResponder 收焦形态（与搜索页对齐、零重渲染）
+                XCTAssertTrue(
+                    normalized.contains("resignFirstResponder"),
+                    "发现页收焦必须使用 resignFirstResponder（零重渲染，不打断行导航激活）")
+                // 禁⑥ List 本体挂手势（含 simultaneousGesture——build 40 形态，
+                // 虽然 simultaneous 不抢行点击，但统一收敛到外层一处更可控）
+                XCTAssertFalse(
+                    normalized.contains(".scrollDismissesKeyboard(.immediately).simultaneousGesture("),
+                    "发现页 List 本体禁止挂任何手势（build 41 形态：收焦只挂内容区外层一处容器级 simultaneousGesture）")
+                // 要求⑥ 外层容器级手势恰 1 处
+                XCTAssertEqual(
+                    normalized.components(separatedBy: ".simultaneousGesture(").count - 1, 1,
+                    "发现页收焦手势必须恰为外层容器级 1 处 simultaneousGesture（多处分挂是 build 40 形态，已收敛）")
+                // 两个 List 的滚动收起保留
                 let scrollCount = normalized.components(separatedBy: ".scrollDismissesKeyboard").count - 1
                 XCTAssertGreaterThanOrEqual(scrollCount, 2,
                     "发现页两个 List 的滚动收起（scrollDismissesKeyboard）不得少于 2 处")
+            } else {
+                // SearchScreen：保持 b40 形态（resign + List simultaneousGesture，真机无投诉）
+                let actual = normalized.components(separatedBy: ".simultaneousGesture(").count - 1
+                XCTAssertGreaterThanOrEqual(
+                    actual, 1,
+                    "\(rel)：.simultaneousGesture( 不得少于 1 处（List 本体收焦）")
             }
         }
     }
