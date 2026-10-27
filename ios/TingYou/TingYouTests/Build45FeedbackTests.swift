@@ -72,6 +72,11 @@ final class Build45FeedbackTests: XCTestCase {
         let ps = Self.loadSource("TingYou/UI/Player/PlayerScreen.swift")
         XCTAssertTrue(ps.contains("加载中…"), "PlayerScreen 必须显示加载中间态")
         XCTAssertTrue(ps.contains(#""暂停""#), "播放/暂停按钮必须有「暂停」accessibilityLabel（XCUITest 锚）")
+        // CI 第二轮（反馈 2）：mini 播放栏同口径锚——点集后 App 停在
+        // 详情页 + MiniPlayerBar，判据只锚全屏按钮看不见 mini 播放态。
+        let mini = Self.loadSource("TingYou/UI/Components/MiniPlayerBar.swift")
+        XCTAssertTrue(mini.contains("mini_play_pause"), "mini 播放/暂停按钮必须有 identifier（XCUITest 锚）")
+        XCTAssertTrue(mini.contains(#""暂停""#), "mini 播放/暂停按钮必须有「暂停」accessibilityLabel")
     }
 
     // MARK: - 反馈 2 · 历史搜索词条横排

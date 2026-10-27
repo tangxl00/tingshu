@@ -72,6 +72,9 @@ struct AlbumScreen: View {
                         }
                         .foregroundStyle(isPlayingChapter(ch) ? Color.accentColor : .primary)
                         .id(ch.id)
+                        // build 45.2：章节行稳定锚（用例 H 点第一集；B站分P标题是
+                        // UP 自定义名，BEGINSWITH 'P1' 匹配不可靠——CI 第二轮实证）
+                        .accessibilityIdentifier("album_chapter_row_\(ch.index)")
                     }
                 }
             }

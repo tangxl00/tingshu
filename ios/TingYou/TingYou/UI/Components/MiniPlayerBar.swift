@@ -56,6 +56,13 @@ struct MiniPlayerBar: View {
                             .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
+                    // build 45.2 · CI 第二轮（反馈 2 修复）：mini 播放/暂停按钮
+                    // 补无障碍锚（与 PlayerScreen 同口径）——此前纯 SF Symbol
+                    // 无文本，XCUITest「暂停」判据看不见 mini 栏的播放态
+                    //（用例 H 的判据锚错面：点集后 App 停在详情页 + MiniPlayerBar）。
+                    // 顺带是 VoiceOver 正确行为。
+                    .accessibilityLabel((pm?.isPlaying ?? false) ? "暂停" : "播放")
+                    .accessibilityIdentifier("mini_play_pause")
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
