@@ -113,7 +113,7 @@ enum YtysxsCookieSync {
     /// 把悦听域 cookie 写入 URLSession 侧存储（默认 HTTPCookieStorage.shared，
     /// 后续 APIClient 的 URLSession 请求自动携带）
     @discardableResult
-    static func sync(_ cookies: [HTTPCookie], into storage: HTTPCookieStorage) -> Int {
+    static func sync(_ cookies: [HTTPCookie], into storage: HTTPCookieStorage = .shared) -> Int {
         var synced = 0
         for cookie in ytysxsCookies(from: cookies) {
             storage.setCookie(cookie)
