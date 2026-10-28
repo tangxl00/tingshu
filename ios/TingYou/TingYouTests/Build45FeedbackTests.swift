@@ -71,6 +71,39 @@ final class Build45FeedbackTests: XCTestCase {
         XCTAssertTrue(pm.contains("直链域名"), "resolve 成功必须记「resolve · 直链域名」入诊断")
         XCTAssertTrue(pm.contains("HTTP \\(http.statusCode) \\(http.mimeType"),
                       "didReceive response 必须记「play · HTTP 状态 类型」入诊断")
+        // build 47 · 反馈 1a：偏移对齐防御层——Range 重注入之外的第二层保险
+        //（两层任一生效即可播）。即使 Range 头在重定向后丢失（CDN 回 200
+        // 全量），respond 前按 dataRequest 期望偏移丢弃错位前缀。
+        XCTAssertTrue(pm.contains("taskOffsets"), "必须有流内「下一字节」偏移记账（对齐依据）")
+        XCTAssertTrue(pm.contains("static func contentRangeStart"), "必须有 Content-Range 起始偏移解析（206 的实际起点）")
+        XCTAssertTrue(pm.contains("advanceStreamOffset"), "每块数据处理后必须推进流内偏移")
+        XCTAssertTrue(pm.contains("noteAlignmentSkip"), "丢弃错位数据时必须记「偏移对齐」诊断（取证用）")
+        XCTAssertTrue(pm.contains("偏移对齐"), "对齐诊断文案必须在（失败时随 [诊断] 透出）")
+        XCTAssertTrue(pm.contains("dr.requestedOffset"),
+                      "对齐必须以 dataRequest.requestedOffset 为期望偏移")
+        // build 47 · 反馈 1d：codec 过滤——EC-3（Dolby）轨 AVFoundation 不认
+        //（b46 交付的观察项转正式修复）。
+        let bili = Self.loadSource("TingYou/Services/BiliAdapter.swift")
+        XCTAssertTrue(bili.contains("hasPlayableCodec"), "extractPlayableUrl 必须过 codec 过滤")
+        XCTAssertTrue(bili.contains(#"ec-3"#), "必须按 codecs 排除 EC-3（Dolby）轨")
+        // build 47 补丁 · 真机 octet-stream 修复（组长派单，真机 206 证据）：
+        // B站镜像节点对 DASH 音轨回 application/octet-stream，AVPlayer 的
+        // contentInformationRequest 按不支持格式拒收 → -12847。改写逻辑本体
+        // 在 BiliContentTypeRewriteTests 真实逻辑单测；此处守卫 delegate 接线。
+        XCTAssertTrue(pm.contains("static func rewrittenBiliContentType"),
+                      "必须有 Content-Type 改写纯函数（供单测直接校验）")
+        XCTAssertTrue(pm.contains("PlaybackManager.rewrittenBiliContentType("),
+                      "didReceive response 必须接线改写（octet-stream → mp4）")
+        XCTAssertTrue(pm.contains("Content-Type 改写: \\(original) → \\(effective)"),
+                      "改写前后类型必须都进 [诊断]（截图可见「octet-stream → audio/mp4 已改写」）")
+        XCTAssertTrue(pm.contains("if let mime = effectiveMime {"),
+                      "contentInformationRequest 必须用改写后的类型（不得再喂 http.mimeType 原值）")
+        XCTAssertTrue(pm.contains("static func sniffedBiliMp4Mime"),
+                      "必须有 ftyp 嗅探兜底纯函数（无路径线索的 octet-stream 流）")
+        XCTAssertTrue(pm.contains("Self.sniffedBiliMp4Mime(data: data, streamOffset: streamOffset(for: dataTask))"),
+                      "didReceive data 必须在偏移推进前按流内位置嗅探")
+        XCTAssertTrue(pm.contains("taskSniffPending.remove(task.taskIdentifier)"),
+                      "finish 必须清理嗅探挂起记账（防串任务）")
     }
 
     /// 播放失败文案结构：人话 + [诊断] 分层原文（resolve · / play · / player ·），
@@ -95,6 +128,12 @@ final class Build45FeedbackTests: XCTestCase {
         let mini = Self.loadSource("TingYou/UI/Components/MiniPlayerBar.swift")
         XCTAssertTrue(mini.contains("mini_play_pause"), "mini 播放/暂停按钮必须有 identifier（XCUITest 锚）")
         XCTAssertTrue(mini.contains(#""暂停""#), "mini 播放/暂停按钮必须有「暂停」accessibilityLabel")
+        // build 47 · H 用例稳定化：点章节前必须轮询等 album_chapter_row_0 真正
+        // 出现（10s）——此前「查一次 exists 就回退」，四轮 CI 未跑成的共同
+        // 根因是列表未渲染完成时点击落空。
+        let hTest = Self.loadSource("TingYouUITests/BiliPlaybackUITests.swift")
+        XCTAssertTrue(hTest.contains("firstCell.waitForExistence(timeout: 10)"),
+                      "H 用例点章节前必须 10s 轮询等锚出现（不得查一次就回退点空）")
     }
 
     // MARK: - 反馈 2 · 历史搜索词条横排
@@ -109,6 +148,15 @@ final class Build45FeedbackTests: XCTestCase {
                        "竖排根因形态必须消失（b44 回归：宽度塌缩成单字宽逐字换行）")
         XCTAssertTrue(src.contains(".lineLimit(1)"), "历史词条必须 lineLimit(1) 单行截断")
         XCTAssertTrue(src.contains(".fixedSize()"), "chip 整体必须 .fixedSize()（按内容自适应宽度，不塌缩）")
+        // build 47 · 反馈 2（布局返修·用户可感知标准）：「发现」大标题改内联
+        // 小标题——搜索框上移约一个标题行高度（~52pt）；历史区高度随内容
+        // 自适应（≤8 条自然高度）——「一眼可见」标准的形态守卫。
+        XCTAssertTrue(src.contains(".navigationBarTitleDisplayMode(.inline)"),
+                      "「发现」大标题必须改内联小标题（大字标题多占 ~52pt 是顶部空白主源）")
+        XCTAssertTrue(src.contains("history.count <= 8"),
+                      "历史区必须按条数分流（≤8 条自然高度，修 ScrollView 贪婪空白）")
+        XCTAssertFalse(src.contains("maxHeight:"),
+                       "maxHeight 贪婪形态不得回归（内容再少也占满上限，撑出空白）")
     }
 
     // MARK: - 反馈 3 · 悦听全链摘除

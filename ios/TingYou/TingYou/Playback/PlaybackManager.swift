@@ -42,6 +42,17 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
     private var loadingRequests: [Int: AVAssetResourceLoadingRequest] = [:]
     /// build 46：taskIdentifier → 原始 Range 头（重定向重建用，见 attach 注释）
     private var taskRanges: [Int: String] = [:]
+    /// build 47 · 防御层：taskIdentifier → 流内「下一字节」偏移——didReceive
+    /// response 时按 Content-Range / 200 初始化（实际服务起始），每块数据
+    /// 处理后推进。respond 前据此对齐 dataRequest 期望偏移（丢错位前缀）。
+    private var taskOffsets: [Int: Int64] = [:]
+    /// build 47 · 防御层：已记过「偏移对齐」诊断的任务（每任务只记一次，
+    /// 防止多块数据刷屏）。
+    private var taskSkipLogged: Set<Int> = []
+    /// build 47 · Content-Type 嗅探兜底：响应期未改写成功（B站域
+    /// octet-stream 但 URL 路径无扩展名线索）的任务，等首个覆盖流内
+    /// 偏移 4..<8 的数据块按 ftyp 盒嗅探（didReceive data）。
+    private var taskSniffPending: Set<Int> = []
     private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
     /// 已完成但 awaitCompletion 尚未挂起的任务（先完成后等待的边界序）
     private var finishedEarly: Set<Int> = []
@@ -94,6 +105,68 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         return taskRanges[task.taskIdentifier]
     }
 
+    // MARK: build 47 · 偏移对齐防御层（与 b46 Range 重注入互为双保险）
+
+    /// 解析 Content-Range「bytes start-end/total」的 start（200 全量响应
+    /// 无此头，由调用方按 0 处理）。兼容「bytes=」等写法容错。
+    static func contentRangeStart(_ header: String) -> Int64? {
+        let parts = header.split(whereSeparator: { $0 == " " || $0 == "=" })
+        guard parts.count >= 2 else { return nil }
+        let bounds = parts[1].split(separator: "-")
+        guard let start = bounds.first.flatMap({ Int64($0) }) else { return nil }
+        return start
+    }
+
+    /// 当前流内「下一字节」偏移（未初始化按 0——200 全量的默认事实起点）。
+    private func streamOffset(for task: URLSessionTask) -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return taskOffsets[task.taskIdentifier] ?? 0
+    }
+
+    /// 记录响应实际起始偏移（didReceive response 调用；206 按 Content-Range，其余按 0）。
+    private func setStreamOffset(_ offset: Int64, for task: URLSessionTask) {
+        lock.lock()
+        taskOffsets[task.taskIdentifier] = offset
+        lock.unlock()
+    }
+
+    /// 数据块处理完成后推进「下一字节」偏移。
+    private func advanceStreamOffset(for task: URLSessionTask, by delta: Int64) {
+        lock.lock()
+        taskOffsets[task.taskIdentifier, default: 0] += delta
+        lock.unlock()
+    }
+
+    /// 「偏移对齐」诊断——每任务记一次（metaRecorder，失败时随诊断透出）。
+    private func noteAlignmentSkip(task: URLSessionTask, skipped: Int, want: Int64, from: Int64) {
+        lock.lock()
+        let first = taskSkipLogged.insert(task.taskIdentifier).inserted
+        lock.unlock()
+        if first {
+            metaRecorder?("play · 偏移对齐: 丢弃请求偏移前 \(skipped) 字节（dataRequest 期望自 \(want) 起，实收自 \(from) 起）——Range 丢失防御层生效")
+        }
+    }
+
+    /// build 47 · 嗅探兜底记账（锁内三件套：标记 / 查询 / 清除）。
+    private func markSniffPending(_ task: URLSessionTask) {
+        lock.lock()
+        defer { lock.unlock() }
+        taskSniffPending.insert(task.taskIdentifier)
+    }
+
+    private func sniffPending(_ task: URLSessionTask) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return taskSniffPending.contains(task.taskIdentifier)
+    }
+
+    private func clearSniffPending(_ task: URLSessionTask) {
+        lock.lock()
+        defer { lock.unlock() }
+        taskSniffPending.remove(task.taskIdentifier)
+    }
+
     /// 挂起外层 Task 直到该 URLSessionTask 完成（didComplete 唤醒）
     func awaitCompletion(of task: URLSessionTask) async {
         await withCheckedContinuation { cont in
@@ -117,6 +190,11 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         lock.lock()
         loadingRequests.removeValue(forKey: task.taskIdentifier)
         taskRanges.removeValue(forKey: task.taskIdentifier)
+        // build 47 · 防御层：偏移与对齐诊断记账同步清理（防串任务）
+        taskOffsets.removeValue(forKey: task.taskIdentifier)
+        taskSkipLogged.remove(task.taskIdentifier)
+        // build 47 · 嗅探兜底：任务结束未嗅探到也不再挂起（防串任务）
+        taskSniffPending.remove(task.taskIdentifier)
         let cont = continuations.removeValue(forKey: task.taskIdentifier)
         if cont == nil { finishedEarly.insert(task.taskIdentifier) }
         lock.unlock()
@@ -151,9 +229,38 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         // build 46 · 反馈 1 增强：元信息回传（成功路径也记）——HTTP 状态 +
         // Content-Type + 实际服务域名进诊断（失败时可见「喂的是什么」）。
         metaRecorder?("play · HTTP \(http.statusCode) \(http.mimeType ?? "?") @ \(http.url?.host ?? "?")")
+        // build 47 · 防御层初始化：记录本响应的实际起始偏移——206 按
+        // Content-Range 的 start（服务端真正开始传的位置），其余（200 全量，
+        // 即 Range 头丢失的形态）按 0。didReceive data 据此对齐。
+        if http.statusCode == 206,
+           let cr = http.value(forHTTPHeaderField: "Content-Range"),
+           let start = Self.contentRangeStart(cr) {
+            setStreamOffset(start, for: dataTask)
+        } else {
+            setStreamOffset(0, for: dataTask)
+        }
+        // build 47 · B站 CDN octet-stream 修复（真机证据：play · HTTP 206
+        // application/octet-stream @ upos-sz-mirrorbd.bilivideo.com）——镜像
+        // 节点把 DASH 音轨标成 octet-stream，AVPlayer 的
+        // contentInformationRequest 拿到后按不支持格式拒收 → -12847。
+        // B站代理域内按路径线索改写（.m4s → audio/mp4），改写前后都进
+        // [诊断]（下次截图直接看到「octet-stream → audio/mp4 已改写」）；
+        // 无路径线索的挂起等首块 ftyp 嗅探（didReceive data）。非 B站域、
+        // 非 octet-stream 一律不改写。
+        let originalMime = http.mimeType
+        let effectiveMime = PlaybackManager.rewrittenBiliContentType(
+            originalMime: originalMime,
+            url: http.url ?? dataTask.originalRequest?.url)
+        if let original = originalMime, let effective = effectiveMime, effective != original {
+            metaRecorder?("play · Content-Type 改写: \(original) → \(effective)（\(http.url?.host ?? "?")）——B站 CDN octet-stream 修复")
+        } else if originalMime?.lowercased() == "application/octet-stream",
+                  let host = (http.url ?? dataTask.originalRequest?.url)?.host,
+                  ProxiedCdnHosts.needsProxy(host) {
+            markSniffPending(dataTask)
+        }
         // 媒体元信息（首个信息请求）：Content-Type→UTI、总长度、可分段标志（口径同 build 32）
         if let info = request.contentInformationRequest {
-            if let mime = http.mimeType {
+            if let mime = effectiveMime {
                 info.contentType = UTType(mimeType: mime)?.identifier ?? UTType.audio.identifier
             }
             if http.statusCode == 206,
@@ -175,7 +282,43 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
             dataTask.cancel() // AVFoundation 已放弃本请求（seek/切章）：止流
             return
         }
-        request.dataRequest?.respond(with: data)
+        guard let dr = request.dataRequest else { return }
+        // build 47 · Content-Type 嗅探兜底：响应期无路径线索的 B站
+        // octet-stream 流，首个覆盖流内偏移 4..<8 的块按 ftyp 盒判 fMP4 →
+        // audio/mp4，改写结果回填 contentInformationRequest（finishLoading 前
+        // 生效）并进 [诊断]。嗅探在偏移对齐/推进之前用原始流位置判定。
+        if sniffPending(dataTask) {
+            if let sniffed = Self.sniffedBiliMp4Mime(data: data, streamOffset: streamOffset(for: dataTask)) {
+                clearSniffPending(dataTask)
+                if let info = request.contentInformationRequest {
+                    info.contentType = UTType(mimeType: sniffed)?.identifier ?? UTType.audio.identifier
+                }
+                metaRecorder?("play · Content-Type 改写: application/octet-stream → \(sniffed)（\(dataTask.currentRequest?.url?.host ?? dataTask.originalRequest?.url?.host ?? "?")，ftyp 嗅探）——B站 CDN octet-stream 修复")
+            }
+        }
+        // build 47 · B站偏移对齐防御层（b46 Range 重注入之外的第二层保险，
+        // 两层任一生效即可播）：respond 前按本任务请求的起始偏移与实际收到
+        // 的字节位置对齐——若 Range 头在重定向后丢失（CDN 回 200 全量），
+        // 数据从 0 开始而 dataRequest 期望 requestedOffset，直接 respond 会
+        // 数据错位 → moov 解析失败 → AVFoundation -12847「media format is
+        // not supported」。此处丢弃请求偏移之前的字节，只把对齐后的数据
+        // respond 给 AVFoundation（200 全量响应也能切对偏移）。
+        var payload = data
+        let streamOffset = self.streamOffset(for: dataTask)
+        let want = dr.requestedOffset
+        if streamOffset < want {
+            let skip = Int(want - streamOffset)
+            if skip >= payload.count {
+                // 整块都在请求偏移之前：全丢，推进偏移等后续块
+                noteAlignmentSkip(task: dataTask, skipped: payload.count, want: want, from: streamOffset)
+                advanceStreamOffset(for: dataTask, by: Int64(payload.count))
+                return
+            }
+            noteAlignmentSkip(task: dataTask, skipped: skip, want: want, from: streamOffset)
+            payload = payload.subdata(in: skip..<payload.count)
+        }
+        advanceStreamOffset(for: dataTask, by: Int64(data.count))
+        dr.respond(with: payload)
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -888,6 +1031,40 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         guard let host = url.host, ProxiedCdnHosts.needsProxy(host) else { return }
         req.setValue(BiliAdapter.REFERER, forHTTPHeaderField: "Referer")
         req.setValue(BiliAdapter.USER_AGENT, forHTTPHeaderField: "User-Agent")
+    }
+
+    /// build 47 · 真机取证闭环（B站 octet-stream 修复）：B站 CDN 镜像节点对
+    /// DASH 音轨回 Content-Type: application/octet-stream（真机 2026-10-28
+    /// 证据：play · HTTP 206 application/octet-stream @ upos-sz-mirrorbd.
+    /// bilivideo.com），AVPlayer 的 contentInformationRequest 拿到 octet-stream
+    /// 按不支持格式拒收 → -12847；沙箱出口拿到的是 video/mp4（云端绿真机红
+    /// 的分水岭，沙箱无法复现该形态）。本函数对代理流的原始 MIME 做 B站
+    /// CDN 域改写：octet-stream 时按 URL 路径线索映射（.m4s/.m4a → audio/mp4，
+    /// .mp4 → video/mp4）；非 B站代理域、非 octet-stream 一律原样返回不越权
+    /// 重写。无路径线索时返回原值，由首块数据 ftyp 嗅探兜底
+    /// （sniffedBiliMp4Mime，ProxyStreamSessionDelegate.didReceive data）。
+    /// 纯静态函数，供单测直接校验改写逻辑（BiliContentTypeRewriteTests）。
+    static func rewrittenBiliContentType(originalMime: String?, url: URL?) -> String? {
+        guard let original = originalMime,
+              original.lowercased() == "application/octet-stream" else { return originalMime }
+        guard let url, let host = url.host, ProxiedCdnHosts.needsProxy(host) else { return originalMime }
+        let path = url.path.lowercased()
+        if path.contains(".m4s") || path.contains(".m4a") { return "audio/mp4" }
+        if path.contains(".mp4") { return "video/mp4" }
+        return originalMime
+    }
+
+    /// build 47 · Content-Type 嗅探兜底：响应期无路径线索的 B站 octet-stream 流，
+    /// 首个覆盖流内偏移 4..<8 的数据块若为「ftyp」盒标签即判 fMP4 → audio/mp4
+    /// （本 App 仅代理 B站 DASH 音轨，音轨分段一律 audio/mp4）。streamOffset
+    /// 为本块首字节的流内偏移（206 按 Content-Range 对齐后），块起点已越过
+    /// ftyp 位置（如 moov 段请求自 36 起）则不再嗅探。纯静态函数，供单测
+    /// 直接构造 Data 校验嗅探逻辑。
+    static func sniffedBiliMp4Mime(data: Data, streamOffset: Int64) -> String? {
+        guard streamOffset >= 0, streamOffset <= 4 else { return nil }
+        let start = Int(4 - streamOffset)
+        guard data.count >= start + 4 else { return nil }
+        return data.subdata(in: start..<(start + 4)) == Data("ftyp".utf8) ? "audio/mp4" : nil
     }
 
     private func proxyMedia(box: LoadingRequestBox, url: URL) async {

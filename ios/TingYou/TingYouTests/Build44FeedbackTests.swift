@@ -108,8 +108,14 @@ final class Build44FeedbackTests: XCTestCase {
             return
         }
         let section = String(src[start.lowerBound..<rest.lowerBound])
-        XCTAssertTrue(section.contains("ScrollView{"), "历史搜索必须可滚动展示全部记录")
-        XCTAssertTrue(section.contains("maxHeight:160"), "滚动区必须有高度上限（build 46 收敛 200→160，防历史过多挤压书库列表）")
+        // build 47 · 布局返修：历史区高度自适应——≤8 条直接渲染（自然高度，
+        // 1 条只占一行高），>8 条包 ScrollView 固定高 160。b44~b46 的
+        // ScrollView + frame(maxHeight:) 形态被证伪：ScrollView 纵向贪婪，
+        // 内容再少也占满 160pt——「最近搜索与书库之间空白过大」的真根因。
+        XCTAssertTrue(section.contains("history.count<=8"), "历史区必须按条数分流：≤8 条自然高度（build 47 空白过大返修核心）")
+        XCTAssertTrue(section.contains("ScrollView{historyList}"), ">8 条必须包 ScrollView 可滚动看全部记录")
+        XCTAssertTrue(section.contains("frame(height:160)"), "滚动分支必须有固定高度上限（防历史过多挤压书库列表）")
+        XCTAssertFalse(section.contains("maxHeight:"), "maxHeight 贪婪形态不得回归（ScrollView 纵向占满上限，少历史时撑空白）")
         // build 45 · CI 第一轮（反馈 2）：删除 b44 的两条对立断言（不得
         // lineLimit(1) / 不得 fixedSize）——b44 换行方案已被竖排回归证伪，
         // b45 回归 lineLimit(1) + 整体 fixedSize 横排形态，权威守卫在

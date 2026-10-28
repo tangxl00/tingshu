@@ -235,6 +235,9 @@ actor BiliAdapter {
 
     /// 从 playurl 响应抽取可播直链：flac / dolby（含 dolby.audio[]）/ dash.audio[]
     /// 合并后按码率降序选最优（abts _hasPlayableUrl 的可播判定口径）。
+    /// build 47：合并后过 codec 过滤——EC-3（Dolby Digital Plus，dolby.audio 轨
+    /// 的编码）AVFoundation 不支持直接解（与真机 -12847「media format is not
+    /// supported」同族），按 codecs 字段排除，绝不能喂给 AVPlayer。
     private func extractPlayableUrl(_ json: [String: Any]) throws -> String {
         guard let data = json["data"] as? [String: Any] else {
             throw URLError(.badServerResponse,
@@ -254,11 +257,24 @@ actor BiliAdapter {
             }
             tracks.append(contentsOf: dash["audio"] as? [[String: Any]] ?? [])
         }
+        // build 47 · codec 过滤：排除 EC-3（Dolby）轨——AVFoundation 不认 ec-3，
+        // 选中即 -12847（b46 交付的观察项转正式修复）。全轨被滤掉时与无音轨
+        // 同口径（paidOrUnavailableMessage），不静默选坏轨。
+        tracks = tracks.filter { Self.hasPlayableCodec($0) }
         guard !tracks.isEmpty else {
             throw URLError(.badServerResponse,
                            userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
         }
         return try selectStreamUrl(tracks)
+    }
+
+    /// build 47：音轨 codec 可播判定——EC-3（Dolby Digital Plus，写法
+    /// "ec-3"/"ec3"）AVFoundation 不支持直接解，排除；无 codecs 字段的轨
+    ///（flac/dolby 顶层对象可能缺）不拦，交由既有选流逻辑处理。
+    private static func hasPlayableCodec(_ track: [String: Any]) -> Bool {
+        guard let codecs = (track["codecs"] as? String)?.lowercased() else { return true }
+        if codecs.contains("ec-3") || codecs.contains("ec3") { return false }
+        return true
     }
 
     /// WBI 签名密钥（nav 接口无需登录态即可取到 wbi_img；TTL 与搜索侧一致）

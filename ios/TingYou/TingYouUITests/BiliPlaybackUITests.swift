@@ -30,16 +30,15 @@ final class BiliPlaybackUITests: XCTestCase {
 
         // 点第一集：B站章节标题来自 pagelist part 字段（UP 自定义名，不一定
         // 以「P1」开头——CI 第二轮 5s 等不到 P1 的根因），直接用首个章节 cell。
+        // build 47 · 稳定化：点空前先轮询等 album_chapter_row_0 真正出现
+        //（10s）——此前「查一次 exists 就回退 anyCell.tap()」，四轮 CI 未跑成
+        // 的共同根因是章节列表未渲染完成时点击落空（点空）。锚稳定后不再需要
+        // anyCell 兜底分支。
         let firstCell = app.descendants(matching: .any)
             .matching(identifier: "album_chapter_row_0").firstMatch
-        if !firstCell.exists {
-            let anyCell = app.cells.firstMatch
-            XCTAssertTrue(anyCell.waitForExistence(timeout: 5),
-                          "用例 H 前置失败：详情页章节列表未出现")
-            anyCell.tap()
-        } else {
-            firstCell.tap()
-        }
+        XCTAssertTrue(firstCell.waitForExistence(timeout: 10),
+                      "用例 H 前置失败：详情页首个章节行 10s 内未出现（album_chapter_row_0）")
+        firstCell.tap()
 
         // 判定窗口 30s，三判据任一（build 45.2 · CI 第二轮修订）：
         // ① 全屏 PlayerScreen「暂停」（identifier player_play_pause）

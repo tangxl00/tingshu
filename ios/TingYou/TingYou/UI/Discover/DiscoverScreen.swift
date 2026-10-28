@@ -128,6 +128,11 @@ struct DiscoverScreen: View {
                 }
             }
             .navigationTitle(searchMode ? "搜索" : "发现")
+            // build 47 · 反馈 2（布局返修·用户可感知标准）：「发现」大标题改
+            // 内联小标题——导航栏从大字标题形态（额外 ~52pt 标题行高）收敛为
+            // 栏内小字标题，搜索框上移约一个标题行的高度（b46 仅压 4~8pt
+            // padding，真机不可感知——本轮按「一眼可见」标准重做）。
+            .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 history = historyStore.all
                 // v1.4.1：音源管理开关可能已变化——当前浏览源被关闭时回落主源
@@ -163,61 +168,79 @@ struct DiscoverScreen: View {
             // .fixedSize()——chip 报告完整固有宽度（长词单行完整显示不截断，
             // b44 反馈 4 的诉求保留），grid 列宽自适应、一行放不下整颗 chip
             // 折到下一行（多行流式排布，b44 反馈 4 的另一半诉求保留）。
-            // 滚动展示保留（ScrollView + maxHeight 200）。
-            ScrollView {
-                // build 46 · 反馈 2（布局）：历史区间距收敛（VStack/Grid spacing
-                // 8 → 6、maxHeight 200 → 160）——真机反馈「最近搜索与筛选栏
-                // /书库列表之间空白过大」。ScrollView 本身高度随内容自适应
-                //（1 条时只占一行高），maxHeight 只防极端多历史挤压书库。
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("最近搜索")
-                            .font(.subheadline.bold())
-                        Spacer()
-                        Button("清空") {
-                            historyStore.clear()
-                            history = []
-                        }
-                        .font(.caption)
-                    }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 6) {
-                        ForEach(history, id: \.self) { kw in
-                            // chip 主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
-                            HStack(spacing: 4) {
-                                Button {
-                                    keyword = kw
-                                    performSearch(initial: true)
-                                } label: {
-                                    Text(kw)
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                }
-                                .buttonStyle(.pressable)
-                                Button {
-                                    historyStore.remove(kw)
-                                    history = historyStore.all
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundStyle(Color(.systemGray3))
-                                        .font(.caption)
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(Color(.systemGray5)))
-                            .fixedSize()
-                        }
-                    }
-                }
-                .padding(.horizontal)
-                // build 46 · 反馈 2（布局）：历史区外层纵向 padding 8 → 4
-                .padding(.vertical, 4)
-                // build 45 · 反馈 4：b44 的历史区背景 onTapGesture 局部收焦挂载
-                // 已删除——全局收键盘走 window 级 recognizer（不吞事件，chips
-                // 与行导航照常激活）。
+            // build 47 · 反馈 2（布局返修·用户可感知标准）：历史区高度随内容
+            // 自适应——b44~b46 用 ScrollView + frame(maxHeight:)，但 ScrollView
+            // 纵向高度贪婪（内容再少也占满 maxHeight 160pt），1 条历史时也
+            // 撑出 ~100pt 空白——这才是「最近搜索与书库列表之间空白过大」的
+            // 真根因（b46 只压 4~8pt 间距，不可感知）。返修：≤8 条直接渲染
+            // 内容（自然高度，1 条只占一行高）；>8 条才包 ScrollView 固定
+            // 高 160（极端多历史不挤压书库，可滚动看全部）。
+            if history.count <= 8 {
+                historyList
+            } else {
+                ScrollView { historyList }
+                    .frame(height: 160)
             }
-            .frame(maxHeight: 160)
         }
+    }
+
+    /// 历史区内容（标题行 + chip 流式网格）——build 47 从 ScrollView 拆出：
+    /// 高度自适应分支（≤8 条）与限高滚动分支（>8 条）共用同一内容。
+    private var historyList: some View {
+        // build 44 · 反馈 4（历史搜索「依旧被截断」）→ build 45 · 反馈 2 返修：
+        // b44 把 chip 文字改成 fixedSize(horizontal: false, vertical: true)
+        //（允许宽度任意压缩）+ 去 lineLimit——LazyVGrid adaptive(minimum: 44)
+        // 顺势把 chip 压到 44pt 单字宽，逐字竖排、模糊不可读（真机 b44 截图，
+        // b44 自引入回归）。
+        // build 45 修复：对齐 SearchScreen.historySection 的既有线上形态
+        //（build 36 以来无截断/无竖排投诉）：Text lineLimit(1) + chip 整体
+        // .fixedSize()——chip 报告完整固有宽度（长词单行完整显示不截断，
+        // b44 反馈 4 的诉求保留），grid 列宽自适应、一行放不下整颗 chip
+        // 折到下一行（多行流式排布，b44 反馈 4 的另一半诉求保留）。
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("最近搜索")
+                    .font(.subheadline.bold())
+                Spacer()
+                Button("清空") {
+                    historyStore.clear()
+                    history = []
+                }
+                .font(.caption)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 6) {
+                ForEach(history, id: \.self) { kw in
+                    // chip 主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
+                    HStack(spacing: 4) {
+                        Button {
+                            keyword = kw
+                            performSearch(initial: true)
+                        } label: {
+                            Text(kw)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                        }
+                        .buttonStyle(.pressable)
+                        Button {
+                            historyStore.remove(kw)
+                            history = historyStore.all
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(Color(.systemGray3))
+                                .font(.caption)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color(.systemGray5)))
+                    .fixedSize()
+                }
+            }
+        }
+        .padding(.horizontal)
+        // build 47：纵向 padding 4——历史区与搜索栏之间、历史区与书库分类栏
+        // 之间各 4pt，合计 8pt ≤16pt（标准列表分区级间距）。
+        .padding(.vertical, 4)
     }
 
     /// v1.4.1：按所选音源加载——听友FM 走 rank 榜单（沿用 DiscoverViewModel.tingyouRank）；
