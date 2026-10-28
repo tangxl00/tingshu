@@ -100,8 +100,8 @@ final class Build45FeedbackTests: XCTestCase {
                       "contentInformationRequest 必须用改写后的类型（不得再喂 http.mimeType 原值）")
         XCTAssertTrue(pm.contains("static func sniffedBiliMp4Mime"),
                       "必须有 ftyp 嗅探兜底纯函数（无路径线索的 octet-stream 流）")
-        XCTAssertTrue(pm.contains("Self.sniffedBiliMp4Mime(data: data, streamOffset: streamOffset(for: dataTask))"),
-                      "didReceive data 必须在偏移推进前按流内位置嗅探")
+        XCTAssertTrue(pm.contains("PlaybackManager.sniffedBiliMp4Mime(data: data, streamOffset: streamOffset(for: dataTask))"),
+                      "didReceive data 必须在偏移推进前按流内位置嗅探（编译修正：函数在 PlaybackManager 上，delegate 内调用需显式类型前缀）")
         XCTAssertTrue(pm.contains("taskSniffPending.remove(task.taskIdentifier)"),
                       "finish 必须清理嗅探挂起记账（防串任务）")
     }
