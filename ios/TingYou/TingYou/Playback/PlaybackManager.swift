@@ -288,7 +288,7 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         // audio/mp4，改写结果回填 contentInformationRequest（finishLoading 前
         // 生效）并进 [诊断]。嗅探在偏移对齐/推进之前用原始流位置判定。
         if sniffPending(dataTask) {
-            if let sniffed = Self.sniffedBiliMp4Mime(data: data, streamOffset: streamOffset(for: dataTask)) {
+            if let sniffed = PlaybackManager.sniffedBiliMp4Mime(data: data, streamOffset: streamOffset(for: dataTask)) {
                 clearSniffPending(dataTask)
                 if let info = request.contentInformationRequest {
                     info.contentType = UTType(mimeType: sniffed)?.identifier ?? UTType.audio.identifier
