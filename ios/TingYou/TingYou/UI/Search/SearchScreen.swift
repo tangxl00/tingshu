@@ -102,13 +102,16 @@ struct SearchScreen: View {
     }
 
     /// build 36 · 反馈 3 返修：搜索历史改为不滚动的自适应换行胶囊 chip 流式
-    /// 排布（LazyVGrid adaptive，一行放不下自动折行；与发现页形态对齐）；
+    /// 排布（一行放不下自动折行；与发现页形态对齐）；
     /// 点 chip 填入并搜索、xmark 单条删除、清空保留。
+    /// build 49 · 问题 2 同修：LazyVGrid adaptive 等宽列与 chip .fixedSize()
+    /// 固有宽度不匹配 → 相邻列 chip 横向叠压（真机取证详见 FlowLayout.swift），
+    /// 与 DiscoverScreen.historyList 一并改为 FlowLayout（同款根因、同款修复）。
     @ViewBuilder
     private var historySection: some View {
         if !history.isEmpty {
             Section {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 8) {
+                FlowLayout(horizontalSpacing: 8, verticalSpacing: 8) {
                     ForEach(history, id: \.self) { kw in
                         HStack(spacing: 4) {
                             Button {

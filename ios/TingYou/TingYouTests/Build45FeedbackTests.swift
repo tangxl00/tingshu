@@ -198,15 +198,15 @@ final class Build45FeedbackTests: XCTestCase {
     }
 
     /// 存量书兼容：悦听来源的书点击播放必须给出人话失效提示（不删用户数据）。
+    /// build 49 同步组长口径（远端 b48 守卫修正）：「悦听（已下线）」标注随
+    /// b48 书架导入列表整体删除而消失——改为断言导入列表声明级类型不存在。
     func testLegacyYtysxsPlaybackErrorMessageGuard() {
         let pm = Self.loadSource("TingYou/Playback/PlaybackManager.swift")
         XCTAssertTrue(pm.contains(#"source == "ytysxs""#), "describePlaybackError 必须识别存量悦听书")
         XCTAssertTrue(pm.contains("悦听有声书源已下线"), "存量悦听书必须给人话失效提示（换源收听）")
-        // build 48 · 需求 3：书架「导入」tab（含 ImportedBookRow / ImportedBookGridItem
-        // 导入书列表）整体删除，「悦听（已下线）」书架标注随列表一并移除——存量悦听书
-        // 改从历史/收藏恢复播放，播放侧人话提示仍闭环（见上断言）。
         let shelf = Self.loadSource("TingYou/UI/Shelf/ShelfScreen.swift")
-        XCTAssertFalse(shelf.contains("struct ImportedBookRow"), "导入书行视图应随导入 tab 一并删除（build 48 需求 3；注释提及不算残留）")
-        XCTAssertFalse(shelf.contains("struct ImportedBookGridItem"), "导入书网格视图应随导入 tab 一并删除（build 48 需求 3；注释提及不算残留）")
+        // 否定断言用 `struct ` 声明级前缀——裸标识符会误中删除说明注释
+        XCTAssertFalse(shelf.contains("struct ImportedBookRow"), "导入行视图声明必须已删除（随导入列表移除）")
+        XCTAssertFalse(shelf.contains("struct ImportedBookGridItem"), "导入网格项声明必须已删除（随导入列表移除）")
     }
 }

@@ -104,8 +104,12 @@ final class Build32RegressionTests: XCTestCase {
         XCTAssertFalse(code.contains("maxHeight:"),
                        "maxHeight 贪婪形态不得回归（少历史时撑出空白）")
         // chip 流式换行布局保留
-        XCTAssertTrue(code.contains("LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 6)"),
-                      "历史词条必须保留 LazyVGrid 自适应换行布局（多行流式排布）")
+        // build 49 · 问题 2：LazyVGrid adaptive 等宽列 + chip .fixedSize() 固有宽度
+        // → 相邻列 chip 横向叠压（真机取证：两词条叠进同一胶囊），改为 FlowLayout。
+        XCTAssertTrue(code.contains("FlowLayout(horizontalSpacing: 8, verticalSpacing: 6)"),
+                      "历史词条必须保留流式换行布局（build 49 起 FlowLayout，多行排布不叠压）")
+        XCTAssertFalse(code.contains("GridItem(.adaptive(minimum: 44)"),
+                       "LazyVGrid adaptive 等宽列形态不得回归（fixedSize chip 溢出叠压根因）")
         // 无条件的常驻挂载形态应已消失（旧形态为「historySection\n                    libraryContent」紧邻）
         XCTAssertFalse(source.contains("                    historySection\n                    libraryContent"),
                        "historySection 不应无条件常驻挂载")

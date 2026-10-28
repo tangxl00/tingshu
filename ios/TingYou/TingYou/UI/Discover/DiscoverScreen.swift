@@ -215,7 +215,16 @@ struct DiscoverScreen: View {
                 }
                 .font(.caption)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 6) {
+            // build 49 · 问题 2（历史搜索词条重叠）：LazyVGrid adaptive 等宽列
+            // → FlowLayout 流式布局。根因：adaptive 列宽按「可用宽 ÷ (44+8)」
+            // 等宽切列（~53pt/列），chip 带 .fixedSize() 报告完整固有宽度
+            //（「凡人修仙传」~130pt），超出列宽即以列锚点溢出渲染——相邻列
+            // chip 横向叠压（真机取证：两颗词条叠进同一胶囊、只露一个删除钮）。
+            // FlowLayout 逐 chip 按固有宽度累进放置，折行由累进坐标唯一决定，
+            // 数学上不可能重叠；水平 8 / 垂直 6 对齐原 LazyVGrid 的列距行距。
+            // chip 自身形态（lineLimit(1) + 整体 .fixedSize() 横排）不变——
+            // b44 竖排回归防线（Build45FeedbackTests 守卫）继续生效。
+            FlowLayout(horizontalSpacing: 8, verticalSpacing: 6) {
                 ForEach(history, id: \.self) { kw in
                     // chip 主体点选 = 填入并直接搜索；尾部 xmark 独立按钮 = 单条删除
                     HStack(spacing: 4) {

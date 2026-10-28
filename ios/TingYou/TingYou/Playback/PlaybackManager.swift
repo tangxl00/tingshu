@@ -906,6 +906,42 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 self?.playbackWatchdog?.cancel()
                 self?.playbackWatchdog = nil
                 self?.isChapterLoading = false
+                // build 49 · 问题 1（TLS/网络错误未走镜像重试）：b48 的镜像
+                // 重试链只在 watchdog「取流停滞」形态触发；TLS 握手失败
+                //（NSURLErrorDomain -1200，真机《超清〈水-浒-传〉全86集》
+                // upos-sz-mirrorcos 取证）等网络层立即失败走本分支直接报了
+                // 终局错——「大部分节点正常、个别节点 TLS 失败即终局」。
+                // 修复：可重试网络错误与 watchdog 停滞共用同一 mirrorCandidates
+                // 链与 mirrorAttempts 计数（总预算 mirrorRetryLimit 次），有候选
+                // 即 storeResolved 重定向 + loadCurrentChapter(keepMirrorChain:)
+                // 重建条目（与 watchdog 切换同机制——同一 loadingRequest 只能
+                // finishLoading 一次，不能在原请求上换 URL）；链耗尽才报错，
+                // 诊断标注「网络错误 → 已换镜像 N 次仍失败」。
+                // 4xx/5xx（服务器拒绝，含 412 风控）不属网络层错误——分类
+                // 函数只认 NSURLErrorDomain 可重试码集，HTTP 状态透传维持
+                // 现行为不盲换。item === player.currentItem：仅当前条目的失败
+                // 才触发重试（切章拆旧条目的迟到 .failed 不重试；-999 取消
+                // 态在分类函数里排除）。
+                var networkMirrorNote: String? = nil
+                if let error = item.error,
+                   Self.isMirrorRetryableNetworkError(error),
+                   item === self?.player.currentItem {
+                    if let next = self?.takeNextMirrorCandidate() {
+                        let ns = error as NSError
+                        let attempts = self?.currentMirrorAttempts() ?? 0
+                        let host = URL(string: next)?.host ?? "?"
+                        self?.recordLoaderMeta("网络错误 \(ns.domain) \(ns.code) → 自动切换镜像第 \(attempts) 次 → \(host)")
+                        self?.storeResolved(key: uri, url: next)
+                        Task { @MainActor [weak self] in
+                            self?.loadCurrentChapter(autoPlay: true, keepMirrorChain: true)
+                        }
+                        return
+                    }
+                    let attempts = self?.currentMirrorAttempts() ?? 0
+                    networkMirrorNote = attempts > 0
+                        ? "网络错误 → 已换镜像 \(attempts) 次仍失败"
+                        : "网络错误 → 无可用 backup 镜像"
+                }
                 let loaderRecord = self?.takeLoaderFailureRecord()
                 // build 45 · 反馈 1a：player 层 NSError 原文（OSStatus domain/code +
                 // userInfo）一并透出——AVFoundation 会把取流错误改写成黑盒
@@ -930,6 +966,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 //「喂给 AVPlayer 的是什么、从哪个域拿的」。
                 if let meta = self?.takeLoaderMetaRecord() {
                     diagnostic.append(meta)
+                }
+                // build 49 · 问题 1：可重试网络错误且镜像链耗尽——诊断标注
+                // 已换镜像次数（TLS/网络错误 → 已换镜像 N 次仍失败）。
+                if let networkMirrorNote {
+                    diagnostic.append(networkMirrorNote)
                 }
                 let fullMessage = message + (diagnostic.isEmpty ? "" : " [诊断] " + diagnostic.joined(separator: " | "))
                 Task { @MainActor [weak self] in
@@ -1262,6 +1303,44 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             return .progressing(deltaBytes: currentBytes - previousBytes)
         }
         return currentBytes <= 0 ? .stalledNoData : .stalledAfterData(forwardedBytes: currentBytes)
+    }
+
+    // MARK: - build 49 · 问题 1：网络层错误的镜像重试判定（纯静态，单测直调）
+
+    /// 网络层「换节点大概率可恢复」错误族——TLS 握手失败 / 证书错误 /
+    /// SecureTransport 遗留 TLS 族 / DNS 解析 / 连接超时 / 连接失败与重置 /
+    /// 资源不可达。真机取证（b49《超清〈水-浒-传〉全86集》）：主选
+    /// upos-sz-mirrorcos 节点 NSURLErrorDomain -1200（A TLS error caused
+    /// the secure connection to fail）秒败，同书其他镜像节点正常——个别
+    /// CDN 节点的 TLS 层故障换镜像即可绕开，b48 只覆盖了 watchdog 停滞
+    /// 形态，这类立即失败直接报了终局错误。
+    ///
+    /// 明确排除（返回 false）：
+    /// - -999 cancelled：切章/停止播放拆旧条目的**正常**取消形态，重试会
+    ///   和正常拆装流程打架；
+    /// - -1009 断网：换镜像无用（所有节点都到不了）；
+    /// - -1000/-1002 URL 畸形：程序错误，换节点不解决；
+    /// - -1011 badServerResponse 与一切 4xx/5xx：服务器拒绝类。代理层对
+    ///   HTTP 状态码是透传记录（412 风控等维持现行为），不以
+    ///   NSURLErrorDomain 形态出现在 item.error——本函数只认
+    ///   NSURLErrorDomain，非该 domain（含 AVFoundation 黑盒错误）一律
+    ///   不重试，即「4xx/5xx 不盲换镜像」的结构性保证。
+    static func isMirrorRetryableNetworkError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        guard ns.domain == NSURLErrorDomain else { return false }
+        switch ns.code {
+        case -1200 ... -1213,   // TLS / 证书族（-1200 secureConnectionFailed 起）
+             -9800 ... -9808,   // SecureTransport 遗留 TLS 族
+             -1001,             // timedOut 连接超时
+             -1003,             // cannotFindHost
+             -1004,             // cannotConnectToHost
+             -1005,             // networkConnectionLost 连接重置
+             -1006,             // dnsLookupFailed
+             -1008:             // resourceUnavailable
+            return true
+        default:
+            return false
+        }
     }
 
     private func proxyMedia(box: LoadingRequestBox, url: URL) async {

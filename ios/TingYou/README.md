@@ -289,3 +289,58 @@ play · HTTP 206 video/mp4 @ upos-sz-estgcos.bilivideo.com
 - **沙箱无 Swift 工具链**：本 build 的编译验证依赖 GitHub Actions CI 的 `xcodebuild`；本地只做了括号配平、断言 needle 回查与逻辑仿真，**未本地跑通编译与 XCTest**。
 - 镜像重试与 watchdog 二分的真机效果需随包在真机回归（重点：《择日飞升》长音频、X 1-5）。
 - `readme` 中的 build 48 章节随源码包附载，便于离线核对改动与证据。
+
+
+
+## 12. build 49 变更说明（v1.4.4 · CFBundleVersion 49）
+
+b48 真机复测反馈两项遗留问题，本 build 修复。
+
+### 12.1 问题 1 · B站部分视频 TLS 错误未走镜像重试
+
+**真机证据**：《超清〈水-浒-传〉全86集 完整版reaction》这类 UP 主合集长视频播放失败，红字：
+`player · NSURLErrorDomain -1200: A TLS error caused the secure connection to fail | play · 网络错误 NSURLErrorDomain -1200 ... (upos-sz-mirrorcos.bilivideo.com) | resolve · 直链域名 upos-sz-mirrorcos.bilivideo.com`。
+
+**根因**：b48 的镜像重试链（`takeNextMirrorCandidate`，`mirrorRetryLimit = 3`）只在 **watchdog 检测到「取流停滞」** 时触发；而 TLS 握手失败（-1200）是 URL session delegate 层的**立即失败**——经 `failureRecorder` 记录 → `request.finishLoading(with: error)` → `AVPlayerItem` 转 `.failed` → `statusObserver` 分支直接拼终局错误，**全程没有进入镜像重试链**。这正是「大部分节点正常、个别镜像节点 TLS 失败就直接报错」的原因。
+
+**修复方案**：
+
+- **网络错误分类纯函数**：新增 `static func isMirrorRetryableNetworkError(_ error: Error) -> Bool`——只认 `NSURLErrorDomain` 的可重试码集：TLS/证书族 `-1200 ... -1213`、SecureTransport 遗留族 `-9800 ... -9808`、连接层 `-1001`（超时）/ `-1003`（cannotFindHost）/ `-1004`（cannotConnectToHost）/ `-1005`（连接重置）/ `-1006`（DNS 解析失败）/ `-1008`（资源不可用）。**结构性排除**：`-999` 取消（切章正常取消不重试）、`-1009` 断网（换镜像无用）、`-1000/-1002` URL 畸形、`-1011` 服务器响应错误（HTTP 层语义），以及一切非 `NSURLErrorDomain`（AVFoundation 黑盒「Cannot Open」、HTTP 状态透传）——**4xx/5xx（含 412 风控）不盲换镜像**由 domain 前置 guard 天然保证。
+- **.failed 分支接入重试**：`statusObserver` `.failed` 分支在报终局错之前先过分类——`item === player.currentItem` 守卫（切章拆旧条目的迟到 `.failed` 不触发）→ `takeNextMirrorCandidate()` 有候选即**复用与 watchdog 完全相同的切换机制**：`recordLoaderMeta("网络错误 … → 自动切换镜像第 N 次 → host")` + `storeResolved(key: uri, url: next)` 重定向缓存 + `loadCurrentChapter(autoPlay: true, keepMirrorChain: true)` 重建条目（同一 `loadingRequest` 只能 `finishLoading` 一次）。**与 watchdog 共用同一 `mirrorAttempts` 计数，总预算仍是 `mirrorRetryLimit = 3`**。
+- **链耗尽诊断**：镜像链耗尽才向用户报错，`[诊断]` 段追加「网络错误 → 已换镜像 N 次仍失败」；从未换过（无 backup 镜像）则如实标注「网络错误 → 无可用 backup 镜像」。
+
+### 12.2 问题 2 · 历史搜索词条仍有重叠
+
+**真机证据**（b49 复测截图）：搜索框激活、「最近搜索」区两条词条（水泫、凡人修仙传）——**两颗 chip 被叠进同一胶囊、只露出一个删除按钮**，词条文字互相叠压。
+
+**根因（截图取证 + 代码推理双重确认）**：重叠形态**不是**行间重叠、也**不是** chip 内文字与删除按钮叠压，而是**相邻列 chip 横向叠压**。`LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)])` 的 adaptive 列宽按「可用宽度 ÷ (44 + 8)」**等宽切列**（实测 ~53pt/列），而 chip 带 `.fixedSize()`（b44 竖排回归防线）报告**完整固有宽度**（「凡人修仙传」~130pt）——子视图超出单元格宽度时以单元格锚点**溢出渲染**，把相邻列的 chip 盖住。
+
+**修复方案**：新建 `TingYou/UI/FlowLayout.swift`（SwiftUI `Layout` 协议，iOS 16+，本项目 deploymentTarget 17.0）——单遍累进排布：`.unspecified` 提案取每颗 chip 固有尺寸，当前行放不下（`x > 0 && x + width > maxWidth`）才折行，行高取该行最高。排布由累进坐标唯一决定，**数学上不存在两条 chip 重叠的路径**；水平 8 / 垂直 6 对齐原 LazyVGrid 的列距行距（搜索页原 spacing 8/8 同款保留）。`DiscoverScreen.historyList` 与 `SearchScreen.historySection`（同款实现、同款缺陷）一并替换；**chip 自身形态（`lineLimit(1)` + 整体 `.fixedSize()`）完全不动**——b44 竖排回归防线（`Build45FeedbackTests`）继续生效。已知边界：单颗 chip 超过可用宽度（超长词）独占一行向右溢出裁剪，与 b45 起既有行为一致，非本次回归。
+
+### 12.3 改动文件清单
+
+| 文件 | 问题 | 说明 |
+| --- | --- | --- |
+| `TingYou/Playback/PlaybackManager.swift` | 1 | 新增 `isMirrorRetryableNetworkError` 分类纯函数；`statusObserver` `.failed` 分支接入镜像重试 + `networkMirrorNote` 终局诊断 |
+| `TingYou/UI/FlowLayout.swift` | 2 | **新建**：`Layout` 协议流式布局（累进放置、折行判定、行高累进） |
+| `TingYou/UI/Discover/DiscoverScreen.swift` | 2 | `historyList` 的 `LazyVGrid` → `FlowLayout(horizontalSpacing: 8, verticalSpacing: 6)`，chip 形态不变 |
+| `TingYou/UI/Search/SearchScreen.swift` | 2 | `historySection` 同款替换为 `FlowLayout(horizontalSpacing: 8, verticalSpacing: 8)`（同款缺陷一并修复） |
+| `project.yml` | 版本 | `CURRENT_PROJECT_VERSION: 49`、`CFBundleVersion: "49"` |
+| `TingYou/Info.plist` | 版本 | `CFBundleVersion` = 49 |
+| `TingYouTests/Build49FeatureTests.swift` | 1 / 2 | **新增**：网络错误分类直调（真/伪码集全覆盖）、TLS 重试接线面、分类函数无 HTTP 分支、FlowLayout 存在 + 两屏接线 + chip 横排保留、版本 49 |
+| `TingYouTests/Build32RegressionTests.swift` | 2 | 历史 chip 布局断言改写为 FlowLayout 形态 + adaptive 等宽列否定断言 |
+| `TingYouTests/Build29RegressionTests.swift` | 版本 | `CURRENT_PROJECT_VERSION` 断言 → 49 |
+| `TingYouTests/Build45FeedbackTests.swift` | 守卫同步 | `testLegacyYtysxsPlaybackErrorMessageGuard` 按组长口径改写：「悦听（已下线）」标注随 b48 导入列表删除而消失，改为断言 `struct ImportedBookRow` / `struct ImportedBookGridItem` 声明不存在（`struct ` 前缀防误中注释） |
+
+### 12.4 守卫证据
+
+- **问题 1**：`Build49FeatureTests.testMirrorRetryableNetworkErrorClassification` 直调分类函数（可重试 -1200/-1213/-9803/-1001/-1003/-1005/-1006 与不可重试 -999/-1009/-1000/-1002/-1011、AVFoundationErrorDomain/POSIX 共 16 例）；`testTLSFailureWiredIntoMirrorRetryChain` 断言接线面（分类调用、当前条目守卫、切镜像诊断文案、storeResolved/keepMirrorChain 同机制、耗尽文案）+ 分类函数体局部无 `412`/`statusCode`/`http`（4xx 不盲换的结构性保证）。
+- **问题 2**：`Build49FeatureTests.testHistoryChipsFlowLayoutNoOverlap` 断言 FlowLayout 协议实现、折行累进判定、两屏接线、adaptive 等宽列零残留、chip 横排形态保留；`Build32RegressionTests` 历史区断言同步改写。
+- **逻辑仿真（沙箱）**：分类码集 22 例全过；flowPositions 折行坐标仿真（53+130pt 同行不重叠、8×100pt@343pt 三行、行距 ≥ 行高+6、超宽首颗独占一行）全过；括号配平 + 守卫 needle 回查 64 项全过。
+
+### 12.5 已知边界与未验证范围
+
+- **沙箱无 Swift 工具链**：编译与 XCTest 依赖 CI `xcodebuild` 兜底；本地只做括号配平、needle 回查与逻辑仿真。
+- TLS 重试的真机效果需随包回归（重点：镜像节点 TLS 失败的 B 站长视频能否自动换源播放、诊断是否标注换镜像次数）。
+- 历史词条布局的真机效果需随包回归（重点：多词条换行无叠压、b44 竖排不复发）。
+- `Build45FeedbackTests.testLegacyYtysxsPlaybackErrorMessageGuard` 的改写与组长远端 b48 守卫修正同口径，推送时以先到者为准、内容一致不冲突。
