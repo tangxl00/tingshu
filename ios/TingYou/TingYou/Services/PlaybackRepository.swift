@@ -24,6 +24,31 @@ final class PlaybackRepository: Sendable {
         try await getPlayUrl(src: src, albumId: albumId, chapterIdx: chapterIdx, detailPath: detailPath, markPaid: true)
     }
 
+    /// build 48 · 需求 4（B站取流超时 · 镜像重试）：解析占位 URI 为「主选直链
+    /// + backup 镜像」候选链（首位为主选，语义上即 getPlayUrl 的返回值）。
+    /// - B站：playurl 响应的 baseUrl + backup_url/backupUrl/backupUrls 全链
+    ///   （白名单内去重）——真机《择日飞升》取证：主选镜像
+    ///   upos-sz-estgcos.bilivideo.com 206 video/mp4 但 20s 零字节到达
+    ///   （缓冲挂起），watchdog 据此自动换下一镜像重试；
+    /// - 其它源：单元素链（无镜像语义，行为与 getPlayUrl 一致）。
+    func getPlayUrlCandidates(src: String, albumId: Int64, chapterIdx: Int, detailPath: String? = nil) async throws -> [String] {
+        guard src == SourceRegistry.BILI else {
+            return [try await getPlayUrl(src: src, albumId: albumId, chapterIdx: chapterIdx, detailPath: detailPath)]
+        }
+        guard let bvid = detailPath, !bvid.isEmpty else {
+            throw URLError(.badURL)
+        }
+        let pagesResult = await biliAdapter.playablePages(bvid: bvid)
+        let pages = try pagesResult.get()
+        guard let page = pages.first(where: { $0.page == chapterIdx + 1 }) else {
+            throw URLError(.resourceUnavailable)
+        }
+        let streamResult = await biliAdapter.audioStreamUrlCandidates(bvid: bvid, cid: page.cid)
+        let candidates = try streamResult.get()
+        guard !candidates.isEmpty else { throw URLError(.badServerResponse) }
+        return candidates
+    }
+
     /// 增强 5.3 预取入口：markPaid=false 时预取失败静默处理（不打标、不弹验证
     /// 流程），供下一章预取使用；正常播放路径仍走上面的默认入口。
     /// build 37：msrc 源下架后该参数暂无消费方，为保持 PlaybackManager 调用

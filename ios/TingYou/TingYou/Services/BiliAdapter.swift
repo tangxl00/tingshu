@@ -188,6 +188,26 @@ actor BiliAdapter {
     /// build 37 · 对齐 abts playUrl：WBI 签名接口 + 共 3 次尝试（1800ms × attempt
     /// 递增间隔）；仅风控类错误与「无可用音轨」重试，其余（404/付费等）立即失败。
     func audioStreamUrl(bvid: String, cid: Int64) async -> Result<String, Error> {
+        // build 48 · 需求 4：单 URL 口径 = 候选链首位（主选）；既有调用方
+        //（PlaybackRepository.getPlayUrl 非 B站分支等）语义不变。
+        let result = await audioStreamUrlCandidates(bvid: bvid, cid: cid)
+        switch result {
+        case .success(let candidates):
+            guard let first = candidates.first else {
+                return .failure(URLError(.badServerResponse,
+                                         userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage]))
+            }
+            return .success(first)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    /// build 48 · 需求 4（B站取流超时 · 镜像重试）：解析 playurl 为完整
+    /// 直链候选链（主选 baseUrl + 全部 backup 镜像，白名单去重，详见
+    /// selectStreamUrlCandidates）。风控退避 / 重试语义与原 audioStreamUrl
+    /// 完全一致（同一循环结构），仅成功返回值从单 URL 变为链。
+    func audioStreamUrlCandidates(bvid: String, cid: Int64) async -> Result<[String], Error> {
         do {
             try await warmup()
             var lastError: Error = URLError(.badServerResponse,
@@ -212,13 +232,13 @@ actor BiliAdapter {
                         throw URLError(.badServerResponse,
                                        userInfo: [NSLocalizedDescriptionKey: biliApiError(code: code, message: message)])
                     }
-                    guard let stream = try? extractPlayableUrl(json) else {
+                    guard let candidates = try? extractPlayableUrlCandidates(json) else {
                         // abts：无可用音轨同样视为可重试失败（避免上层静默拿到空地址）
                         lastError = URLError(.badServerResponse,
                                              userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
                         continue
                     }
-                    return .success(stream)
+                    return .success(candidates)
                 } catch {
                     if error is BiliRiskError {
                         lastError = error
@@ -233,12 +253,14 @@ actor BiliAdapter {
         }
     }
 
-    /// 从 playurl 响应抽取可播直链：flac / dolby（含 dolby.audio[]）/ dash.audio[]
-    /// 合并后按码率降序选最优（abts _hasPlayableUrl 的可播判定口径）。
+    /// 从 playurl 响应抽取可播直链候选链（build 48 · 需求 4：单 URL →
+    /// 主选 + backup 全链，供 watchdog 镜像重试）：flac / dolby（含
+    /// dolby.audio[]）/ dash.audio[] 合并后按码率降序选最优轨的完整链
+    ///（abts _hasPlayableUrl 的可播判定口径）。
     /// build 47：合并后过 codec 过滤——EC-3（Dolby Digital Plus，dolby.audio 轨
     /// 的编码）AVFoundation 不支持直接解（与真机 -12847「media format is not
     /// supported」同族），按 codecs 字段排除，绝不能喂给 AVPlayer。
-    private func extractPlayableUrl(_ json: [String: Any]) throws -> String {
+    private func extractPlayableUrlCandidates(_ json: [String: Any]) throws -> [String] {
         guard let data = json["data"] as? [String: Any] else {
             throw URLError(.badServerResponse,
                            userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
@@ -265,7 +287,7 @@ actor BiliAdapter {
             throw URLError(.badServerResponse,
                            userInfo: [NSLocalizedDescriptionKey: paidOrUnavailableMessage])
         }
-        return try selectStreamUrl(tracks)
+        return try selectStreamUrlCandidates(tracks)
     }
 
     /// build 47：音轨 codec 可播判定——EC-3（Dolby Digital Plus，写法
@@ -323,8 +345,16 @@ actor BiliAdapter {
         code == -412 || code == -352 || code == -509
     }
 
-    private func selectStreamUrl(_ audio: [[String: Any]]) throws -> String {
-        var best: String?
+    /// build 48 · 需求 4（B站取流超时 · 镜像重试）：最优音轨的完整直链候选链
+    /// ——baseUrl 主选 + backupUrl/backup_url/backupUrls 全部镜像（白名单
+    /// isAllowedStreamUrl 过滤 + 顺序去重，主选恒在首位）。真机取证《择日飞升》：
+    /// 主选镜像 upos-sz-estgcos 206 video/mp4 但 20s 零字节到达（缓冲挂起），
+    /// backup 镜像（upos-sz-mirror* 等）是同一路径的其它节点，切换即绕开坏节点。
+    /// 选轨语义与既有 selectStreamUrl 一致：按码率降序取首个含白名单直链的轨。
+    /// 纯实例方法（依赖 isAllowedStreamUrl 白名单口径），单测经
+    /// audioStreamUrlCandidates 的 JSON 抽取层覆盖；列表本身恒非空（空则抛错）。
+    private func selectStreamUrlCandidates(_ audio: [[String: Any]]) throws -> [String] {
+        var best: [String]?
         var bestBandwidth: Int64 = -1
         for track in audio {
             // flac/dolby 对象可能缺 bandwidth 字段——按 0 处理保证首个可播直链可用
@@ -335,17 +365,24 @@ actor BiliAdapter {
                 track["baseUrl"] as? String,
                 track["base_url"] as? String,
             ].compactMap { $0 } + backupUrls(from: track)
-            if let url = candidates.first(where: { isAllowedStreamUrl($0) }) {
+            let allowed = candidates.filter { isAllowedStreamUrl($0) }
+            if !allowed.isEmpty {
                 bestBandwidth = bw
-                best = url
+                best = deduplicatedUrls(allowed)
             }
         }
-        guard let result = best else {
+        guard let result = best, !result.isEmpty else {
             throw URLError(.badServerResponse,
                            userInfo: [NSLocalizedDescriptionKey:
                             "B站音轨直链域名均不在白名单或无可用音轨，拒绝播放（App 不提供绕过）"])
         }
         return result
+    }
+
+    /// build 48 · 需求 4：候选链顺序去重（baseUrl 与 backup 偶有重复镜像）。
+    private func deduplicatedUrls(_ urls: [String]) -> [String] {
+        var seen = Set<String>()
+        return urls.filter { seen.insert($0).inserted }
     }
 
     private func backupUrls(from track: [String: Any]) -> [String] {

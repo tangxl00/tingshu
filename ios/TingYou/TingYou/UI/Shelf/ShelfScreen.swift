@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 struct ShelfScreen: View {
     @Query(sort: \FavoriteModel.createdAt, order: .reverse) private var favorites: [FavoriteModel]
     @Query(sort: \HistoryModel.updatedAt, order: .reverse) private var histories: [HistoryModel]
-    @Query(sort: \ImportedBookModel.createdAt, order: .reverse) private var importedBooks: [ImportedBookModel]
     @State private var layout: Int = 0
     @State private var selectedTab = 0
     @State private var showClearConfirm = false
@@ -15,11 +14,11 @@ struct ShelfScreen: View {
     @State private var showDocumentPicker = false
     @State private var importMessage: String?
     @State private var showImportMessage = false
-    /// v1.4.3 · 需求 1：删除书架导入页工具栏「+」按钮——B站/59听书导入入口按需求撤销，
-    /// 关联的导入展示 @State 与 sheet 挂载一并移除；
-    /// 导入页本身保留（已导入书籍仍正常显示与播放，与 SearchScreen 死代码同口径）。
-    /// v1.4.1：导入完成 → 打开专辑（对齐原发现页 P0-4 的导航语义）
-    @State private var navToAlbum: Album? = nil
+    /// build 48 · 需求 3：删除书架「导入」tab 及其空态页——importedContent /
+    /// ImportedBookRow / ImportedBookGridItem / albumFromImported /
+    /// openImportedAlbum / deleteImportedBooks / importedBooks @Query /
+    /// navToAlbum 导航挂载随 tab 一并移除（ImportedBookModel 数据层保留，
+    /// 外部导入 Menu 入口保留——见交付说明的边界备注）。
     @Environment(\.appContainer) private var container
     @Environment(\.modelContext) private var modelContext
 
@@ -33,7 +32,6 @@ struct ShelfScreen: View {
                     Picker("", selection: $selectedTab) {
                         Text("收藏 (\(favorites.count))").tag(0)
                         Text("历史 (\(histories.count))").tag(1)
-                        Text("导入 (\(importedBooks.count))").tag(2)
                     }
                     .pickerStyle(.segmented)
                     .frame(maxWidth: .infinity)
@@ -68,13 +66,11 @@ struct ShelfScreen: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
 
-                // Content
+                // Content（build 48 · 需求 3：导入 tab 已删，仅剩收藏/历史两分支）
                 if selectedTab == 0 {
                     favoritesContent
-                } else if selectedTab == 1 {
-                    historyContent
                 } else {
-                    importedContent
+                    historyContent
                 }
             }
             .navigationTitle("书架")
@@ -118,23 +114,8 @@ struct ShelfScreen: View {
                     showImportMessage = true
                 }
             }
-            // v1.4.3 · 需求 1：原 B站/59听书两个导入 sheet 挂载已删除（入口一并撤销）
-            .navigationDestination(item: $navToAlbum) { album in
-                AlbumScreen(album: album)
-            }
-        }
-    }
-
-    /// v1.4.1：导入完成 → 按 (src, detailPath) 还原 Album 并打开专辑页。
-    /// 复用本页既有 albumFromImported（B站 detailPath=meta(bvid)、59听书 detailPath=/mp3/{id}.html）。
-    /// v1.4.3 · 需求 1：导入入口删除后本方法暂无调用者——按最小改动口径保留
-    ///（importedContent 卡片仍在用的 albumFromImported 不动，同 SearchScreen 死代码处理原则）。
-    private func openImportedAlbum(_ bookId: Int64) {
-        let descriptor = FetchDescriptor<ImportedBookModel>(
-            predicate: #Predicate { $0.id == bookId }
-        )
-        if let book = try? modelContext.fetch(descriptor).first {
-            navToAlbum = albumFromImported(book)
+            // build 48 · 需求 3：navigationDestination(navToAlbum) 挂载随导入 tab
+            // 一并移除——openImportedAlbum 导入页跳转链已无调用者。
         }
     }
 
@@ -232,71 +213,10 @@ struct ShelfScreen: View {
         }
     }
 
-    /// P0-4：导入书籍列表（B站 / 59听书网）
-    @ViewBuilder
-    private var importedContent: some View {
-        if importedBooks.isEmpty {
-            // 「+」导入按钮已下线，空态引导改为指向现存的发现页入口
-            ContentUnavailableView("暂无导入书籍", systemImage: "arrow.down.circle", description: Text("去发现页搜索或点书收藏，即可把书加入书架"))
-        } else if layout == 0 {
-            List {
-                ForEach(importedBooks) { book in
-                    NavigationLink {
-                        AlbumScreen(album: albumFromImported(book))
-                    } label: {
-                        ImportedBookRow(book: book)
-                    }
-                }
-                .onDelete(perform: deleteImportedBooks)
-            }
-            .listStyle(.plain)
-        } else {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 12) {
-                    ForEach(importedBooks) { book in
-                        NavigationLink {
-                            AlbumScreen(album: albumFromImported(book))
-                        } label: {
-                            ImportedBookGridItem(book: book)
-                        }
-                    }
-                }
-                .padding(.horizontal)
-            }
-        }
-    }
-
-    /// 从 ImportedBookModel 构造 Album（供导入 Tab 与导航使用）
-    private func albumFromImported(_ book: ImportedBookModel) -> Album {
-        let src: String
-        let detailPath: String?
-        switch book.kind {
-        case BiliSource.KIND:
-            src = BiliSource.SRC
-            detailPath = book.meta
-        case "ting59":
-            // build 38：Ting59Source 常量已删（音源下架），存量导入书 kind 兼容。
-            src = "ting59"
-            detailPath = book.meta.map { "/mp3/\($0).html" }
-        default:
-            src = book.kind
-            detailPath = book.meta
-        }
-        return Album(
-            albumId: book.id, title: book.title, author: nil, teller: nil,
-            coverUrl: nil, intro: nil, category: nil, categoryId: nil,
-            type: nil, typeId: nil, status: nil, chapterCount: nil,
-            updatedAt: nil, playCount: nil, available: true,
-            source: src, detailPath: detailPath
-        )
-    }
-
-    private func deleteImportedBooks(at offsets: IndexSet) {
-        for idx in offsets {
-            modelContext.delete(importedBooks[idx])
-        }
-        do { try modelContext.save() } catch { print("deleteImportedBooks save failed: \(error)") }
-    }
+    // build 48 · 需求 3：原「P0-4 导入书籍列表」（importedContent，含
+    // 「暂无导入书籍」空态）随「导入」tab 一并删除；albumFromImported /
+    // deleteImportedBooks 仅被其引用，同批移除。ImportedBookModel 数据层
+    // 与外部导入 Menu 入口保留（本地导入/网页导入的写入链不受影响）。
 
     /// build 20 必修 2：书架恢复播放重建完整章节队列。
     /// 旧实现传 chapters: [chapter] 单章数组，恢复后上/下一章失效（播放队列只有一章）。
@@ -530,60 +450,5 @@ struct FavoriteGridItem: View {
     }
 }
 
-// MARK: - Imported Book Views
-
-struct ImportedBookRow: View {
-    let book: ImportedBookModel
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "arrow.down.circle.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 60, height: 60)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(book.title).lineLimit(1).font(.subheadline)
-                Text(kindLabel).lineLimit(1).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var kindLabel: String {
-        switch book.kind {
-        case BiliSource.KIND: return "B站"
-        case "ting59": return "59听书网"
-        // build 45 · 反馈 3：悦听下架，存量导入书保留可读 + 如实标注下线。
-        case "ytysxs": return "悦听（已下线）"
-        default: return book.kind
-        }
-    }
-}
-
-struct ImportedBookGridItem: View {
-    let book: ImportedBookModel
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: "arrow.down.circle.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 100, height: 100)
-                .foregroundStyle(.secondary)
-            Text(book.title).lineLimit(1).font(.caption)
-            Text(kindLabel).lineLimit(1).font(.caption2).foregroundStyle(.secondary)
-        }
-    }
-
-    private var kindLabel: String {
-        switch book.kind {
-        case BiliSource.KIND: return "B站"
-        case "ting59": return "59听书网"
-        // build 45 · 反馈 3：悦听下架，存量导入书保留可读 + 如实标注下线。
-        case "ytysxs": return "悦听（已下线）"
-        default: return book.kind
-        }
-    }
-}
+// build 48 · 需求 3：原「Imported Book Views」（ImportedBookRow /
+// ImportedBookGridItem，仅被导入 tab 的 importedContent 引用）随 tab 一并删除。

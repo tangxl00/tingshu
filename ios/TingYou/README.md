@@ -208,3 +208,84 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 ## 10. 许可证
 
 本项目仅作安卓 v1.3.3 的功能等价移植，源码供学习/个人使用。音源站点的版权与合法性由用户自行评估。
+
+## 11. build 48 变更说明（v1.4.4 · CFBundleVersion 48）
+
+本 build 合并四项需求：三条 UI 改造（需求 1/2/3）+ 一条 B 站取流超时修复（需求 4）。
+
+### 11.1 需求 1 · 历史搜索「全部显示 + 聚焦才显示」
+
+**改造前**：历史搜索区在 `keyword.isEmpty` 时常驻可见，且条目超过 8 条时被截断（自然高度上限 8 条 / `ScrollView` 固定 160pt）。
+
+**改造后**：
+
+- 历史区改为**聚焦门卫**：只有「搜索框处于聚焦态 **且** 关键字为空」时才渲染；一旦失焦或开始输入即整体隐藏。
+- 移除全部截断逻辑：条目数量不再设上限，列表改为 `LazyVGrid` 换行自然铺开，长词整体换行、不省略。
+
+**交互完整描述**：进入发现页 → 历史区默认隐藏 → 点击顶部搜索框（键盘弹起）→ 历史记录以换行网格全部展开显示，条数不限 → 点击任意一条历史词 → 立刻发起搜索并显示结果 → 点击搜索框外任意区域失焦 → 历史区收起隐藏；已输入关键字时历史区始终不显示。
+
+**焦点隔离（build 41 回归防线）**：`@FocusState` 的**读写全部收敛到两个叶子视图**——`DiscoverSearchField`（持有焦点绑定）与 `DiscoverHistoryGate`（持有显隐判定）。`DiscoverScreen.body` 自身**只写不读**焦点态，焦点翻转的重渲染范围止于叶子，不会波及书库 `List` 的行激活，从根上避免 build 41 真机回归「聚焦后点书无反应」。回归守卫：UI 测试用例 A/B/H（`DiscoverNavigationUITests`）真实点击验证。
+
+### 11.2 需求 2 · 删除发现页「分类：热门推荐」折叠按钮，改为常驻标签栏
+
+- 删除「分类：热门推荐」入口按钮及其展开态交互代码（`DisclosureGroup` / `categoryExpanded` / `「分类：」` 文案全部移除，无死代码残留）。
+- 改为**常驻横向滚动标签栏**：沿用原展开态蓝框样式——选中项粗体 + 主色，未选中项次级色；当前书源的分类恒驻显示，无需点击展开。
+- 切换音源后标签栏立即刷新为新书源的分类，并自动选中新书源的默认分类。
+
+### 11.3 需求 3 · 删除书架页「导入」tab
+
+- 移除书架页的「导入」tab 及其空状态页（「暂无导入书籍」）视图代码，仅保留「收藏 / 历史」两个 tab。
+- **边界说明**：按字面最小范围执行——外部导入入口（`Menu` 中的本地导入 / 网页导入）与 `ImportedBookModel` 数据层**保留**；导入进来的书籍仍会出现在收藏/历史中，只是不再有独立的「导入」分类页。
+
+### 11.4 需求 4 · B 站取流超时修复（镜像自动重试 + watchdog 二分判定）
+
+**真机现象**：《择日飞升》（玄幻/仙侠/多人小说剧，X 1-5，总时长 49:38）进度卡在 00:05，诊断红字：
+
+```
+加载超时，请重试 [诊断]
+B站取证：截图反馈此段
+取流超时·20秒内条目未就绪（缓冲挂起，AVFoundation 未报 .failed）
+play · HTTP 206 video/mp4 @ upos-sz-estgcos.bilivideo.com
+```
+
+**根因结论（三层定位）**：
+
+1. **HTTP 层正常，b47 未回退**：`HTTP 206` + `Content-Type: video/mp4` 正确，该节点走的正是 b47 的「正确类型透传」路径，未退化为 `application/octet-stream`；Referer / Range 注入（`applyBiliCdnHeaders`）与 `rewrittenBiliContentType` / `sniffedBiliMp4Mime` 全部在位，本次修复未触碰。
+2. **真实触发点是本地 watchdog 20s 兜底**：AVFoundation 侧**既不报 `.failed` 也不就绪**，属「慢 / 挂起」形态，与此前「秒败 Cannot Open」是不同层的问题——故障不在代理层的类型改写，而在**所选镜像节点吞吐过慢 + 本地超时判定过粗**。
+3. **判定过粗**：原 watchdog 一律「20s 未就绪 ⇒ 掐断报错」，没有区分「完全没数据」与「数据在缓慢到达」，把**可恢复的缓冲**误判为失败。
+
+**修复方案（三部分）**：
+
+- **① 镜像候选链 + 自动换源重试**：B 站 play 接口的响应通常带多个镜像（`backup_url`）。resolve 阶段一次性取回**候选链**——`getPlayUrlCandidates` → `audioStreamUrlCandidates` → `extractPlayableUrlCandidates` → `selectStreamUrlCandidates`（`baseUrl` + `base_url` + `backupUrls`，经 `isAllowedStreamUrl` 白名单过滤并去重，**主选恒居首位**）。主选照旧入 `resolvedPlayUrls` 缓存服务，其余镜像存 `mirrorCandidates`（`mirrorLock` 保护）。watchdog 触发时 `takeNextMirrorCandidate()` 在锁内原子「出队 + 计数」，上限 `mirrorRetryLimit = 3`；换源方式为 `storeResolved(key:uri, url:next)` 把缓存重定向到新镜像 + `loadCurrentChapter(autoPlay:true, keepMirrorChain:true)` 重建 `AVPlayerItem`（**同一 `loadingRequest` 只能 `finishLoading` 一次，故不能在原请求上换 URL**）。镜像链耗尽才向用户报错。
+- **② watchdog 二分判定**：`ProxyStreamSessionDelegate` 累计 `forwardedBytesTotal`（**只计偏移对齐丢弃后的净 respond 字节**）。watchdog 到点采样增量，与基线比对，增量 ≥ `streamProgressFloorBytes`（16 KB，约 fMP4 init segment 量级）判为 `.progressing` → **延长观察 20s**（更新基线、`watchdogExtensions += 1`），不掐可恢复缓冲；否则零字节判 `.stalledNoData`、已有部分数据判 `.stalledAfterData(forwardedBytes:)` → 两者**都切镜像**，仅诊断文案区分。
+- **③ 诊断文案分形态**：`.progressing` → 「watchdog · 数据缓慢到达（20s 增量 N 字节，累计 M 字节），延长观察第 K 轮」；`.stalledNoData` → 「零字节到达」；`.stalledAfterData` → 「数据中途停滞（先到达 N 字节后停止）」。报错文案附观察窗时长、换镜像次数与 `B站取证：截图反馈此段`。
+
+**实测证据**：
+
+- `streamStallVerdict(previousBytes:currentBytes:)` 单元断言覆盖三形态与 **16383 / 16384 边界**（`Build48FeatureTests.testStreamStallVerdictDistinguishesTwoStallShapes`）。
+- 镜像链链路与 `mirrorRetryLimit = 3` 由 `Build48FeatureTests.testBiliMirrorRetryChainGuard` 守护，同时**断言 b47 三处不得回退**（`rewrittenBiliContentType` / `sniffedBiliMp4Mime` / `applyBiliCdnHeaders`）。
+- 真机复测：用户确认「B站播放复测正常了」，b47 改写在多数书上已闭环；本 build 的镜像重试与 watchdog 二分需随包真机回归验证（**沙箱无 Swift 工具链，未能本地 xcodebuild**）。
+
+### 11.5 改动文件清单
+
+| 文件 | 需求 | 说明 |
+| --- | --- | --- |
+| `TingYou/UI/Discover/DiscoverScreen.swift` | 1 / 2 | 焦点隔离叶子视图（`DiscoverSearchField` / `DiscoverHistoryGate`）；删除折叠分类按钮，改常驻横向标签栏 + 音源切换联动 |
+| `TingYou/UI/Shelf/ShelfScreen.swift` | 3 | 删除「导入」tab 与「暂无导入书籍」空状态页 |
+| `TingYou/Playback/PlaybackManager.swift` | 4 | 镜像候选链、`mirrorCandidates` / `mirrorLock`、`takeNextMirrorCandidate`、`forwardedBytesTotal` 计数、`streamStallVerdict` 二分判定、`handleStreamWatchdogFired` 分形态处理与切镜像 |
+| `TingYou/Services/PlaybackRepository.swift` | 4 | 新增 `getPlayUrlCandidates(src:albumId:chapterIdx:detailPath:)` |
+| `TingYou/Services/BiliAdapter.swift` | 4 | 新增 `audioStreamUrlCandidates` / `extractPlayableUrlCandidates` / `selectStreamUrlCandidates` / `deduplicatedUrls`（原 `selectStreamUrl` 单值改为候选链） |
+| `project.yml` | 版本 | `CURRENT_PROJECT_VERSION: 48`、`CFBundleVersion: "48"` |
+| `TingYou/Info.plist` | 版本 | `CFBundleVersion` = 48 |
+| `TingYouTests/Build29RegressionTests.swift` | 1 | 禁④守卫改写为「焦点态必须隔离在叶子视图」；版本断言 → 48 |
+| `TingYouTests/Build32RegressionTests.swift` | 1 / 3 | 历史区显隐改为焦点驱动口径；书架导入 tab 翻转为否定断言 + 收藏/历史两 tab 肯定断言；新增 `codeOnly`（剔除整行注释）避免删除说明注释误伤 |
+| `TingYouTests/Build44FeedbackTests.swift` | 1 | 历史区三截断形态否定断言 + `historyList` 直挂肯定断言 |
+| `TingYouTests/Build45FeedbackTests.swift` | 1 | `history.count <= 8` 否定 + `frame(height: 160)` 否定 |
+| `TingYouTests/Build48FeatureTests.swift` | 1–4 | **新增**：分类标签栏常驻、镜像重试链守卫、两种停滞形态判定、书架导入 tab 移除但外部导入保留 |
+| `TingYouUITests/DiscoverNavigationUITests.swift` | 1 / 2 | 用例 C 锚点改常驻标签栏「推荐」；新增用例 H（聚焦后点书仍能推入 AlbumScreen） |
+
+### 11.6 已知边界与未验证范围
+
+- **沙箱无 Swift 工具链**：本 build 的编译验证依赖 GitHub Actions CI 的 `xcodebuild`；本地只做了括号配平、断言 needle 回查与逻辑仿真，**未本地跑通编译与 XCTest**。
+- 镜像重试与 watchdog 二分的真机效果需随包在真机回归（重点：《择日飞升》长音频、X 1-5）。
+- `readme` 中的 build 48 章节随源码包附载，便于离线核对改动与证据。

@@ -153,8 +153,12 @@ final class Build45FeedbackTests: XCTestCase {
         // 自适应（≤8 条自然高度）——「一眼可见」标准的形态守卫。
         XCTAssertTrue(src.contains(".navigationBarTitleDisplayMode(.inline)"),
                       "「发现」大标题必须改内联小标题（大字标题多占 ~52pt 是顶部空白主源）")
-        XCTAssertTrue(src.contains("history.count <= 8"),
-                      "历史区必须按条数分流（≤8 条自然高度，修 ScrollView 贪婪空白）")
+        // build 48 · 需求 1：历史区全量换行显示——按条数分流与 160pt 限高
+        // 两个截断形态必须消失（b47 形态回归即失配）。
+        XCTAssertFalse(src.contains("history.count <= 8"),
+                       "历史区不得再按条数分流（build 48 需求 1：全量换行显示）")
+        XCTAssertFalse(src.contains("frame(height: 160)"),
+                       "历史区不得再固定 160pt 限高（build 48 需求 1：全量换行显示）")
         XCTAssertFalse(src.contains("maxHeight:"),
                        "maxHeight 贪婪形态不得回归（内容再少也占满上限，撑出空白）")
     }

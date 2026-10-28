@@ -129,8 +129,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "47",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 47（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "48",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 48（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40
@@ -144,10 +144,11 @@ final class Build29RegressionTests: XCTestCase {
     /// （XCUITest 真实点击）确证：任何形式的容器级 tap 手势都会杀死 List 内
     /// NavigationLink 行激活（A/B/D 失败；E 对照页无该手势导航正常）。
     /// build 43 形态约束（发现页专用；build 44 · 反馈 1 扩围后计数更新）：
-    /// 禁④ @FocusState；要求⑤ resignFirstResponder；禁⑥ List 本体挂任何手势；
-    /// 要求⑦ .simultaneousGesture( 恰 3 处（分类折叠面板标题行 + 加载错误
-    /// 占位区 + 搜索栏容器——均不包裹 List 的小视图）；要求⑧ .onTapGesture(
-    /// 恰 2 处（搜索栏与分类行之间的间距收焦区 + 历史搜索区块背景收焦）；
+    /// 禁④ @FocusState（build 41）→ build 48 · 需求 1 改写为「焦点态必须隔离
+    /// 在叶子视图」：1 处状态声明 + 2 处 FocusState.Binding 下发，禁止主视图
+    /// 直接读焦点态、禁止 onChange 监听焦点翻转；要求⑤ resignFirstResponder；
+    /// 禁⑥ List 本体挂任何手势；要求⑦ .simultaneousGesture( 恰 0 处
+    /// （build 45 全局化后清零）；要求⑧ .onTapGesture( 恰 0 处；
     /// scrollDismissesKeyboard ≥2 保留。
     /// 行点击收焦交给导航 push 本身（iOS 默认行为）。
     /// SearchScreen 无 @FocusState、收焦本就是 resignFirstResponder，保持
@@ -189,13 +190,33 @@ final class Build29RegressionTests: XCTestCase {
                 normalized.contains(".scrollDismissesKeyboard(.immediately).onTapGesture"),
                 "\(rel)：禁止 List 本体直接挂 onTapGesture（build 39 真机回归：tap 抢占行内 NavigationLink，点书=收焦+无导航）；收焦必须用 simultaneousGesture")
             if isDiscover {
-                // 禁④ build 41：@FocusState 状态翻转收焦触发全 body 重渲染，
-                // 键盘弹起时点书行的导航激活被同帧布局扰动丢弃（第 5 轮根因）。
-                XCTAssertFalse(
-                    normalized.contains("@FocusState"),
-                    "发现页禁止使用 @FocusState 收焦（build 41 根因：状态翻转触发全 body 重渲染，丢弃进行中的 NavigationLink 行激活）；收焦必须走 UIKit resignFirstResponder")
-                // build 45 · 反馈 4：resignFirstResponder 随五处局部挂载一并移除
-                //（全局收焦走 window 级 endEditing，不再要求本文件包含该形态）。
+                // build 48 · 需求 1：@FocusState 回归（仅驱动历史区显隐）。
+                // build 41 的根因是「焦点状态翻转触发 DiscoverScreen 全 body
+                // 重渲染，丢弃进行中的 NavigationLink 行激活」——b48 需求
+                // 明确要求「聚焦才显示历史区」，故保留 @FocusState，但把焦点态
+                // 的读写全部隔离进两个叶子视图（DiscoverSearchField /
+                // DiscoverHistoryGate），主视图 body 只写不读焦点态。
+                // 守卫：① @FocusState 声明形态固定（1 处状态 + 2 处 Binding
+                // 下发）；② 状态名固定 searchFieldFocused；③ 禁止 onChange
+                // 监听焦点翻转（build 41 根因链）；④ 禁止主视图直接以
+                // searchFieldFocused 参与条件判断（读取只允许在叶子内）。
+                let focusStateCount = normalized.components(separatedBy: "@FocusState").count - 1
+                XCTAssertEqual(focusStateCount, 3,
+                               "发现页 @FocusState 形态必须固定：1 处状态声明 + 2 处 FocusState.Binding 下发（build 48 需求 1 焦点隔离）")
+                XCTAssertEqual(normalized.components(separatedBy: "@FocusStateprivatevar").count - 1, 1,
+                               "焦点状态声明必须恰好 1 处（searchFieldFocused，仅驱动历史区显隐）")
+                XCTAssertEqual(normalized.components(separatedBy: "@FocusState.Bindingvar").count - 1, 2,
+                               "焦点状态必须以 FocusState.Binding 下发给叶子视图（搜索框 + 历史区门卫）")
+                XCTAssertTrue(normalized.contains("searchFieldFocused:Bool"),
+                              "焦点状态名必须为 searchFieldFocused")
+                XCTAssertFalse(normalized.contains("onChange(of:searchFieldFocused"),
+                               "禁止用 onChange 监听焦点翻转（build 41 根因链：状态翻转引发重渲染扰动行导航激活）")
+                XCTAssertFalse(normalized.contains("ifsearchFieldFocused"),
+                               "主视图不得直接以 searchFieldFocused 参与条件判断（焦点读取必须隔离在叶子视图内）")
+                XCTAssertFalse(normalized.contains("&&searchFieldFocused"),
+                               "主视图不得直接以 searchFieldFocused 参与条件判断（焦点读取必须隔离在叶子视图内）")
+                XCTAssertFalse(normalized.contains("resignFirstResponder"),
+                               "发现页不得自行收键盘（build 45 起统一走 window 级 recognizer，零重渲染）")
                 // 禁⑥ List 本体挂手势（含 simultaneousGesture——build 40 形态，
                 // 虽然 simultaneous 不抢行点击，但统一收敛到非祖先小视图更可控）
                 XCTAssertFalse(

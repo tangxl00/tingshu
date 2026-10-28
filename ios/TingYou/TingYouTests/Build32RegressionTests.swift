@@ -69,28 +69,43 @@ final class Build32RegressionTests: XCTestCase {
         XCTAssertTrue(badServer.contains("响应异常"))
     }
 
-    // MARK: - 需求 2 · 搜索历史显隐（build 41 · 收焦方式重构后：keyword 驱动）
+    // MARK: - 需求 1 · 搜索历史显隐（build 48：聚焦驱动 + 全量换行）
 
-    /// v1.4.3 · 需求 2 原形态：@FocusState 驱动「仅聚焦时挂载 historySection」。
-    /// build 41 · 反馈 ①：@FocusState 状态翻转收焦触发全 body 重渲染，键盘弹起时
-    /// 点书行的 NavigationLink 激活被同帧布局扰动丢弃（点书无反应的第 5 轮根因），
-    /// 已删除 @FocusState、收焦改 UIKit resignFirstResponder（零重渲染）。
-    /// 历史显隐语义演进为 keyword 驱动：keyword 为空且非搜索结果态 → 挂载
-    /// historySection；输入中或提交搜索（searchResultsContent 占位）即隐藏
-    ///（「提交搜索即隐藏」的语义保留）。
-    func testDiscoverHistoryVisibilityKeywordDriven() throws {
+    /// build 48 · 需求 1：历史搜索区显隐语义从「keyword 驱动」改回
+    /// 「聚焦驱动」——只有搜索框聚焦且未输入关键词时才挂载历史区。
+    /// b41 删 @FocusState 的根因是「焦点状态翻转触发全 body 重渲染，丢弃
+    /// 进行中的 NavigationLink 行激活」——b48 用叶子视图隔离焦点读写
+    /// （主视图 body 只写不读焦点态），回归风险由 DiscoverNavigationUITests
+    /// A/B/H 真实点击守卫承担。
+    /// 同时钉住「全量换行显示」：≤8 条 / 160pt 限高 / 内嵌 ScrollView
+    /// 三个截断形态必须全部消失，chip 流式换行布局保留。
+    func testDiscoverHistoryVisibilityFocusDriven() throws {
         let source = try loadSource("DiscoverScreen")
-        // build 41：收焦方式重构——@FocusState 须已删除（重渲染根因）
-        XCTAssertFalse(source.contains("@FocusState"),
-                       "发现页不得再使用 @FocusState（build 41 根因：状态翻转收焦触发全 body 重渲染，丢弃行导航激活）")
-        XCTAssertFalse(source.contains(".focused($searchFocused)"),
-                       "TextField 不得再绑定聚焦态标记")
-        // 收焦走 UIKit resignFirstResponder（与搜索页对齐、零重渲染）
-        XCTAssertTrue(source.contains("resignFirstResponder"),
-                      "收焦须使用 resignFirstResponder")
-        // historySection 的挂载由 keyword 条件包住（keyword 为空 && 非搜索结果态）
-        XCTAssertTrue(source.contains("if keyword.isEmpty {"),
-                      "historySection 应由 keyword.isEmpty 条件挂载")
+        let code = Self.codeOnly(source)
+        // 焦点态：1 处状态声明 + 2 处 FocusState.Binding 下发（叶子隔离）
+        XCTAssertTrue(code.contains("@FocusState private var searchFieldFocused: Bool"),
+                      "发现页必须保留聚焦态（build 48 需求 1：聚焦才显示历史区）")
+        XCTAssertEqual(code.components(separatedBy: "@FocusState").count - 1, 3,
+                       "焦点态形态必须固定：1 处状态声明 + 2 处 FocusState.Binding 下发（build 48 焦点隔离）")
+        XCTAssertTrue(code.contains("@FocusState.Binding var focused: Bool"),
+                      "聚焦态必须以 FocusState.Binding 下发给叶子视图（build 41 回归防线）")
+        // 显隐条件只在叶子门卫内判定
+        XCTAssertTrue(code.contains("if focused && keywordIsEmpty {"),
+                      "历史区显隐条件必须在叶子门卫内判定（聚焦 && 关键词为空）")
+        XCTAssertFalse(code.contains("if searchFieldFocused"),
+                       "主视图不得直接以 searchFieldFocused 参与条件判断（焦点读隔离）")
+        // 全量换行显示：截断形态全部消失
+        XCTAssertFalse(code.contains("history.count <= 8"),
+                       "不得再按条数分流（build 48 需求 1：历史条目全量显示）")
+        XCTAssertFalse(code.contains("frame(height: 160)"),
+                       "不得再固定 160pt 限高（build 48 需求 1：全量换行显示）")
+        XCTAssertFalse(code.contains("ScrollView { historyList }"),
+                       "不得再包内嵌 ScrollView（build 48 需求 1：全量换行显示）")
+        XCTAssertFalse(code.contains("maxHeight:"),
+                       "maxHeight 贪婪形态不得回归（少历史时撑出空白）")
+        // chip 流式换行布局保留
+        XCTAssertTrue(code.contains("LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 8)], spacing: 6)"),
+                      "历史词条必须保留 LazyVGrid 自适应换行布局（多行流式排布）")
         // 无条件的常驻挂载形态应已消失（旧形态为「historySection\n                    libraryContent」紧邻）
         XCTAssertFalse(source.contains("                    historySection\n                    libraryContent"),
                        "historySection 不应无条件常驻挂载")
@@ -100,17 +115,42 @@ final class Build32RegressionTests: XCTestCase {
 
     func testShelfImportEntryRemoved() throws {
         let source = try loadSource("ShelfScreen")
+        // build 48 · 需求 3：书架「导入」tab 及其空态页整体删除——断言口径
+        // 从「导入页内容卡片应保留」翻转为「导入页内容卡片必须消失」。
+        // 用剔除整行注释的源码（删除说明注释里含标识符名，不参与判定）。
+        let code = Self.codeOnly(source)
         XCTAssertFalse(source.contains("showBiliImport"),
                        "B站导入入口 @State 应已删除")
         XCTAssertFalse(source.contains("showTing59Import"),
                        "59听书导入入口 @State 应已删除")
         XCTAssertFalse(source.contains("Label(\"B站导入\""),
                        "「+」Menu 的 B站导入项应已删除")
-        // 边界：导入页保留（已导入书籍仍显示与播放），导入内容卡片还在
-        XCTAssertTrue(source.contains("importedContent"), "导入页内容卡片应保留")
+        // build 48 · 需求 3：导入 tab + 导入内容卡片 + 空态页一并移除
+        XCTAssertFalse(code.contains("importedContent"),
+                       "导入 tab 的内容卡片视图必须已删除（build 48 需求 3：书架只保留收藏/历史两 tab）")
+        XCTAssertFalse(code.contains("暂无导入书籍"),
+                       "导入空态页文案必须已删除（build 48 需求 3）")
+        XCTAssertFalse(code.contains("ImportedBookRow"),
+                       "导入行视图必须已删除（build 48 需求 3）")
+        XCTAssertFalse(code.contains("ImportedBookGridItem"),
+                       "导入网格项视图必须已删除（build 48 需求 3）")
+        XCTAssertFalse(code.contains("selectedTab == 2"),
+                       "不得残留第三 tab 分支（导入 tab 已删）")
+        // 边界：收藏 / 历史两 tab 必须保留
+        XCTAssertTrue(code.contains("favoritesContent"), "收藏 tab 内容必须保留")
+        XCTAssertTrue(code.contains("historyContent"), "历史 tab 内容必须保留")
     }
 
     // MARK: - 辅助
+
+    /// 剔除整行注释（trim 后以 // 开头）——删除说明注释里含被断言的标识符名，
+    /// 参与判定前必须剔除，避免注释命中/误伤。
+    private static func codeOnly(_ source: String) -> String {
+        source.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.hasPrefix("//") }
+            .joined(separator: "\n")
+    }
 
     private func loadSource(_ fileName: String) throws -> String {
         // #filePath = …/TingYouTests/Build32RegressionTests.swift

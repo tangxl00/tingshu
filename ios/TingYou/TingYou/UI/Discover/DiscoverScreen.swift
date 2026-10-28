@@ -6,14 +6,22 @@ import UIKit
 /// 选中音源后分类 chips 与书籍列表切换为该源数据；点书经 NavigationLink 直达
 /// AlbumScreen（章节即载、点章即播），无任何导入/预览中间页。
 /// 「哪些源参与搜索」仍由「我的→音源管理」开关控制（AggregateSearcher）。
-/// 分类二级折叠保留（build 21 · 反馈 6）。
+/// build 48 · 需求 2：分类折叠面板已删——横向分类标签栏常驻（音源切换联动）。
+/// build 48 · 需求 1：历史搜索区改为「聚焦才显示 + 全量换行显示」——截断
+/// 分支（≤8 条自然高度 / >8 条 ScrollView 160pt）删除，聚焦判定隔离在叶子视图。
 /// 搜索框：聚合全部启用音源（AggregateSearcher，与搜索页同一套逻辑）。
 struct DiscoverScreen: View {
     @Environment(\.appContainer) private var appContainer
     @State private var viewModel = DiscoverViewModel()
     @State private var selectedCategoryId = "recommend"
-    /// build 21 · 反馈 6：分类选择折叠面板（默认收起）
-    @State private var categoryExpanded = false
+    /// build 48 · 需求 1：搜索框聚焦态——历史搜索区「点击才显示」的显隐开关
+    ///（聚焦 && 未输入 → 显示；失焦 / 输入中 / 搜索结果态 → 隐藏不占位）。
+    /// build 41 教训评估：当时删 @FocusState 的根因是「聚焦翻转触发全 body
+    /// 重渲染，键盘弹起时点书行的 NavigationLink 激活被同帧布局扰动丢弃」。
+    /// b48 需求明确要求聚焦显隐，重新引入——但收焦动作仍走全局 window 级
+    /// recognizer（resignFirstResponder，零额外重渲染），FocusState 只读显隐
+    /// 不做收焦驱动；行导航回归由 DiscoverNavigationUITests A/B 真实点击守卫。
+    @FocusState private var searchFieldFocused: Bool
     @State private var keyword = ""
     @State private var searchMode = false
     @State private var searchResults: [Album] = []
@@ -77,13 +85,16 @@ struct DiscoverScreen: View {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
-                    TextField("搜索书名 / 作者 / 主播", text: $keyword)
-                        .submitLabel(.search)
-                        // build 42 · 任务一：XCUITest 点击探针（DiscoverNavigationUITests 定位用）
-                        .accessibilityIdentifier("discover_search_field")
-                        .onSubmit {
-                            performSearch(initial: true)
-                        }
+                    // build 48 · 需求 1：搜索框抽为叶子视图——焦点态的「读」收敛
+                    // 到 DiscoverSearchField / DiscoverHistoryGate 两个叶子内，
+                    // DiscoverScreen.body 自身不读 searchFieldFocused：
+                    // 焦点翻转只重渲染叶子，不波及书库 List 的行激活
+                    //（build 41 真机回归根因：全 body 重渲染丢弃行导航激活）。
+                    DiscoverSearchField(
+                        keyword: $keyword,
+                        focused: $searchFieldFocused,
+                        onSubmit: { performSearch(initial: true) }
+                    )
                     if !keyword.isEmpty {
                         Button(action: {
                             keyword = ""
@@ -119,11 +130,16 @@ struct DiscoverScreen: View {
                 if searchMode && !keyword.isEmpty {
                     searchResultsContent
                 } else {
-                    // build 41：keyword 为空 && 非搜索结果态 → 显示搜索历史
-                    //（输入中 / 提交搜索即隐藏，语义保留）。
-                    if keyword.isEmpty {
-                        historySection
-                    }
+                    // build 48 · 需求 1：历史搜索区「点击才显示」——仅当搜索框
+                    // 聚焦且未输入关键词时挂载（失焦/输入中/搜索结果态均不显示、
+                    // 不占位）。挂载条件读在 DiscoverHistoryGate 叶子内，
+                    // 主视图 body 不读焦点态（build 41 教训：焦点翻转引发的
+                    // 重渲染必须局限在叶子，不能波及书库行导航激活）。
+                    DiscoverHistoryGate(
+                        focused: $searchFieldFocused,
+                        keywordIsEmpty: keyword.isEmpty,
+                        content: historySection
+                    )
                     libraryContent
                 }
             }
@@ -168,24 +184,15 @@ struct DiscoverScreen: View {
             // .fixedSize()——chip 报告完整固有宽度（长词单行完整显示不截断，
             // b44 反馈 4 的诉求保留），grid 列宽自适应、一行放不下整颗 chip
             // 折到下一行（多行流式排布，b44 反馈 4 的另一半诉求保留）。
-            // build 47 · 反馈 2（布局返修·用户可感知标准）：历史区高度随内容
-            // 自适应——b44~b46 用 ScrollView + frame(maxHeight:)，但 ScrollView
-            // 纵向高度贪婪（内容再少也占满 maxHeight 160pt），1 条历史时也
-            // 撑出 ~100pt 空白——这才是「最近搜索与书库列表之间空白过大」的
-            // 真根因（b46 只压 4~8pt 间距，不可感知）。返修：≤8 条直接渲染
-            // 内容（自然高度，1 条只占一行高）；>8 条才包 ScrollView 固定
-            // 高 160（极端多历史不挤压书库，可滚动看全部）。
-            if history.count <= 8 {
-                historyList
-            } else {
-                ScrollView { historyList }
-                    .frame(height: 160)
-            }
+            // build 48 · 需求 1（历史搜索全面显示）：删除 b47 的「≤8 条自然高度
+            // / >8 条 ScrollView 160pt 限高」截断分支——历史条目无论多少一律
+            // 全量换行显示（chip 流式排布自增高，不截断、不出现内嵌滚动）。
+            historyList
         }
     }
 
-    /// 历史区内容（标题行 + chip 流式网格）——build 47 从 ScrollView 拆出：
-    /// 高度自适应分支（≤8 条）与限高滚动分支（>8 条）共用同一内容。
+    /// 历史区内容（标题行 + chip 流式网格）——build 47 从 ScrollView 拆出、
+    /// build 48 起为全量渲染的唯一实现（截断分支已删）。
     private var historyList: some View {
         // build 44 · 反馈 4（历史搜索「依旧被截断」）→ build 45 · 反馈 2 返修：
         // b44 把 chip 文字改成 fixedSize(horizontal: false, vertical: true)
@@ -255,12 +262,13 @@ struct DiscoverScreen: View {
         }
     }
 
-    /// v1.4.1：切换浏览音源——分类重置为该源第一个，列表重新加载
+    /// v1.4.1：切换浏览音源——分类重置为该源第一个，列表重新加载；
+    /// build 48 · 需求 2：折叠面板删除后无需收起动作，categories 计算
+    /// 属性随 browseSource 变化自动刷新标签栏。
     private func switchBrowseSource(_ src: String) {
         guard src != browseSource else { return }
         browseSource = src
         selectedCategoryId = DiscoverCatalog.categories(for: src).first?.id ?? ""
-        categoryExpanded = false
         Task { await loadCurrent() }
     }
 
@@ -322,64 +330,51 @@ struct DiscoverScreen: View {
 
     @ViewBuilder
     private var libraryContent: some View {
-        // build 21 · 反馈 6：分类选择折叠面板（二级折叠、默认收起）。
-        // v1.4.1：分类面板标题行新增音源选择 Menu（音源：X ▾）——
-        // 听友FM（DiscoverCatalog 5 榜单分类）/ B站（BiliCategories.ALL 6 分类）；
-        // build 38 · 反馈 1：59听书网（ting59）下架，音源选择器同步摘除。
+        // build 21 · 反馈 6 的分类折叠面板已在 build 48 · 需求 2 删除——
+        // 「分类：热门推荐」入口按钮不再存在，横向分类标签栏常驻显示
+        //（沿用原展开态样式：选中粗体主色 / 未选中次级色，横向滚动）；
+        // 音源选择 Menu 迁至标签栏行首保留（听友FM 5 榜单分类 /
+        // B站 BiliCategories 6 分类，build 38 起 59听书网已下架）。
+        // 分类数据源 categories 取自当前 browseSource——音源切换后
+        // 标签栏随之刷新（switchBrowseSource 重置 selectedCategoryId）。
         VStack(spacing: 0) {
-            DisclosureGroup(isExpanded: $categoryExpanded) {
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(browseSources, id: \.id) { src in
+                        Button {
+                            switchBrowseSource(src.id)
+                        } label: {
+                            if src.id == browseSource {
+                                Label(src.name, systemImage: "checkmark")
+                            } else {
+                                Text(src.name)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("音源：\(browseSourceName)")
+                            .font(.subheadline)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .fixedSize()
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) {
                         ForEach(categories) { cat in
                             Button(cat.name) {
                                 selectedCategoryId = cat.id
-                                categoryExpanded = false
                                 Task { await loadCurrent() }
                             }
                             .fontWeight(selectedCategoryId == cat.id ? .bold : .regular)
                             .foregroundStyle(selectedCategoryId == cat.id ? .primary : .secondary)
                         }
                     }
-                    .padding(.horizontal)
                     .padding(.vertical, 6)
                 }
-            } label: {
-                HStack {
-                    Text("分类：\(selectedCategory?.name ?? "全部")")
-                        .font(.subheadline)
-                    Spacer()
-                    Menu {
-                        ForEach(browseSources, id: \.id) { src in
-                            Button {
-                                switchBrowseSource(src.id)
-                            } label: {
-                                if src.id == browseSource {
-                                    Label(src.name, systemImage: "checkmark")
-                                } else {
-                                    Text(src.name)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text("音源：\(browseSourceName)")
-                                .font(.subheadline)
-                            Image(systemName: "chevron.down")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .fixedSize()
-                    Image(systemName: categoryExpanded ? "chevron.up" : "chevron.down")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .contentShape(Rectangle())
-                // build 45 · 反馈 4：b43 的分类折叠面板标题行收焦挂载已删除——
-                // 全局 window 级 recognizer 兜底（contentShape 保留，供按钮
-                // 整行命中展开/Menu）。
             }
-            .buttonStyle(.plain)
             .padding(.horizontal)
             .padding(.vertical, 4)
 
@@ -484,6 +479,50 @@ struct DiscoverScreen: View {
             isSearching = false
             if outcome.allFailed {
                 searchError = "搜索失败：所有启用音源均不可用，请稍后重试"
+            }
+        }
+    }
+
+    // MARK: - build 48 · 需求 1：焦点态隔离叶子视图
+
+    /// 搜索框叶子视图（焦点态绑定收口点）。
+    ///
+    /// build 41 真机回归：@FocusState 状态翻转触发 DiscoverScreen 全 body
+    /// 重渲染，丢弃进行中的 NavigationLink 行激活（点书无反应）。b48 需求
+    /// 明确要求「聚焦才显示历史区」，故保留 @FocusState，但把焦点态的读写
+    /// 全部隔离在本视图与 DiscoverHistoryGate 两个叶子内——DiscoverScreen.body
+    /// 只写不读焦点态，焦点翻转的重渲染范围止于叶子，不波及书库行激活。
+    private struct DiscoverSearchField: View {
+        @Binding var keyword: String
+        @FocusState.Binding var focused: Bool
+        let onSubmit: () -> Void
+
+        var body: some View {
+            TextField("搜索书名 / 作者 / 主播", text: $keyword)
+                .submitLabel(.search)
+                // build 42 · 任务一：XCUITest 点击探针（DiscoverNavigationUITests 定位用）
+                .accessibilityIdentifier("discover_search_field")
+                // build 48 · 需求 1：聚焦态绑定——仅驱动历史搜索区显隐；
+                // 收焦动作本身仍走全局 window 级 recognizer，不由此处驱动。
+                .focused($focused)
+                .onSubmit {
+                    onSubmit()
+                }
+        }
+    }
+
+    /// 历史搜索区显隐门卫（叶子视图 · 焦点读隔离）。
+    ///
+    /// 仅「聚焦 && 关键词为空」渲染历史内容，否则完全不渲染（不占位）。
+    /// 焦点态以 FocusState.Binding 下传——只有本视图读焦点，主视图不读。
+    private struct DiscoverHistoryGate<Content: View>: View {
+        @FocusState.Binding var focused: Bool
+        let keywordIsEmpty: Bool
+        let content: Content
+
+        var body: some View {
+            if focused && keywordIsEmpty {
+                content
             }
         }
     }

@@ -56,6 +56,12 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
     private var continuations: [Int: CheckedContinuation<Void, Never>] = [:]
     /// 已完成但 awaitCompletion 尚未挂起的任务（先完成后等待的边界序）
     private var finishedEarly: Set<Int> = []
+    /// build 48 · 需求 4（B站取流超时二分）：本会话累计 respond 给
+    /// AVFoundation 的净载荷字节数（偏移对齐丢弃的字节不计——对条目就绪
+    /// 无贡献）。watchdog 到点采样，判定「零字节到达（真挂起，切镜像）」
+    /// 与「数据缓慢到达（延长观察）」两种形态。条目重建时由
+    /// PlaybackManager 重置。与 loadingRequests 等共用一把 lock。
+    private var forwardedBytesTotal: Int64 = 0
     /// build 45 · 反馈 1a（错误透传）：取流层失败原文回传（阶段 play + 原始错误），
     /// 由 statusObserver .failed 拼进 playbackError——替代被 AVFoundation 吞成
     /// 裸「Cannot Open」的黑盒。仅记录，不影响 finishLoading 语义。
@@ -318,7 +324,33 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
             payload = payload.subdata(in: skip..<payload.count)
         }
         advanceStreamOffset(for: dataTask, by: Int64(data.count))
+        addForwardedBytes(Int64(payload.count))
         dr.respond(with: payload)
+    }
+
+    // MARK: build 48 · 需求 4 —— watchdog 转发字节采样（锁保护，供
+    // PlaybackManager 超时形态判定；静态可测的形态判定在
+    // PlaybackManager.streamStallVerdict，单测直调）
+
+    /// 累加本会话净转发字节（didReceive data 转发点调用）。
+    private func addForwardedBytes(_ delta: Int64) {
+        lock.lock()
+        forwardedBytesTotal += delta
+        lock.unlock()
+    }
+
+    /// 当前累计（watchdog 到点采样）。
+    var totalForwardedBytes: Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return forwardedBytesTotal
+    }
+
+    /// 条目重建起点归零（镜像重试 / 切章 / 重试共用）。
+    func resetForwardedBytes() {
+        lock.lock()
+        forwardedBytesTotal = 0
+        lock.unlock()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -464,6 +496,22 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// AVFoundation 缓冲挂起不主动报错，这是 H 空窗的另一半根因。
     /// readyToPlay / .failed / 切章 / 重试 四处取消。
     private var playbackWatchdog: DispatchWorkItem?
+
+    /// build 48 · 需求 4（B站取流超时 · 镜像重试）：当前章的镜像候选链
+    ///（getPlayUrlCandidates 返回主选 + backup_url 镜像，主选已服务，
+    /// 此处存剩余备选）与已切换次数。watchdog 判定「零字节 / 中途停滞」
+    /// 挂起形态时自动取下一候选重建条目（storeResolved 重定向占位 URI
+    /// 缓存 → loadCurrentChapter 缓存命中直接服务新镜像）；链耗尽或达
+    /// 上限才向用户报错。loader Task（后台）与 watchdog（main asyncAfter）
+    /// 并发访问，统一经 mirrorLock。
+    private var mirrorCandidates: [String] = []
+    private var mirrorAttempts = 0
+    private let mirrorLock = NSLock()
+    /// build 48 · 需求 4：watchdog 慢速延长观察的采样基线与延长轮次——
+    /// 到点采样 totalForwardedBytes，增量 ≥ streamProgressFloorBytes 视为
+    /// 「数据在缓慢到达」延长观察（不掐可恢复的缓冲），否则按挂起处理。
+    private var watchdogByteBaseline: Int64 = 0
+    private var watchdogExtensions = 0
 
     /// v1.4.3 · P0（取证 A）+ build 33 · P0-2：B站 CDN 代理取流专用 session——
     /// 带 Referer/UA（B站 CDN 实测裸请求一律 403）；证书固定 fail-closed
@@ -763,7 +811,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         play()
     }
 
-    private func loadCurrentChapter(startPosMs: Int64 = 0, autoPlay: Bool = true) {
+    private func loadCurrentChapter(startPosMs: Int64 = 0, autoPlay: Bool = true,
+                                    keepMirrorChain: Bool = false) {
         guard currentChapterIdx < currentChapters.count else { return }
         // v1.4.3 · P0（取证 D）：新章加载即清上次播放失败提示（切章/重试共用）
         playbackError = nil
@@ -774,6 +823,18 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         //（切章/重试共用入口，旧看门狗必须作废——否则上一章的超时会误报进新章）。
         playbackWatchdog?.cancel()
         playbackWatchdog = nil
+        // build 48 · 需求 4：watchdog 超时形态采样归零（新条目从 0 计）；
+        // 镜像链默认随新条目失效（切章/用户重试），仅镜像重试自身
+        // （keepMirrorChain=true）保留剩余候选与已切次数，链不中断。
+        proxyStreamDelegate?.resetForwardedBytes()
+        watchdogByteBaseline = 0
+        watchdogExtensions = 0
+        if !keepMirrorChain {
+            mirrorLock.lock()
+            mirrorCandidates = []
+            mirrorAttempts = 0
+            mirrorLock.unlock()
+        }
         isChapterLoading = true
         let ch = currentChapters[currentChapterIdx]
         currentChapterTitle = ch.title
@@ -901,22 +962,116 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         // build 45 · CI 第一轮（反馈 2b）：取流看门狗——20s 未就绪且未报错，
         // 视为取流挂起（缓冲态 AVFoundation 不主动 .failed），按失败透传：
         // 「取流超时」+ [诊断] loader 层原文 + 取证指引（H 判定窗口 30s 内必达）。
+        // build 48 · 需求 4（B站取流超时二分 + 镜像重试，真机《择日飞升》
+        // 49:38 卡 00:05 · HTTP 206 video/mp4 @ upos-sz-estgcos 取证）：
+        // 到点先采样代理层净转发字节，按 streamStallVerdict 二分——
+        // ① 数据缓慢到达（增量 ≥ 16KB）：不掐可恢复的缓冲，重挂 20s 延长观察
+        //    （诊断留痕「缓慢到达 + 增量」），readyToPlay 到达即自动撤；
+        // ② 零字节到达 / 数据中途停滞：真挂起——自动取 backup_url 候选链
+        //    下一镜像重建条目（storeResolved 重定向占位 URI 缓存，
+        //    loadCurrentChapter 缓存命中直接服务新镜像，进度/记账干净重来），
+        //    最多 mirrorRetryLimit 次；镜像耗尽仍停滞才向用户报错，文案按
+        //    「零字节到达 / 中途停滞」区分标注。
+        let watchdogUri = uri
         let watchdog = DispatchWorkItem { [weak self] in
-            guard let self, self.playbackError == nil else { return }
-            let loaderRecord = self.takeLoaderFailureRecord()
-            var diagnostic = ["取流超时 · 20 秒内条目未就绪（缓冲挂起，AVFoundation 未报 .failed）"]
-            if let loaderRecord { diagnostic.append(loaderRecord) }
-            if let meta = self.takeLoaderMetaRecord() { diagnostic.append(meta) }
-            diagnostic.insert("B站取证：截图反馈此段", at: 0)
-            let fullMessage = "加载超时，请重试 [诊断] " + diagnostic.joined(separator: " | ")
-            self.playbackWatchdog = nil
-            Task { @MainActor [weak self] in
-                self?.isChapterLoading = false
-                self?.playbackError = fullMessage
-            }
+            self?.handleStreamWatchdogFired(uri: watchdogUri, extended: false)
         }
         playbackWatchdog = watchdog
         DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: watchdog)
+    }
+
+    /// build 48 · 需求 4：watchdog 重挂（慢速延长观察轮次共用同一闭包语义）。
+    private func scheduleStreamWatchdog(uri: String) {
+        let watchdog = DispatchWorkItem { [weak self] in
+            self?.handleStreamWatchdogFired(uri: uri, extended: true)
+        }
+        playbackWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: watchdog)
+    }
+
+    /// build 48 · 需求 4：watchdog 到点的统一处理——采样代理层净转发字节，
+    /// 按 streamStallVerdict 二分：progressing 延长观察（重挂 20s，readyToPlay
+    /// 到达即自动撤）；停滞（零字节 / 中途停滞）先自动切 backup 镜像重建条目
+    /// （takeNextMirrorCandidate 原子出队，storeResolved 重定向占位 URI 缓存后
+    /// loadCurrentChapter 缓存命中直接服务新镜像——不重走 playurl 解析，同一
+    /// 解析结果只会拿到同一主选），链耗尽 / 达上限才报错，文案区分两种停滞
+    /// 形态并标注已切镜像次数。extended=true 仅诊断文案区分首轮 / 延长轮。
+    private func handleStreamWatchdogFired(uri: String, extended: Bool) {
+        guard playbackError == nil else { return }
+        let forwarded = proxyStreamDelegate?.totalForwardedBytes ?? 0
+        let verdict = Self.streamStallVerdict(previousBytes: watchdogByteBaseline,
+                                              currentBytes: forwarded)
+        let shapeText: String
+        switch verdict {
+        case .progressing(let delta):
+            watchdogByteBaseline = forwarded
+            watchdogExtensions += 1
+            recordLoaderMeta("watchdog · 数据缓慢到达（20s 增量 \(delta) 字节，累计 \(forwarded)），延长观察第 \(watchdogExtensions) 轮")
+            scheduleStreamWatchdog(uri: uri)
+            return
+        case .stalledNoData:
+            shapeText = "零字节到达"
+        case .stalledAfterData(let bytes):
+            shapeText = "数据中途停滞（先到达 \(bytes) 字节后停止）"
+        }
+        // 真挂起：优先自动切镜像（至少 1 次），链耗尽才报错。
+        if let next = takeNextMirrorCandidate() {
+            let host = URL(string: next)?.host ?? "?"
+            recordLoaderMeta("watchdog · \(extended ? "延长观察后" : "")\(shapeText)，自动切换镜像第 \(currentMirrorAttempts()) 次 → \(host)")
+            storeResolved(key: uri, url: next)
+            Task { @MainActor [weak self] in
+                self?.loadCurrentChapter(autoPlay: true, keepMirrorChain: true)
+            }
+            return
+        }
+        let attempts = currentMirrorAttempts()
+        let attemptsText = attempts > 0
+            ? "，已自动换镜像 \(attempts) 次仍无进展"
+            : "，无可用 backup 镜像"
+        let windowText = extended
+            ? "慢速延长观察后仍\(shapeText)（累计观察 \(20 * (watchdogExtensions + 1)) 秒无就绪"
+            : "20 秒观察窗内\(shapeText)"
+        let loaderRecord = takeLoaderFailureRecord()
+        var diagnostic = [
+            "取流超时 · \(windowText)（缓冲挂起，AVFoundation 未报 .failed\(attemptsText)）",
+        ]
+        if let loaderRecord { diagnostic.append(loaderRecord) }
+        if let meta = takeLoaderMetaRecord() { diagnostic.append(meta) }
+        diagnostic.insert("B站取证：截图反馈此段", at: 0)
+        let fullMessage = "加载超时，请重试 [诊断] " + diagnostic.joined(separator: " | ")
+        playbackWatchdog = nil
+        Task { @MainActor [weak self] in
+            self?.isChapterLoading = false
+            self?.playbackError = fullMessage
+        }
+    }
+
+    /// build 48 · 需求 4：取下一镜像候选（nil = 链耗尽或达 mirrorRetryLimit）。
+    /// mirrorLock 内完成「取出即出队 + 计数递增」，watchdog 调用侧原子。
+    private func takeNextMirrorCandidate() -> String? {
+        mirrorLock.lock()
+        defer { mirrorLock.unlock() }
+        guard mirrorAttempts < Self.mirrorRetryLimit, !mirrorCandidates.isEmpty else {
+            return nil
+        }
+        mirrorAttempts += 1
+        return mirrorCandidates.removeFirst()
+    }
+
+    /// build 48 · 需求 4：当前已自动切换的镜像次数（诊断文案用）。
+    private func currentMirrorAttempts() -> Int {
+        mirrorLock.lock()
+        defer { mirrorLock.unlock() }
+        return mirrorAttempts
+    }
+
+    /// build 48 · 需求 4：resolve 完成时存档镜像候选链（主选已在服务，
+    /// 存剩余备选）并清零切换计数。
+    private func storeMirrorChain(_ candidates: [String]) {
+        mirrorLock.lock()
+        defer { mirrorLock.unlock() }
+        mirrorCandidates = candidates
+        mirrorAttempts = 0
     }
 
     // MARK: - AVAssetResourceLoaderDelegate（P0-1 真实解析）
@@ -950,11 +1105,18 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                     box.request.finishLoading(with: URLError(.unsupportedURL))
                     return
                 }
-                let playUrl = try await repository.getPlayUrl(
+                // build 48 · 需求 4：resolve 走候选链接口——主选（首位）照旧
+                // 入缓存服务，剩余 backup 镜像存档（storeMirrorChain）供
+                // watchdog 零数据超时自动切换；非 B站源恒为单元素链，行为不变。
+                let playUrls = try await repository.getPlayUrlCandidates(
                     src: parsed.src, albumId: parsed.albumId, chapterIdx: parsed.chapterIdx,
                     detailPath: self?.currentAlbum?.detailPath)
+                guard let playUrl = playUrls.first, !playUrl.isEmpty else {
+                    throw URLError(.badServerResponse)
+                }
                 // 解析结果顺手入缓存（同一章 seek/重开不再重复解析）
                 self?.storeResolved(key: cacheKey, url: playUrl)
+                self?.storeMirrorChain(Array(playUrls.dropFirst()))
                 // build 46 · 反馈 1 增强：resolve 出的直链域名入元信息槽——
                 // 失败诊断可见「resolve 到了哪个域」（cn-sh-cc-*/upos-*/akamaized）。
                 if let host = URL(string: playUrl)?.host {
@@ -1065,6 +1227,41 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         let start = Int(4 - streamOffset)
         guard data.count >= start + 4 else { return nil }
         return data.subdata(in: start..<(start + 4)) == Data("ftyp".utf8) ? "audio/mp4" : nil
+    }
+
+    // MARK: - build 48 · 需求 4：watchdog 超时形态判定（纯静态，单测直调）
+
+    /// watchdog 观察窗内视为「有实质进度」的最小转发增量——低于该值说明
+    /// 这 20s 内数据实质未前进（≤16KB/20s ≈ 800B/s，该速率下长音频
+    /// 《择日飞升》49:38 的初始缓冲永远就绪不了），按挂起处理；
+    /// ≥ 该值说明数据在缓慢到达，延长观察（AVFoundation 拿到数据终会
+    /// readyToPlay，主动掐掉反而误伤可恢复的缓冲）。16KB ≈ fMP4 init
+    /// segment（ftyp+moov）量级——拿到它条目才有就绪的可能。
+    static let streamProgressFloorBytes: Int64 = 16 * 1024
+
+    /// 镜像自动重试上限（主选之外最多再试 3 个 backup 镜像；B站 playurl
+    /// backup_url 通常 2~3 条，覆盖全部链的同时防异常长链拖播放）。
+    static let mirrorRetryLimit = 3
+
+    /// watchdog 到点采样的超时形态判定。纯静态函数（PlaybackManagerTests
+    /// 直调），判据与文案口径：
+    /// - `progressing`：本观察窗增量 ≥ streamProgressFloorBytes——数据在
+    ///   缓慢到达，**不报错不切镜像**，重挂 watchdog 延长观察；
+    /// - `stalledNoData`：累计转发为零——「20 秒内零字节到达」真挂起
+    ///   （镜像节点死/极慢），首选切 backup_url 镜像重试；
+    /// - `stalledAfterData`：先到达部分数据后停滞——「数据中途停滞」，
+    ///   同样切镜像（对条目就绪而言停滞与零数据等价，仅诊断文案区分）。
+    enum StreamStallVerdict: Equatable {
+        case progressing(deltaBytes: Int64)
+        case stalledNoData
+        case stalledAfterData(forwardedBytes: Int64)
+    }
+
+    static func streamStallVerdict(previousBytes: Int64, currentBytes: Int64) -> StreamStallVerdict {
+        if currentBytes - previousBytes >= streamProgressFloorBytes {
+            return .progressing(deltaBytes: currentBytes - previousBytes)
+        }
+        return currentBytes <= 0 ? .stalledNoData : .stalledAfterData(forwardedBytes: currentBytes)
     }
 
     private func proxyMedia(box: LoadingRequestBox, url: URL) async {

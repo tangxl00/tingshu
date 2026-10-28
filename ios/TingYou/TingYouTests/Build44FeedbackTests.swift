@@ -97,8 +97,10 @@ final class Build44FeedbackTests: XCTestCase {
 
     /// 历史搜索放开显示：ScrollView 滚动展示全部记录（上限 200pt 高度），
     /// 单条 chips 不再 lineLimit(1) 截断（fixedSize 允许换行）。
-    /// 存储层 SearchHistoryStore 无显示截断（limit=20 去重置顶）——
-    /// 截断只在显示层，本守卫钉住显示层新形态。
+    /// build 48 · 需求 1：历史区改为「全量换行显示」——b47 的
+    /// 「≤8 条自然高度 / >8 条包 ScrollView 固定高 160」截断分支删除，
+    /// 历史条目无论多少一律全量换行显示（chip 流式排布自增高，不截断、
+    /// 不出现内嵌滚动、不占空白）。
     func testHistorySectionScrollsAllEntries() {
         let src = Self.loadSource("TingYou/UI/Discover/DiscoverScreen.swift")
         // 提取 historySection 函数段（从声明到下一个 private func）
@@ -108,14 +110,18 @@ final class Build44FeedbackTests: XCTestCase {
             return
         }
         let section = String(src[start.lowerBound..<rest.lowerBound])
-        // build 47 · 布局返修：历史区高度自适应——≤8 条直接渲染（自然高度，
-        // 1 条只占一行高），>8 条包 ScrollView 固定高 160。b44~b46 的
-        // ScrollView + frame(maxHeight:) 形态被证伪：ScrollView 纵向贪婪，
-        // 内容再少也占满 160pt——「最近搜索与书库之间空白过大」的真根因。
-        XCTAssertTrue(section.contains("history.count<=8"), "历史区必须按条数分流：≤8 条自然高度（build 47 空白过大返修核心）")
-        XCTAssertTrue(section.contains("ScrollView{historyList}"), ">8 条必须包 ScrollView 可滚动看全部记录")
-        XCTAssertTrue(section.contains("frame(height:160)"), "滚动分支必须有固定高度上限（防历史过多挤压书库列表）")
-        XCTAssertFalse(section.contains("maxHeight:"), "maxHeight 贪婪形态不得回归（ScrollView 纵向占满上限，少历史时撑空白）")
+        // build 48 · 需求 1：三个截断形态必须全部消失
+        XCTAssertFalse(section.contains("history.count<=8"),
+                       "历史区不得再按条数分流（build 48 需求 1：全量显示）")
+        XCTAssertFalse(section.contains("ScrollView{historyList}"),
+                       "历史区不得再包内嵌 ScrollView（内嵌滚动 + 限高截断）")
+        XCTAssertFalse(section.contains("frame(height:160)"),
+                       "历史区不得再固定 160pt 限高（build 48 需求 1：全量换行显示）")
+        XCTAssertFalse(section.contains("maxHeight:"),
+                       "maxHeight 贪婪形态不得回归（内容再少也占满上限，撑出空白）")
+        // historyList 直挂（无截断分支）
+        XCTAssertTrue(section.contains("historyList"),
+                      "historyList 必须直挂于历史区（无按条数分流分支）")
         // build 45 · CI 第一轮（反馈 2）：删除 b44 的两条对立断言（不得
         // lineLimit(1) / 不得 fixedSize）——b44 换行方案已被竖排回归证伪，
         // b45 回归 lineLimit(1) + 整体 fixedSize 横排形态，权威守卫在

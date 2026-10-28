@@ -79,25 +79,27 @@ final class DiscoverNavigationUITests: XCTestCase {
         XCTAssertTrue(keyboardGone(app, within: 2), "导航发生后键盘未收起")
     }
 
-    /// 用例 C（空白收焦）：点搜索框弹键盘 → 点分类折叠面板标题行
-    /// （List 行之外的非交互区域，build 43 收焦挂点之一）→ 断言键盘收起。
-    /// build 42 CI 失败（25.3s）证实外层容器手势覆盖空洞；build 43 手势
-    /// 改挂具体小视图后应转绿。
+    /// 用例 C（空白收焦）：点搜索框弹键盘 → 点分类标签栏里的分类标签
+    /// （List 行之外的非交互区域）→ 断言键盘收起。
+    /// build 48 · 需求 2：原「分类：推荐」折叠面板标题行已删，分类改为常驻
+    /// 横向标签栏——点击目标同步改为标签栏内的分类标签（默认源首项「推荐」）。
+    /// build 45 起收焦统一走 window 级 recognizer（全局兜底），本用例仍是
+    /// 「非 List 区域点击应收键盘」的真机对齐判据。
     func testC_blankAreaTapDismissesKeyboard() {
         let app = XCUIApplication()
         _ = launchAndDiscoverRow(app)
-        // 前置：分类折叠行应已出现（本轮点击目标即该行——收焦挂点）
-        let categoryLabel = app.staticTexts["分类：推荐"]
-        XCTAssertTrue(categoryLabel.waitForExistence(timeout: 3),
-                      "分类行未出现——发现页结构与预期不符")
+        // 前置：常驻分类标签栏应已出现（本轮点击目标即其中一项）
+        let categoryTag = app.buttons["推荐"]
+        XCTAssertTrue(categoryTag.waitForExistence(timeout: 3),
+                      "分类标签未出现——发现页结构与预期不符")
         let field = searchField(app)
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3),
                       "点击搜索框后键盘未弹起——用例前置失败")
-        // 点分类行（非 List 行、非键盘区域）：simultaneous 收焦挂点应触发
-        categoryLabel.tap()
+        // 点分类标签（非 List 行、非键盘区域）：全局收焦应触发
+        categoryTag.tap()
         XCTAssertTrue(keyboardGone(app, within: 2),
-                      "用例 C 失败：点分类行区域键盘不收——收焦挂点未生效")
+                      "用例 C 失败：点分类标签键盘不收——收焦未生效")
     }
 
     /// 用例 D（视图树 triage）：单击行后等 5 秒，断言 AlbumScreen 出现；
@@ -178,5 +180,29 @@ final class DiscoverNavigationUITests: XCTestCase {
         coord.tap()
         XCTAssertTrue(keyboardGone(app, within: 2),
                       "用例 G 失败：点搜索栏上方空白键盘不收——搜索栏容器收焦挂点未覆盖 padding 留白区")
+    }
+
+    /// 用例 H（build 48 · 需求 1 回归守卫）：点搜索框弹键盘（历史区因聚焦
+    /// 出现，书库列表整体下移）→ 不输入任何文字 → 直接点书行 → 断言推入
+    /// AlbumScreen。
+    /// 这条路径是 build 48「历史区点击才显示」引入的新风险面：点行失焦 →
+    /// 历史区消失 → 列表回位（布局位移）与行激活同时发生。b41 的真机回归
+    /// （点书无反应）根因正是「焦点翻转引发全 body 重渲染、丢弃进行中的行
+    /// 激活」——b48 把焦点读写隔离进叶子视图后，本用例是这条路径的真实
+    /// 点击判据（聚焦态下点书必须照常导航）。
+    func testH_focusSearchThenTapRowNavigates() {
+        let app = XCUIApplication()
+        let row = launchAndDiscoverRow(app)
+        let field = searchField(app)
+        field.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3),
+                      "点击搜索框后键盘未弹起——用例前置失败")
+        // 历史区出现会把书库列表整体下移——不可点时上滑一次保证命中
+        if !row.isHittable {
+            app.swipeUp()
+        }
+        row.tap()
+        XCTAssertTrue(albumTitleElement(app).waitForExistence(timeout: 3),
+                      "用例 H 失败：聚焦态下点书未推入 AlbumScreen（build 48 需求 1：失焦隐藏历史区的布局位移不得打断行导航激活）")
     }
 }
