@@ -206,7 +206,7 @@ final class Build45FeedbackTests: XCTestCase {
         // 导入书列表）整体删除，「悦听（已下线）」书架标注随列表一并移除——存量悦听书
         // 改从历史/收藏恢复播放，播放侧人话提示仍闭环（见上断言）。
         let shelf = Self.loadSource("TingYou/UI/Shelf/ShelfScreen.swift")
-        XCTAssertFalse(shelf.contains("ImportedBookRow"), "导入书行视图应随导入 tab 一并删除（build 48 需求 3）")
-        XCTAssertFalse(shelf.contains("ImportedBookGridItem"), "导入书网格视图应随导入 tab 一并删除（build 48 需求 3）")
+        XCTAssertFalse(shelf.contains("struct ImportedBookRow"), "导入书行视图应随导入 tab 一并删除（build 48 需求 3；注释提及不算残留）")
+        XCTAssertFalse(shelf.contains("struct ImportedBookGridItem"), "导入书网格视图应随导入 tab 一并删除（build 48 需求 3；注释提及不算残留）")
     }
 }
