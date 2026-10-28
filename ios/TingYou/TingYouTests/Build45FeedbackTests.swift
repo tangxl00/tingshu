@@ -202,7 +202,11 @@ final class Build45FeedbackTests: XCTestCase {
         let pm = Self.loadSource("TingYou/Playback/PlaybackManager.swift")
         XCTAssertTrue(pm.contains(#"source == "ytysxs""#), "describePlaybackError 必须识别存量悦听书")
         XCTAssertTrue(pm.contains("悦听有声书源已下线"), "存量悦听书必须给人话失效提示（换源收听）")
+        // build 48 · 需求 3：书架「导入」tab（含 ImportedBookRow / ImportedBookGridItem
+        // 导入书列表）整体删除，「悦听（已下线）」书架标注随列表一并移除——存量悦听书
+        // 改从历史/收藏恢复播放，播放侧人话提示仍闭环（见上断言）。
         let shelf = Self.loadSource("TingYou/UI/Shelf/ShelfScreen.swift")
-        XCTAssertTrue(shelf.contains("悦听（已下线）"), "书架悦听来源必须标注已下线（不删数据）")
+        XCTAssertFalse(shelf.contains("ImportedBookRow"), "导入书行视图应随导入 tab 一并删除（build 48 需求 3）")
+        XCTAssertFalse(shelf.contains("ImportedBookGridItem"), "导入书网格视图应随导入 tab 一并删除（build 48 需求 3）")
     }
 }
