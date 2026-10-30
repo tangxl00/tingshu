@@ -15,6 +15,11 @@ struct SyncCloudError: Error, LocalizedError {
     let code: Int
     let message: String
 
+    /// build 52 · 客户端内部码（非服务端契约码）：续期**成功**之后访问令牌仍被
+    /// 服务端拒绝。必须与 40003 分开——40003 的语义是「访问令牌过期、可自动
+    /// 续期」（进行中），复用 40003 会把终局失败伪装成进行中（#140 放行条件 1）。
+    static let renewalRejectedCode = 40004
+
     var errorDescription: String? {
         switch code {
         case 10001: return "验证码无效，请检查后重输"
@@ -23,7 +28,11 @@ struct SyncCloudError: Error, LocalizedError {
         case 10004: return "绑定设备数量超限（20 台）"
         case 42901: return "云端请求过于频繁（60 次/分钟），请稍后再试"
         case 40002: return "登录状态已失效，请重新登录"
-        case 40003: return "登录状态已过期，正在自动续期"
+        // build 52 · 条件 1：40003 只在「访问令牌过期、续期动作尚未完成」时产生。
+        // 文案不得再写「正在自动续期」——那条文案会被 async 失败路径复用，
+        // 让终局失败看起来像进行中（#140 实测：红字挂 3.5h 不动）。
+        case 40003: return "登录状态已过期，自动续期未成功"
+        case 40004: return "登录状态异常：续期后仍被拒绝，请重新登录"
         case 50001: return "云端服务内部错误：若是首次登录，云端初始化建表可能超过 3 秒限制，请稍等后重试"
         case 50002: return "云端资源不存在"
         default: return "云端错误(\(code))：\(message)"

@@ -132,9 +132,18 @@ final class Build50FeatureTests: XCTestCase {
         XCTAssertEqual(SyncCloudError(code: 40002, message: "").errorDescription,
                        "登录状态已失效，请重新登录",
                        "40002 = 未登录/刷新令牌无效 → 引导重新登录")
+        // build 52 · 条件 1（#140 P1）：40003 文案不得再写「正在自动续期」——
+        // 原实现把续期失败重包成 40003，那句「进行中」文案就把终局失败伪装成
+        // 进行中（真机红字挂 3.5h 不动）。现 40003 = 令牌过期且续期未成功，
+        // 新增 40004 = 续期成功仍被拒（终局，须重新登录），两者文案必须可区分。
         XCTAssertEqual(SyncCloudError(code: 40003, message: "").errorDescription,
-                       "登录状态已过期，正在自动续期",
-                       "40003 = 访问令牌过期 → 自动续期口径")
+                       "登录状态已过期，自动续期未成功",
+                       "40003 = 访问令牌过期且续期未完成 → 不得再写「正在续期」")
+        XCTAssertEqual(SyncCloudError(code: SyncCloudError.renewalRejectedCode, message: "").errorDescription,
+                       "登录状态异常：续期后仍被拒绝，请重新登录",
+                       "40004 = 续期成功仍被拒 → 终局，必须引导重新登录")
+        XCTAssertEqual(SyncCloudError.renewalRejectedCode, 40004,
+                       "续期后仍被拒的内部码必须为 40004（不与 40003 复用）")
         XCTAssertEqual(SyncCloudError(code: 50002, message: "").errorDescription,
                        "云端资源不存在",
                        "50002 = 资源不存在")
@@ -234,7 +243,7 @@ final class Build50FeatureTests: XCTestCase {
     /// Build29RegressionTests 守卫；此处复核 Info.plist）。
     func testBuild50Version() {
         let plist = Self.loadSource("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>51</string>"),
+        XCTAssertTrue(plist.contains("<string>52</string>"),
                       "Info.plist CFBundleVersion 必须为 51")
         XCTAssertTrue(plist.contains("<string>1.4.4</string>"),
                       "Info.plist CFBundleShortVersionString 维持 1.4.4")

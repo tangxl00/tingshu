@@ -1329,8 +1329,16 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         let ns = error as NSError
         guard ns.domain == NSURLErrorDomain else { return false }
         switch ns.code {
-        case -1200 ... -1213,   // TLS / 证书族（-1200 secureConnectionFailed 起）
-             -9800 ... -9808,   // SecureTransport 遗留 TLS 族
+        // build 52（#140 复检外新发现，P0）：这两段原先写成 `-1200 ... -1213`
+        // 与 `-9800 ... -9808`——下界大于上界，ClosedRange 构造即触发
+        // 「Range requires lowerBound <= upperBound」运行期 trap。
+        // 后果有二：①真机 B站播放命中任一网络错误时进程直接崩（不是走镜像重试）；
+        // ②build 49 的 testMirrorRetryableNetworkErrorClassification 一调用就
+        // 0.000s 崩溃且无断言消息——这正是「三次 attempt 本用例 0.000s 崩溃」的真因，
+        // 与用例体无关，因此被误判成「用例体问题」而整体注释掉。
+        // 数值顺序：码值越负越小，区间必须写成 `小 ... 大`。
+        case -1213 ... -1200,   // TLS / 证书族（-1200 secureConnectionFailed … -1213）
+             -9808 ... -9800,   // SecureTransport 遗留 TLS 族
              -1001,             // timedOut 连接超时
              -1003,             // cannotFindHost
              -1004,             // cannotConnectToHost

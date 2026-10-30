@@ -147,8 +147,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "51",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 51（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "52",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 52（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40

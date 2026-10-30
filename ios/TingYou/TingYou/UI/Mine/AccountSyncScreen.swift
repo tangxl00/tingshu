@@ -25,6 +25,18 @@ struct AccountSyncScreen: View {
             }
         }
         .navigationTitle("账号与同步")
+        // build 52 · 条件 2（#140 P1）：进页自动同步 + 按 accessExpireAtMs 提前续期。
+        // 原实现本页既无 syncNow 调用也无任何定时器，叠加「续期失败无重试」，
+        // 真机待补传 1 条恒挂 3.5h 不自愈。验收口径：token 过期 + outbox 有待传
+        // 条目时，不点任何按钮，待补传数自动清零。
+        .task {
+            guard let engine = container?.syncEngine else { return }
+            await engine.onSyncPageEnter()
+        }
+        .onDisappear {
+            // 离开页面停掉退避定时器（后台空转无意义；回前台由 didBecomeActive 兜底）
+            container?.syncEngine.stopRetry()
+        }
     }
 
     // MARK: - 登录区
@@ -83,8 +95,10 @@ struct AccountSyncScreen: View {
                 HStack {
                     Text("上次同步")
                     Spacer()
-                    Text(engine.lastSyncAtMs > 0 ? Self.timeText(engine.lastSyncAtMs) : "尚未同步")
-                        .foregroundStyle(.secondary)
+                    // build 52 · 条件 3（#140）：push 部分失败时 lastSyncAtMs 已不再刷新，
+                    // 但界面上还要能看出「未完成」——否则「上次同步 昨天 20:13」会被误读成成功。
+                    Text(syncStatusText(engine))
+                        .foregroundStyle(syncStatusColor(engine))
                 }
                 if engine.pendingOps > 0 {
                     HStack {
@@ -102,11 +116,10 @@ struct AccountSyncScreen: View {
                             .controlSize(.small)
                     }
                 }
-                if let msg = engine.lastMessage {
-                    Text(msg)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
+                // build 52 · 条件 1（#140 P1）：续期状态必须可区分——
+                // 瞬态（正在续期 / 稍后自动重试）用次要色 + 进度条，
+                // 终局（需重新登录）用红色 + 明确动作，不再用一句「正在自动续期」混淆两者。
+                renewalRow(engine)
                 Button {
                     Task { await engine.syncNow() }
                 } label: {
@@ -116,7 +129,7 @@ struct AccountSyncScreen: View {
             } header: {
                 Text("同步")
             } footer: {
-                Text("断网时的变更自动在本机排队，联网后自动补传。")
+                Text("断网时的变更自动在本机排队，联网后自动补传；同步失败会按 30 秒 / 2 分钟 / 10 分钟自动重试。")
             }
             Section {
                 Button(role: .destructive) {
@@ -134,6 +147,68 @@ struct AccountSyncScreen: View {
     }
 
     // MARK: - 动作
+
+    // MARK: - 同步状态呈现（build 52 · 条件 1 / 条件 3）
+
+    /// 同步状态文案。**只有在真正全部成功之后才显示时间**；
+    /// 一旦续期未完成或仍有未确认变更，优先显示「未完成」，避免「上次同步」被误读成成功。
+    private func syncStatusText(_ engine: SyncEngine) -> String {
+        if engine.renewalState.isTerminal { return "未完成 · 需重新登录" }
+        if engine.renewalState.isRetrying { return "未完成 · 等待重试" }
+        if engine.syncing { return "同步中…" }
+        guard engine.lastSyncAtMs > 0 else { return "尚未同步" }
+        return Self.timeText(engine.lastSyncAtMs)
+    }
+
+    private func syncStatusColor(_ engine: SyncEngine) -> Color {
+        if engine.renewalState.isTerminal { return .red }
+        if engine.renewalState.isRetrying { return .orange }
+        return engine.lastSyncAtMs > 0 ? Color.secondary : Color.orange
+    }
+
+    /// 续期状态行。瞬态（进行中 / 稍后重试）与终局（需重新登录）必须视觉可分：
+    /// - `.refreshing`     → 次要色 + 进度条 +「正在自动续期…」（真的在进行中）
+    /// - `.retryScheduled` → 橙色 +「同步未完成，稍后自动重试」（可自动恢复，但不是成功态）
+    /// - `.terminal`       → **红色** +「续期失败，请重新登录」（终局，点「立即同步」也不会自愈）
+    /// - `.idle`           → 不显示
+    @ViewBuilder
+    private func renewalRow(_ engine: SyncEngine) -> some View {
+        switch engine.renewalState {
+        case .idle:
+            EmptyView()
+        case .refreshing:
+            HStack(alignment: .top) {
+                Text(SyncEngine.refreshingHeadline)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                ProgressView()
+                    .controlSize(.small)
+            }
+        case .retryScheduled(let text):
+            VStack(alignment: .leading, spacing: 2) {
+                Text(SyncEngine.retryHeadline)
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                if !text.isEmpty {
+                    Text(text)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .terminal(let text):
+            VStack(alignment: .leading, spacing: 2) {
+                Text(SyncEngine.terminalHeadline)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                if !text.isEmpty {
+                    Text(text)
+                        .font(.caption2)
+                        .foregroundStyle(.red.opacity(0.8))
+                }
+            }
+        }
+    }
 
     private func sendCode() {
         guard let engine = container?.syncEngine else { return }

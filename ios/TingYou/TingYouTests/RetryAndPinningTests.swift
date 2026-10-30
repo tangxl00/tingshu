@@ -309,6 +309,20 @@ final class RetryStubURLProtocol: URLProtocol {
     nonisolated(unsafe) static var errorAlways: Error?
     /// build 22 r2：请求计数回调（每次 startLoading 必调，含注入错误的请求）
     nonisolated(unsafe) static var callCounter: (() -> Void)?
+    /// build 52 · #140 条件 3：按请求**定向**注入传输层错误（`errorOnce` 只能命中
+    /// 「下一条任意请求」，无法表达「某个端点失败、其它端点正常」；而 syncNow 的
+    /// 真实场景正是 push 回 40003、refresh 遇网络瞬态、pull 正常）。
+    /// 闭包返回非 nil 即让该请求失败；返回 nil 则继续走 handler。
+    nonisolated(unsafe) static var errorMatcher: ((URLRequest) -> Error?)?
+
+    /// build 52 · 四条静态槽一次性清态（原各用例手工逐个置 nil，漏一个就跨用例串扰）
+    static func reset() {
+        handler = nil
+        errorOnce = nil
+        errorAlways = nil
+        callCounter = nil
+        errorMatcher = nil
+    }
 
     static func makeSession() -> URLSession {
         let cfg = URLSessionConfiguration.ephemeral
@@ -327,6 +341,10 @@ final class RetryStubURLProtocol: URLProtocol {
             return
         }
         if let err = Self.errorAlways {
+            client?.urlProtocol(self, didFailWithError: err)
+            return
+        }
+        if let err = Self.errorMatcher?(request) {
             client?.urlProtocol(self, didFailWithError: err)
             return
         }
