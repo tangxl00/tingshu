@@ -1,6 +1,6 @@
 import Foundation
 
-/// 重试策略（P0-5）：502/503/504 瞬时故障退避重试，语义与安卓 MsrcHttp/MekuiHttp 对齐。
+/// 重试策略（P0-5）：502/503/504 瞬时故障退避重试，语义与安卓 MsrcHttp 对齐。
 enum HttpRetryPolicy {
     static let retryableStatuses: Set<Int> = [502, 503, 504]
 
@@ -10,7 +10,8 @@ enum HttpRetryPolicy {
     }
 }
 
-/// 重试配置：安卓基线 MsrcHttp=1 次/1.5s；MekuiHttp=2 次/[2.5s, 8s]。
+/// 重试配置：安卓基线 MsrcHttp=1 次/1.5s。
+/// build 51（音源残留）：MekuiHttp（2 次/[2.5s, 8s]）随书音FM 下架一并删除。
 struct RetryConfig: Sendable {
     let maxRetries: Int
     let backoffSecs: [TimeInterval]
@@ -26,7 +27,6 @@ struct RetryConfig: Sendable {
     var connectionMaxRetries: Int = 2
 
     static let msrc = RetryConfig(maxRetries: 1, backoffSecs: [1.5])
-    static let mekui = RetryConfig(maxRetries: 2, backoffSecs: [2.5, 8.0])
     static let standard = RetryConfig(maxRetries: 1, backoffSecs: [1.5])
 
     /// build 22 r2：连接级错误集合（诊断结论：真机到 ting08 服务器（182.237.1.188）
@@ -107,7 +107,7 @@ actor APIClient {
 
     // MARK: - 带重试的执行核心（P0-5：502/503/504 按策略退避重试）
 
-    /// 统一执行入口（所有 fetchHTML / postFormForString / fetchJSON / fetchData 唯一出口）。
+    /// 统一执行入口（所有 fetchHTML / postFormForString / fetchData 唯一出口）。
     /// - 状态码重试：可重试状态码（502/503/504）且还在 config 预算内 → 退避后重试；
     ///   其余非 200 直接失败。状态码判定必须在 do-catch 之外：非 200 抛出的 URLError 若
     ///   落在 catch 里会被当成传输错误重试 → 404 也被重发（testExecuteDoesNotRetryOn404 回归）。
@@ -118,7 +118,7 @@ actor APIClient {
     func execute(_ request: URLRequest, retry: RetryConfig = .standard) async throws -> (Data, HTTPURLResponse) {
         var lastError: Error = URLError(.badServerResponse)
         // 总尝试次数取状态码重试与连接重试预算的较大者：连接级错误固定最多 3 次尝试，
-        // 不受调用方 config 的状态码预算（msrc=1 / mekui=2）限制。
+        // 不受调用方 config 的状态码预算（msrc=1）限制。
         let attempts = max(retry.maxRetries, retry.connectionMaxRetries) + 1
         for attempt in 0..<attempts {
             let data: Data
@@ -261,16 +261,6 @@ actor APIClient {
         req.httpBody = formBody(fields)
         let (data, http) = try await execute(req, retry: retry)
         return Self.decodeBody(data, contentType: http.value(forHTTPHeaderField: "Content-Type"))
-    }
-
-    /// JSON GET（mekui ecmsapi 用：非 200 / 非 JSON 都抛错）。
-    func fetchJSON(_ urlString: String, headers: [String: String] = [:], retry: RetryConfig = .mekui) async throws -> [String: Any] {
-        let body = try await fetchHTML(urlString, headers: headers, retry: retry)
-        guard let data = body.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            throw URLError(.cannotParseResponse)
-        }
-        return obj
     }
 
     func fetchData(_ urlString: String) async throws -> Data {

@@ -22,6 +22,10 @@ final class SyncEngine {
     private(set) var lastSyncAtMs: Int64 = 0
     private(set) var pendingOps = 0
     private(set) var lastMessage: String?
+    /// build 51 · P1-2：本轮 push 中被服务端判为 failed（非 success/duplicate）的 op 数
+    private(set) var lastPushFailedCount = 0
+    /// build 51 · P1-3：本轮 push 未能确认处理（缺 client_op_id / 未回 results）的 op 数
+    private(set) var lastPushUnhandledCount = 0
 
     private let client: SyncCloudClient
     private let store: SyncLocalStore
@@ -144,7 +148,12 @@ final class SyncEngine {
         defer { syncing = false; pendingOps = store.outboxCount }
         do {
             try await pushOutbox()
-            try await pullAndMerge()
+            let merged = try await pullAndMerge()
+            // build 51 · P1-3：落库失败时 merge 已写入 lastMessage，
+            // 这里不能再把 lastMessage 清成 nil、也不能记账「同步成功」
+            if !merged {
+                return
+            }
             if store.outboxCount > 0 {
                 try await pushOutbox()
             }
@@ -203,39 +212,76 @@ final class SyncEngine {
             let data = try await withAuth { atk in
                 try await client.push(accessToken: atk, ops: chunk)
             }
-            // 只有拿到结果的 op 才算处理完（服务端 2s deadline 内未完成的留队列重推，
-            // op_dedup 7 天幂等保证重放不重复计数）
-            let done = (data.results ?? []).compactMap(\.clientOpId)
-            guard !done.isEmpty else { return }
-            store.removeOutbox(opIds: done)
+            // build 51 · P1-2（质检必修）：必须消费 results[].status——
+            // 原实现只取 clientOpId 当「已处理」，服务端返回 status=failed 的 op
+            // 也被移出 outbox，变更静默丢失（无重推、无提示）。
+            // 现只移除 success / duplicate（duplicate = 7 天幂等重放，等价成功）；
+            // failed / 未知 status 一律留队，并计数告警。
+            let items = data.results ?? []
+            var handled: [String] = []
+            var failed = 0
+            for item in items {
+                guard let id = item.clientOpId, !id.isEmpty else { continue }
+                switch (item.status ?? "").lowercased() {
+                case "success", "duplicate", "ok":
+                    handled.append(id)
+                default:
+                    failed += 1
+                }
+            }
+            lastPushFailedCount = failed
+            if failed > 0 {
+                print("⚠️ sync push: \(failed)/\(items.count) 条 op 服务端 status 非成功，保留在 outbox 等待重推")
+            }
+            guard !handled.isEmpty else {
+                // build 51 · P1-3：原来这里直接 return——服务端一条 id 都没回时
+                // （缺 id / results 为空）队列永远滞留，且外层看不出来。
+                // 现记录未处理条数并跳出本轮（保留队列，等下次 syncNow 重推）。
+                lastPushUnhandledCount = chunk.count
+                if failed == 0 {
+                    print("⚠️ sync push: 本轮 \(chunk.count) 条 op 未返回可识别 client_op_id，整体留队重推")
+                }
+                return
+            }
+            lastPushUnhandledCount = chunk.count - handled.count
+            store.removeOutbox(opIds: handled)
             if let seq = data.serverSeq, seq > store.lastSeq {
                 store.lastSeq = seq
             }
             if store.outboxCount == 0 { return }
+            // 有 op 被判 failed：本轮到此为止（留下次 syncNow 重推），
+            // 避免在 10 轮循环里对同一批失败 op 连打 10 次。
+            if failed > 0 { return }
         }
     }
 
     // MARK: - pull（增量循环到追平）
 
-    private func pullAndMerge() async throws {
+    /// 返回是否落库成功（false = merge save 失败，本轮游标不推进、等下次重试）
+    private func pullAndMerge() async throws -> Bool {
         for _ in 0..<Self.pullMaxRounds {
             let since = store.lastSeq
             let data = try await withAuth { atk in
                 try await client.pull(accessToken: atk, sinceSeq: since)
             }
-            merge(data)
+            let merged = merge(data)
+            // 落库失败不得推进游标（否则 next since 越过这批变更，数据永久丢）
+            guard merged else { return false }
             if data.serverSeq > since {
                 store.lastSeq = data.serverSeq
             }
             let hasMore = !((data.favorites ?? []).isEmpty && (data.progress ?? []).isEmpty)
-            if !hasMore || data.serverSeq <= since { return }
+            if !hasMore || data.serverSeq <= since { return true }
         }
+        return true
     }
 
     // MARK: - LWW 合并到 SwiftData
 
-    private func merge(_ data: SyncPullData) {
-        guard let ctx = modelContext else { return }
+    /// 返回是否成功落库（false = save 失败，调用方不得推进 server_seq 游标）
+    @discardableResult
+    private func merge(_ data: SyncPullData) -> Bool {
+        guard let ctx = modelContext else { return true }
         let now = Int64(Date().timeIntervalSince1970 * 1000)
 
         for rec in data.favorites ?? [] {
@@ -281,7 +327,12 @@ final class SyncEngine {
                 if (rec.updatedAt ?? 0) > local.updatedAt {
                     local.albumTitle = rec.title ?? local.albumTitle
                     local.coverUrl = rec.coverUrl ?? local.coverUrl
-                    local.chapterIdx = rec.chapterIdx ?? local.chapterIdx
+                    // build 51 · P0-1（质检必修）：云端 chapter_idx 是 0 基口径，
+                    // 本地 HistoryModel.chapterIdx 按各源基底存（tingyou 1 基 / bili·易听书 0 基）。
+                    // 直接赋值会让 tingyou 的 PC→iOS 续播稳定早一章（见 ChapterIdxNormalization 注释）。
+                    if let ci = rec.chapterIdx {
+                        local.chapterIdx = ChapterIdxNormalization.toLocal(src: src, cloudIdx: ci)
+                    }
                     local.positionMs = max(0, rec.positionMs ?? local.positionMs)
                     local.durationMs = max(0, rec.durationMs ?? local.durationMs)
                     local.detailPath = ref.localDetailPath
@@ -291,7 +342,9 @@ final class SyncEngine {
                 ctx.insert(HistoryModel(src: src, albumId: albumId,
                                         albumTitle: rec.title ?? "",
                                         coverUrl: rec.coverUrl,
-                                        chapterIdx: rec.chapterIdx ?? 0,
+                                        // build 51 · P0-1：云端 0 基 → 本地源基底
+                                        chapterIdx: ChapterIdxNormalization.toLocal(
+                                            src: src, cloudIdx: rec.chapterIdx ?? 0),
                                         chapterTitle: "",
                                         positionMs: max(0, rec.positionMs ?? 0),
                                         durationMs: max(0, rec.durationMs ?? 0),
@@ -299,13 +352,23 @@ final class SyncEngine {
                                         updatedAt: rec.updatedAt ?? now))
             }
         }
-        try? ctx.save()
+        // build 51 · P1-3（质检必修）：原 `try? ctx.save()` 把落库失败吞成 nil，
+        // 合并结果没写进 SwiftData 却照常推进 lastSeq → 增量游标越过、数据永久丢。
+        // 仓库约定「落库失败不允许静默」：这里必须记录（再抛给 pullAndMerge 终止本轮游标推进）。
+        do {
+            try ctx.save()
+        } catch {
+            print("❌ sync merge save failed: \(error)")
+            lastMessage = "本地数据写入失败，本轮同步已中止，下次会自动重试"
+            return false
+        }
 
         // 快照模式：本地独有数据（云端没有的收藏/进度）回传云端——首登上传本地存量
         if data.snapshotRequired == true {
             uploadLocalOnly(cloudKeys: Set((data.favorites ?? []).map(\.bookKey))
                             .union(Set((data.progress ?? []).map(\.bookKey))))
         }
+        return true
     }
 
     /// 本地 bookKey 口径（与服务端 canonicalBookKey 一致：bili:bvid / src:bookId）
@@ -331,7 +394,10 @@ final class SyncEngine {
             let key = Self.localBookKey(src: h.src, albumId: h.albumId, detailPath: h.detailPath)
             guard !cloudKeys.contains(key) else { continue }
             store.enqueueProgress(src: h.src, albumId: h.albumId, title: h.albumTitle,
-                                  coverUrl: h.coverUrl, chapterIdx: h.chapterIdx,
+                                  coverUrl: h.coverUrl,
+                                  // build 51 · P0-1：本地源基底 → 云端 0 基
+                                  chapterIdx: ChapterIdxNormalization.toCloud(
+                                      src: h.src, localIndex: h.chapterIdx),
                                   positionMs: h.positionMs, durationMs: h.durationMs,
                                   detailPath: h.detailPath)
         }

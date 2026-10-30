@@ -46,15 +46,31 @@ final class Build29RegressionTests: XCTestCase {
 
     // MARK: - R6-R7 · 旧白名单未丢
 
-    func testLegacyPinningDomainsStillAllowed() {
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("m.ting15.com"), "ting15 旧白名单不得丢失")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.ting08.com"), "ting08 旧白名单不得丢失")
+    /// build 51（质检必修 · 音源残留）：本用例此前断言「已下架源的旧白名单不得丢失」，
+    /// 与「收敛白名单」直接冲突——已下架站点没有任何在役请求，留着精确域等于给它们
+    /// 保留出站许可。现反转为「必须已摘除」，并补在役三源 + 云同步的放行断言（防收敛过头）。
+    func testDelistedSourcePinningDomainsRejected() {
+        // 已下架源（听十五 / 听吧 / 书音FM 及其图床音频域 / 书音FM OSS）——7 条精确域必须摘除
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("m.ting15.com"), "听十五已下架，pin 白名单必须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.ting08.com"), "听吧已下架，pin 白名单必须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("m.mekui.com"), "书音FM 已下架，pin 白名单必须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("api.mekui.com"), "书音FM 已下架，pin 白名单必须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("api.aikeu.com"), "书音FM 图床已下架，pin 白名单必须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("mp3.aikeu.com"), "书音FM 音频域已下架，pin 白名单必须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("shuyinfm.oss-cn-hangzhou.aliyuncs.com"),
+                       "书音FM OSS 已下架，pin 白名单必须摘除")
         // build 45 · 反馈 3：悦听下架——pin 白名单域名同步摘除（不再需要证书锁定）
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.ytysxs.com"), "悦听已下架，域名应已从 pin 白名单摘除")
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("mp3.ytysxs.top"), "悦听音频域名应已从 pin 白名单摘除")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("m.mekui.com"), "书音FM 旧白名单不得丢失")
+        // 在役三源 + 云同步仍须放行（收敛不能过头）
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"), "听友FM 文件域仍在役")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("tingyou.fm"), "听友FM 旧白名单不得丢失")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("guoguo.org.cn"), "guoguo 旧白名单不得丢失")
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"), "易听书站必须放行")
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"), "易听书音频 CDN 必须放行")
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("imagev2.xmcdn.com"), "易听书封面域必须放行")
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("tingshu-d2gjera4688800c8e.service.tcloudbase.com"),
+                      "云同步域必须放行")
     }
 
     // MARK: - R8 · 导入书数据模型对既有源仍正常读写（meta 字段 lightweight migration）
@@ -113,7 +129,7 @@ final class Build29RegressionTests: XCTestCase {
     /// `ios/TingYou/project.yml`（测试文件在 TingYouTests/ 下，上溯两级即工程目录，
     /// 与 CI checkout 布局一致），逐行解析 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`
     /// 首个定义并断言精确值。版本号忘改或格式漂移即测试红（CI 兜底）。
-    /// v1.4.4：断言值随 build 37 同步升位（1.4.4 / 37）。
+    /// v1.4.4：断言值随之升位；build 51 返修升 CURRENT_PROJECT_VERSION → 51。
     func testMarketingVersionIs144() {
         // #filePath = …/ios/TingYou/TingYouTests/Build29RegressionTests.swift
         // 上溯两级：TingYouTests → TingYou（project.yml 所在，与 xcodegen 读取位置一致）
@@ -131,8 +147,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "50",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 50（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "51",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 51（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40

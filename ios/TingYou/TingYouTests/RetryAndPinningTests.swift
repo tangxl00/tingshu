@@ -53,16 +53,20 @@ final class RetryAndPinningTests: XCTestCase {
         XCTAssertEqual(RetryConfig.msrc.backoffSecs, [1.5])
     }
 
-    func testMekuiRetryConfigMatchesAndroidBaseline() {
-        XCTAssertEqual(RetryConfig.mekui.maxRetries, 2)
-        XCTAssertEqual(RetryConfig.mekui.backoffSecs, [2.5, 8.0])
-    }
-
+    /// build 51（音源残留）：书音FM 下架 → `RetryConfig.mekui` 删除，
+    /// 该用例由「mekui 基线」改为「退避阶梯钳制」通用语义断言（用多档自定义 config）。
     func testBackoffClampsToLastEntry() {
-        let cfg = RetryConfig.mekui
+        let cfg = RetryConfig(maxRetries: 2, backoffSecs: [2.5, 8.0])
         XCTAssertEqual(cfg.backoff(forAttempt: 0), 2.5)
         XCTAssertEqual(cfg.backoff(forAttempt: 1), 8.0)
         XCTAssertEqual(cfg.backoff(forAttempt: 5), 8.0)
+    }
+
+    /// build 51：下架源的专用重试配置不得残留（防「删适配器忘删配置」复燃）。
+    func testDelistedSourceRetryConfigRemoved() {
+        // 仅保留 msrc / standard 两档（mekui 随书音FM 适配器一并删除）
+        XCTAssertEqual(RetryConfig.msrc.maxRetries, 1)
+        XCTAssertEqual(RetryConfig.standard.maxRetries, 1)
     }
 
     func testBackoffEmptyDefaultsToOne() {
@@ -191,7 +195,6 @@ final class RetryAndPinningTests: XCTestCase {
         // 固定重试预算：2 次重试（共 3 次尝试），三种 config 一致
         XCTAssertEqual(RetryConfig.standard.connectionMaxRetries, 2)
         XCTAssertEqual(RetryConfig.msrc.connectionMaxRetries, 2)
-        XCTAssertEqual(RetryConfig.mekui.connectionMaxRetries, 2)
     }
 
     func testConnectionLostRetriesThenSucceeds() async throws {
@@ -266,20 +269,28 @@ final class RetryAndPinningTests: XCTestCase {
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("notkuwo.cn"))
     }
 
+    /// build 51（质检必修 · 音源残留）：断言由「旧精确域仍放行」反转为「已下架源精确域必须摘除」，
+    /// 并对在役精确域保留放行断言（收敛不能过头）。
     func testAllowlistExactDomains() {
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"))
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("m.ting15.com"))
-        // build 45 · 反馈 3：悦听音频域名已从 pin 白名单摘除（Build29 R6 同口径）
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("api.aikeu.com"))
-        // 精确域名的子域不在白名单内（仅 5 个后缀域支持子域）
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"), "听友FM 文件域仍在役")
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("imge.kugou.com"), "封面域仍在役")
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"), "易听书站必须放行")
+        // 已下架源（听十五 / 书音FM 及其图床音频域）必须摘除
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("m.ting15.com"), "听十五已下架")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("api.aikeu.com"), "书音FM 图床已下架")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("mp3.aikeu.com"), "书音FM 音频域已下架")
+        // 精确域名的子域不在白名单内（仅后缀域支持子域）
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("x.file.hgeuz.cn"))
-        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("sub.m.ting15.com"))
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("sub.www.yitingshu.com"))
     }
 
     func testAllowlistCaseInsensitive() {
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("API.TINGYOU.FM"))
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("WWW.TING08.COM"))
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("WWW.YITINGSHU.COM"))
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("AOD.COS.TX.XMCDN.COM"))
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("EVIL.TINGYOU.FM.EVIL.COM"))
+        // build 51：已下架源的大小写变体同样不得放行
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("WWW.TING08.COM"), "听吧已下架")
     }
 
     func testAllowlistRejectsUnknownHostsFailClosed() {

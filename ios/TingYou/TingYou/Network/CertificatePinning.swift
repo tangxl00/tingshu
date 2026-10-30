@@ -9,8 +9,8 @@ enum PinnedDomainAllowlist {
     static let suffixDomains: [String] = [
         "tingyou.fm",     // 听友 FM API 与封面域
         "tingyou8.vip",   // 听友 FM 运行时数据域（封面）
-        "guoguo.org.cn",  // 音频直链白名单后缀
-        "kuwo.cn",        // 书音FM 直链 302 跳转（音频+封面 img1-4）
+        "guoguo.org.cn",  // 音频直链白名单后缀（听友FM 音频域）
+        "kuwo.cn",        // 音频直链 302 跳转后缀（酷我 CDN，多源共用）
         "ctyun.cn",       // 天翼云 OBS 跳转目标（*.obs.ctyun.cn 各区域）
         "bilibili.com",   // B站 API / Web
         "b23.tv",         // B站短链
@@ -21,15 +21,12 @@ enum PinnedDomainAllowlist {
     ]
 
     /// includeSubdomains = false（精确域）
+    /// build 51（质检必修 · 音源残留）：已下架源的主机全部删除——原来 ting15（听十五）/
+    /// ting08 / mekui（书音FM）/ aikeu（书音FM 图床与音频域）/ shuyinfm OSS 五源，
+    /// 共 7 条精确域仍留在白名单里，等于给已下架站点保留出站许可。
+    /// 保留的只有当前在役三源（听友FM / B站 / 易听书）与云同步所需的精确域。
     static let exactDomains: Set<String> = [
         "file.hgeuz.cn",
-        "m.ting15.com",
-        "www.ting08.com",
-        "m.mekui.com",
-        "api.mekui.com",
-        "api.aikeu.com",
-        "mp3.aikeu.com",
-        "shuyinfm.oss-cn-hangzhou.aliyuncs.com",
         "imge.kugou.com",
         // build 50 · 易听书（对齐 PC v1.1.8 音源）：站 / 图床 / 音频 CDN
         "www.yitingshu.com",

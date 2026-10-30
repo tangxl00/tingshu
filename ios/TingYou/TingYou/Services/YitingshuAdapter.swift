@@ -329,15 +329,38 @@ final class YitingshuAdapter: @unchecked Sendable {
 
     // MARK: 搜索
 
+    /// build 51 · P1-1（质检必修）：易听书 live 探测单独 2s 上限。
+    /// 该源 live 搜索是「索引未命中时的补充尝试」，被 gate 拦截时站点会慢速返回
+    /// 3KB 验证码页；原实现走 APIClient 默认重试（15s×3 + 退避），一次探测就能吃掉
+    /// 聚合搜索的全部等待预算（CI testG 55.4s 失败的直接来源）。
+    /// 现探测超过 2s 即放弃本轮 live，直接回落本地索引（索引是设计内的主路径）。
+    static let liveSearchTimeout: Duration = .seconds(2)
+
     /// 搜索：优先站点 live（受 gate 开关约束），未命中或命中 gate 一律回落本地索引。
     /// 回落不报错——本地索引本身就是设计内的主路径（PC 端 useLocalIndex: true 同口径）。
     func search(keyword: String, limit: Int = 60) async -> [MsrcHtml.MsrcSearchItem] {
         if liveSearchUsable {
-            if let live = try? await liveSearch(keyword: keyword, limit: limit), !live.isEmpty {
+            if let live = await liveSearchBounded(keyword: keyword, limit: limit), !live.isEmpty {
                 return live
             }
         }
         return index.search(keyword, limit: limit)
+    }
+
+    /// live 探测的 2s 限时包装：先到即取，超时返回 nil（不改 liveSearchUsable，
+    /// 保持 fast-path 仍可能命中的语义——超时不等于命中 gate）。
+    private func liveSearchBounded(keyword: String, limit: Int) async -> [MsrcHtml.MsrcSearchItem]? {
+        await withCheckedContinuation { (cont: CheckedContinuation<[MsrcHtml.MsrcSearchItem]? , Never>) in
+            let once = YtsOneShot()
+            Task {
+                let items = try? await liveSearch(keyword: keyword, limit: limit)
+                if once.claim() { cont.resume(returning: items) }
+            }
+            Task {
+                try? await Task.sleep(for: Self.liveSearchTimeout)
+                if once.claim() { cont.resume(returning: nil) }
+            }
+        }
     }
 
     /// 站点 live 搜索（search.php）。命中验证码 gate 或解析为空 → 返回 nil 并关闭 live 开关。
@@ -443,5 +466,17 @@ final class YtsDetailCache: @unchecked Sendable {
             let old = order.removeFirst()
             map.removeValue(forKey: old)
         }
+    }
+}
+
+/// build 51 · P1-1：限时探测的一次性 resume 守卫（结果与会超时两条路径竞争）
+final class YtsOneShot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }

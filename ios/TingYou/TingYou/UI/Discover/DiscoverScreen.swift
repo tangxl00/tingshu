@@ -481,7 +481,11 @@ struct DiscoverScreen: View {
                 searchError = "没有可用的搜索源，请前往「我的→音源」启用至少一个"
                 return
             }
-            let outcome = await searcher.search(keyword: kw)
+            // build 51 · P1-1（质检必修）：增量回填——先到的源先上屏
+            let outcome = await searcher.search(keyword: kw) { partial in
+                searchResults = partial.albums
+                failedSources = partial.failedSourceNames
+            }
             searchResults = outcome.albums
             failedSources = outcome.failedSourceNames
             searchHasMore = false // 多源聚合首页后不再翻页（与旧行为一致）

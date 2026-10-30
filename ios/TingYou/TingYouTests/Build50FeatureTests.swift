@@ -230,12 +230,12 @@ final class Build50FeatureTests: XCTestCase {
 
     // MARK: - 版本
 
-    /// 版本守卫：build 50 升位双处一致（project.yml 两处由
+    /// 版本守卫：build 51 升位双处一致（project.yml 两处由
     /// Build29RegressionTests 守卫；此处复核 Info.plist）。
     func testBuild50Version() {
         let plist = Self.loadSource("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>50</string>"),
-                      "Info.plist CFBundleVersion 必须为 50")
+        XCTAssertTrue(plist.contains("<string>51</string>"),
+                      "Info.plist CFBundleVersion 必须为 51")
         XCTAssertTrue(plist.contains("<string>1.4.4</string>"),
                       "Info.plist CFBundleShortVersionString 维持 1.4.4")
     }

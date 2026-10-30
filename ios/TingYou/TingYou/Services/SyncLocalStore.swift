@@ -20,6 +20,9 @@ final class SyncLocalStore: @unchecked Sendable {
         static let outbox = "tingshu_sync_outbox"
         static let deviceId = "tingshu_sync_device_id"
         static let lastSyncAt = "tingshu_sync_last_at"
+        /// build 51 · P1-3：溢出淘汰记账键（原静默 removeFirst，无痕迹）
+        static let dropped = "tingshu_sync_outbox_dropped"
+        static let droppedDelete = "tingshu_sync_outbox_dropped_delete"
     }
 
     /// outbox 上限（契约服务端单次 500 / 客户端分片 100；900 = 9 个分片，
@@ -117,13 +120,61 @@ final class SyncLocalStore: @unchecked Sendable {
         }
         ops.append(op)
         if ops.count > Self.outboxCap {
-            ops.removeFirst(ops.count - Self.outboxCap)
+            // build 51 · P1-3：溢出淘汰必须优先保住 delete（墓碑）——删除一旦被挤掉，
+            // 云端永远收不到墓碑，条目在重新登录 / 新设备全量拉取后复活（P0-2 同源缺陷）。
+            // 淘汰顺序：先淘汰非 delete 的最旧项；仍超限才淘汰最旧的 delete（并告警计数）。
+            let overflow = ops.count - Self.outboxCap
+            var dropIds = Set<String>()
+            var remaining = overflow
+            for existing in ops where remaining > 0 {
+                guard existing.op != "delete" else { continue }
+                dropIds.insert(existing.clientOpId)
+                remaining -= 1
+            }
+            var deleteDropped = 0
+            if remaining > 0 {
+                for existing in ops where remaining > 0 {
+                    guard existing.op == "delete", !dropIds.contains(existing.clientOpId) else { continue }
+                    dropIds.insert(existing.clientOpId)
+                    remaining -= 1
+                    deleteDropped += 1
+                }
+            }
+            ops = ops.filter { !dropIds.contains($0.clientOpId) }
+            recordOverflowDrop(total: dropIds.count, deleteDropped: deleteDropped)
         }
         if let data = try? JSONEncoder().encode(ops) {
             defaults.set(data, forKey: Key.outbox)
         }
         lock.unlock()
         NotificationCenter.default.post(name: Self.outboxChangedNotification, object: nil)
+    }
+
+    /// 溢出淘汰计数（P1-3：静默丢改可见记账）。写入注入的 UserDefaults，便于验收与排障。
+    private func recordOverflowDrop(total: Int, deleteDropped: Int) {
+        guard total > 0 else { return }
+        let note = deleteDropped > 0
+            ? "（含 \(deleteDropped) 条 delete 墓碑：已无 upsert 可淘汰，属容量不足的极端场景）"
+            : ""
+        print("⚠️ outbox overflow: 淘汰 \(total) 条 op\(note)")
+        let prev = defaults.integer(forKey: Key.dropped)
+        defaults.set(prev + total, forKey: Key.dropped)
+        if deleteDropped > 0 {
+            let prevDel = defaults.integer(forKey: Key.droppedDelete)
+            defaults.set(prevDel + deleteDropped, forKey: Key.droppedDelete)
+        }
+    }
+
+    /// 溢出淘汰累计计数（验收 / 排障用；0 表示从未发生容量淘汰）。
+    var droppedOpsTotal: Int {
+        lock.lock(); defer { lock.unlock() }
+        return defaults.integer(forKey: Key.dropped)
+    }
+
+    /// 其中 delete 墓碑被淘汰的累计条数（正常应为 0）。
+    var droppedDeleteTotal: Int {
+        lock.lock(); defer { lock.unlock() }
+        return defaults.integer(forKey: Key.droppedDelete)
     }
 
     /// 取前 n 条（分片冲刷用）
@@ -217,5 +268,20 @@ extension SyncLocalStore {
                 title: title, author: nil, coverUrl: coverUrl,
                 addedAt: nil, chapterIdx: chapterIdx, positionMs: positionMs,
                 durationMs: durationMs, updatedAt: now)))
+    }
+
+    /// 播放进度删除（墓碑）——build 51 · P0-2：书架滑删 / 清空历史必须走这里。
+    /// 云端契约：progress 实体同样支持 `op: "delete"`，服务端在记录不存在时也落墓碑
+    /// （防「本地删了、云端还在」→ 重新登录全量拉取后复活）。
+    /// payload 只需 album（bookKey 由服务端 canonicalBookKey 拼），其余字段留空。
+    func enqueueProgressDelete(src: String, albumId: Int64, detailPath: String?) {
+        guard isLoggedIn else { return }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        enqueue(SyncPushOp(
+            clientOpId: newOpId(), entity: "progress", op: "delete", clientAt: now,
+            payload: SyncOpPayload(
+                album: albumPayload(src: src, albumId: albumId, detailPath: detailPath),
+                title: nil, author: nil, coverUrl: nil,
+                addedAt: nil, chapterIdx: nil, positionMs: nil, durationMs: nil, updatedAt: nil)))
     }
 }

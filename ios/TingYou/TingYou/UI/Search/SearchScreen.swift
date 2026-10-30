@@ -179,7 +179,12 @@ struct SearchScreen: View {
             return
         }
 
-        let outcome = await searcher.search(keyword: kw)
+        // build 51 · P1-1（质检必修）：增量回填——每返回一个源就先上屏，
+        // 不再等全部源收齐（单源最坏 46.5s 的等待被 3s 护栏 + 逐源回填消除）
+        let outcome = await searcher.search(keyword: kw) { partial in
+            results = partial.albums
+            failedSources = partial.failedSourceNames
+        }
         results = outcome.albums
         failedSources = outcome.failedSourceNames
         isSearching = false

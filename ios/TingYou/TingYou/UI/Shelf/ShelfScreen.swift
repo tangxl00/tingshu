@@ -254,28 +254,49 @@ struct ShelfScreen: View {
         }
     }
 
+    /// build 51 · P0-2（质检 NO-GO 必修）：三条删除路径原为直写 SwiftData，
+    /// 绕过 outbox → 云端无墓碑 → 重新登录 / 新设备全量拉取后 merge 走 insert
+    /// 把条目原样复活（「清空历史」在云端永不生效）。现统一经 AlbumRepository
+    /// 出口：本地删库 + 墓碑 op 入队（favorite delete / progress delete）。
     private func deleteFavorites(at offsets: IndexSet) {
-        for idx in offsets {
-            modelContext.delete(favorites[idx])
+        let targets = offsets.compactMap { favorites.indices.contains($0) ? favorites[$0] : nil }
+        guard let repo = container?.albumRepository else {
+            // 无容器（预览 / 极端态）：退回本地删除，保证 UI 不卡住
+            for idx in offsets where favorites.indices.contains(idx) { modelContext.delete(favorites[idx]) }
+            do { try modelContext.save() } catch { print("deleteFavorites save failed: \(error)") }
+            return
         }
-        // build 20 自查：删除收藏的落库不允许静默吞错（与 P1-1 修法一致）
-        do { try modelContext.save() } catch { print("deleteFavorites save failed: \(error)") }
+        Task {
+            for f in targets {
+                await repo.deleteFavorite(src: f.src, albumId: f.albumId, detailPath: f.detailPath)
+            }
+        }
     }
 
     private func deleteHistories(at offsets: IndexSet) {
-        for idx in offsets {
-            modelContext.delete(histories[idx])
+        let targets = offsets.compactMap { histories.indices.contains($0) ? histories[$0] : nil }
+        guard let repo = container?.albumRepository else {
+            for idx in offsets where histories.indices.contains(idx) { modelContext.delete(histories[idx]) }
+            do { try modelContext.save() } catch { print("deleteHistories save failed: \(error)") }
+            return
         }
-        // build 20 自查：删除历史的落库不允许静默吞错
-        do { try modelContext.save() } catch { print("deleteHistories save failed: \(error)") }
+        Task {
+            for h in targets {
+                await repo.deleteHistory(src: h.src, albumId: h.albumId, detailPath: h.detailPath)
+            }
+        }
     }
 
     private func clearAllHistory() {
-        for h in histories {
-            modelContext.delete(h)
+        guard let repo = container?.albumRepository else {
+            for h in histories { modelContext.delete(h) }
+            do { try modelContext.save() } catch { print("clearAllHistory save failed: \(error)") }
+            return
         }
-        // build 20 自查：清空历史的落库不允许静默吞错
-        do { try modelContext.save() } catch { print("clearAllHistory save failed: \(error)") }
+        Task {
+            // 清空 = 逐条删库 + 逐条 progress delete 入队（云端逐条落墓碑）
+            _ = await repo.clearAllHistories()
+        }
     }
 
     // MARK: - Local Import

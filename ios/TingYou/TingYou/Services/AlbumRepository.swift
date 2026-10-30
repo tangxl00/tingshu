@@ -60,9 +60,13 @@ actor AlbumRepository: PlaybackHistoryRecording {
                 print("recordHistory save failed [\(src)|\(albumId)]: \(error)")
             }
         }
+        // build 51 · P0-1：chapter_idx 基底归一化——本地 chapter.index 是源原生章号
+        // （tingyou 1 基、bili/易听书 0 基），云端契约是 0 基，必须经单一出口换算，
+        // 直接透传会让 PC 端按 0 基取到下一章（跨端续播晚一章）。
+        let cloudIdx = ChapterIdxNormalization.toCloud(src: src, localIndex: chapter.index)
         // build 50 · 云同步：进度入 outbox（未登录跳过；outbox 批内压缩兜底 5s 节流）
         syncStore?.enqueueProgress(src: src, albumId: albumId, title: album.title,
-                                   coverUrl: album.coverUrl, chapterIdx: chapter.index,
+                                   coverUrl: album.coverUrl, chapterIdx: cloudIdx,
                                    positionMs: pos, durationMs: dur,
                                    detailPath: album.detailPath)
     }
@@ -118,6 +122,52 @@ actor AlbumRepository: PlaybackHistoryRecording {
             self.syncStore?.enqueueFavoriteDelete(src: src, albumId: albumId,
                                                   detailPath: detailPath)
         }
+    }
+
+    // MARK: - build 51 · P0-2：书架删除必须落云墓碑
+
+    /// 删除单条播放历史（书架滑删）= 本地删库 + progress delete 入 outbox。
+    /// 原实现（ShelfScreen.deleteHistories 直写 SwiftData）只删本地：云端无墓碑，
+    /// 重新登录 / 新设备 snapshotRequired 全量拉取后 merge 走 ctx.insert → 条目复活。
+    func deleteHistory(src: String, albumId: Int64, detailPath: String? = nil) async {
+        guard let ctx = modelContext else { return }
+        await MainActor.run {
+            let fd = FetchDescriptor<HistoryModel>(
+                predicate: #Predicate { $0.src == src && $0.albumId == albumId })
+            for m in (try? ctx.fetch(fd)) ?? [] { ctx.delete(m) }
+            do { try ctx.save() } catch {
+                // 落库失败不允许静默（同仓库既有约定）
+                print("deleteHistory save failed [\(src)|\(albumId)]: \(error)")
+            }
+            // build 51 · 云端墓碑：服务端 progress 分支 op==='delete' 落墓碑
+            //（记录不存在也落墓碑，防删除复活），客户端只需入队。
+            self.syncStore?.enqueueProgressDelete(src: src, albumId: albumId,
+                                                  detailPath: detailPath)
+        }
+    }
+
+    /// 清空全部播放历史 = 逐条本地删库 + 逐条 progress delete 入 outbox。
+    /// 返回实际处理条数（供 UI 提示与测试断言）。
+    @discardableResult
+    func clearAllHistories() async -> Int {
+        guard let ctx = modelContext else { return 0 }
+        return await MainActor.run {
+            let all = (try? ctx.fetch(FetchDescriptor<HistoryModel>())) ?? []
+            for h in all { ctx.delete(h) }
+            do { try ctx.save() } catch {
+                print("clearAllHistories save failed: \(error)")
+            }
+            for h in all {
+                self.syncStore?.enqueueProgressDelete(src: h.src, albumId: h.albumId,
+                                                      detailPath: h.detailPath)
+            }
+            return all.count
+        }
+    }
+
+    /// 删除单条收藏（书架滑删）= 本地删库 + favorite delete 入 outbox（复用既有出口）。
+    func deleteFavorite(src: String, albumId: Int64, detailPath: String? = nil) async {
+        await removeFavorite(src: src, albumId: albumId, detailPath: detailPath)
     }
 
     func rank(section: String, page: Int) async throws -> PagedResult<Album> {
