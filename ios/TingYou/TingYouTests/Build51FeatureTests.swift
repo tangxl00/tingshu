@@ -61,8 +61,13 @@ final class Build51FeatureTests: XCTestCase {
         let repo = try Self.source("TingYou/Services/AlbumRepository.swift")
         XCTAssertTrue(repo.contains("ChapterIdxNormalization.toCloud(src: src, localIndex: chapter.index)"),
                       "recordHistory 入队必须经 toCloud 换算（P0-1）")
-        XCTAssertFalse(repo.contains("chapterIdx: chapter.index,"),
+        // 入队直传防护：enqueueProgress 的 chapterIdx 形参后紧跟 positionMs。
+        // 本地 HistoryModel 写入（chapterIdx: chapter.index, chapterTitle: …）按源原生基底存
+        // 是设计行为（tingyou 1 基表），不在本守卫范围——只拦「入队直传」。
+        XCTAssertFalse(repo.contains("chapterIdx: chapter.index, positionMs"),
                        "入队不得再直传本地 chapter.index")
+        XCTAssertTrue(repo.contains("chapterIdx: cloudIdx,"),
+                      "入队必须使用 toCloud 换算后的 cloudIdx")
 
         let engine = try Self.source("TingYou/Services/SyncEngine.swift")
         XCTAssertTrue(engine.contains("ChapterIdxNormalization.toLocal(src: src, cloudIdx: ci)"),
@@ -250,7 +255,9 @@ final class Build51FeatureTests: XCTestCase {
 
     /// merge 落库失败必须不静默（try? 已移除）
     func testMergeDoesNotSwallowSaveError() throws {
-        let engine = try Self.source("TingYou/Services/SyncEngine.swift")
+        // 负向断言必须剥掉行注释再扫：SyncEngine 里「原 `try? ctx.save()` 把落库失败吞成 nil」
+        // 是改动说明注释（合法保留），直接 contains 会误伤。
+        let engine = Self.strippingLineComments(try Self.source("TingYou/Services/SyncEngine.swift"))
         XCTAssertFalse(engine.contains("try? ctx.save()"),
                        "merge 不得再用 try? 吞掉落库失败（违背「落库失败不允许静默」）")
         XCTAssertTrue(engine.contains("print(\"❌ sync merge save failed"),
@@ -314,6 +321,19 @@ final class Build51FeatureTests: XCTestCase {
         let projectDir = (testDir as NSString).deletingLastPathComponent
         let path = projectDir + "/" + rel
         return try String(contentsOfFile: path, encoding: .utf8)
+    }
+
+    /// 剥掉每行首个 `//` 之后的注释段（含说明性反引号代码引用），供负向 contains 守卫使用。
+    /// 粗粒度即可：目标文件里的 `https://` 会被截断，但不影响本守卫的匹配串。
+    private static func strippingLineComments(_ s: String) -> String {
+        s.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                if let r = line.range(of: "//") {
+                    return String(line[line.startIndex..<r.lowerBound])
+                }
+                return String(line)
+            }
+            .joined(separator: "\n")
     }
 
     /// 可按源注入延迟的假搜索路由（P1-1 护栏用）
