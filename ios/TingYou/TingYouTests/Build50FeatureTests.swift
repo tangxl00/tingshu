@@ -98,10 +98,10 @@ final class Build50FeatureTests: XCTestCase {
         let client = Self.codeOnly(Self.loadSource("TingYou/Services/SyncCloudClient.swift"))
         XCTAssertTrue(client.contains(#"static let baseURL = URL(string: "https://tingshu-d2gjera4688800c8e.service.tcloudbase.com")!"#),
                       "baseURL 必须为已部署云函数网关常量（与 PC 端同一服务）")
-        // 九端点路径必须齐全（契约 v1.0.0）
-        for path in ["/auth/v1/config", "/auth/v1/code", "/auth/v1/login",
-                     "/auth/v1/refresh", "/auth/v1/logout", "/account/v1/me",
-                     "/sync/v1/pull", "/sync/v1/push", "/export/v1/daily"] {
+        // 九端点路径必须齐全（契约 v1.0.0；路径常量不带前导斜杠）
+        for path in ["auth/v1/config", "auth/v1/code", "auth/v1/login",
+                     "auth/v1/refresh", "auth/v1/logout", "account/v1/me",
+                     "sync/v1/pull", "sync/v1/push", "export/v1/daily"] {
             XCTAssertTrue(client.contains("\"\(path)\""),
                           "九端点缺 \(path)——契约 v1.0.0 必须全覆盖")
         }

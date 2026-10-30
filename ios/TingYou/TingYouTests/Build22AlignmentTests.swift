@@ -91,7 +91,8 @@ final class AggregateSearchTests: XCTestCase {
     /// build 36：听吧下架（7→6 源）后按 6 源现实重写断言；
     /// build 37：听十五/书音FM 下架（6→4 源）后按 4 源现实重写；
     /// build 38：59听书下架（4→3 源）后按 3 源现实重写；
-    /// build 45：悦听下架（3→2 源）后按 2 源现实重写。
+    /// build 45：悦听下架（3→2 源）后按 2 源现实重写；
+    /// build 50 补齐易听书（对齐 PC v1.1.8 三源基准）后按 3 源现实重写。
     func testAggregatesOnlyEnabledSourcesInFixedOrder() async {
         let store = makeStore()
         store.setEnabled(SourceRegistry.BILI, false) // 关B站
@@ -99,17 +100,18 @@ final class AggregateSearchTests: XCTestCase {
         let searcher = FakeSearcher()
         searcher.results = [
             SourceRegistry.TINGYOU: [album(1, "听友书", src: SourceRegistry.TINGYOU)],
+            SourceRegistry.YITINGSHU: [album(3, "易听书", src: SourceRegistry.YITINGSHU)],
         ]
 
         let outcome = await AggregateSearcher(searcher: searcher, enabledStore: store)
             .search(keyword: "书")
 
-        XCTAssertEqual(Set(searcher.searchedSources), Set([SourceRegistry.TINGYOU]),
+        XCTAssertEqual(Set(searcher.searchedSources), Set([SourceRegistry.TINGYOU, SourceRegistry.YITINGSHU]),
                        "关闭的源（bili）不参与搜索；build 24 并行化后完成顺序不定，参与集合仍 = 启用集")
-        XCTAssertEqual(searcher.searchedSources.count, 1, "每个启用源恰好搜索一次")
-        XCTAssertEqual(outcome.searchedSources, [SourceRegistry.TINGYOU],
+        XCTAssertEqual(searcher.searchedSources.count, 2, "每个启用源恰好搜索一次")
+        XCTAssertEqual(outcome.searchedSources, [SourceRegistry.TINGYOU, SourceRegistry.YITINGSHU],
                        "outcome.searchedSources 仍为固定序（结果组装以固定序进行）")
-        XCTAssertEqual(outcome.albums.map(\.title), ["听友书"],
+        XCTAssertEqual(outcome.albums.map(\.title), ["听友书", "易听书"],
                        "关闭源的结果不出现")
         XCTAssertTrue(outcome.failedSourceNames.isEmpty)
         XCTAssertFalse(outcome.allFailed)
@@ -187,7 +189,8 @@ final class AggregateSearchTests: XCTestCase {
     /// 关 1 个只剩 tingyou。
     func testAllFailedOnlyWhenEverySourceFailed() async {
         let store = makeStore()
-        store.setEnabled(SourceRegistry.BILI, false) // 只剩 tingyou
+        store.setEnabled(SourceRegistry.BILI, false)   // 关 B站
+        store.setEnabled(SourceRegistry.YITINGSHU, false) // 关 易听书 → 只剩 tingyou
         let searcher = FakeSearcher()
         searcher.failures[SourceRegistry.TINGYOU] = URLError(.timedOut)
 
@@ -238,10 +241,12 @@ final class SourceEnabledStoreGuardTests: XCTestCase {
     }
 
     /// 关到只剩一个搜索源后，关闭最后一个被拒绝（状态不变）。
-    /// build 45：悦听下架（3→2 源）——只剩听友/B站两个搜索源。
+    /// build 45：悦听下架（3→2 源）；build 50 补齐易听书后 3 源——
+    /// 需先关掉两个才到「最后一个」边界。
     func testLastEnabledSourceCannotBeDisabled() {
-        // 全新 suite：默认全开（2 源）。关掉 BILI（仍有听友启用 → 允许）
+        // 全新 suite：默认全开（3 源）。关掉 BILI + YITINGSHU（仍有听友启用 → 允许）
         XCTAssertTrue(store.setEnabledGuarded(SourceRegistry.BILI, false))
+        XCTAssertTrue(store.setEnabledGuarded(SourceRegistry.YITINGSHU, false))
         XCTAssertEqual(store.enabledSearchSources(), [SourceRegistry.TINGYOU])
 
         // 关最后一个：拒绝
@@ -253,16 +258,18 @@ final class SourceEnabledStoreGuardTests: XCTestCase {
     /// 拒绝后重新打开其他源、再关上一个源：允许（保护只针对「最后一个」）。
     func testClosingPreviousSourceAllowedAfterReEnable() {
         store.setEnabledGuarded(SourceRegistry.BILI, false)
+        store.setEnabledGuarded(SourceRegistry.YITINGSHU, false)
         XCTAssertFalse(store.setEnabledGuarded(SourceRegistry.TINGYOU, false)) // 最后一个，拒绝
 
-        XCTAssertTrue(store.setEnabledGuarded(SourceRegistry.BILI, true), "重新启用 B站允许")
+        XCTAssertTrue(store.setEnabledGuarded(SourceRegistry.YITINGSHU, true), "重新启用易听书允许")
         XCTAssertTrue(store.setEnabledGuarded(SourceRegistry.TINGYOU, false), "有了其他启用源后，关闭听友允许")
-        XCTAssertEqual(store.enabledSearchSources(), [SourceRegistry.BILI])
+        XCTAssertEqual(store.enabledSearchSources(), [SourceRegistry.YITINGSHU])
     }
 
     /// 导入源不受「至少一个」保护（不参与搜索聚合，可自由开关）。
     func testImportToggleNotGuarded() {
         store.setEnabledGuarded(SourceRegistry.BILI, false)
+        store.setEnabledGuarded(SourceRegistry.YITINGSHU, false)
         // 只剩 tingyou 一个搜索源时，导入仍可自由关闭
         XCTAssertTrue(store.setEnabledGuarded(SourceRegistry.IMPORT, false),
                      "导入不受最后源保护")

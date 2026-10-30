@@ -67,6 +67,26 @@ final class SyncCloudClient: @unchecked Sendable {
         try await post("sync/v1/push", body: SyncPushRequest(ops: ops), accessToken: accessToken)
     }
 
+    /// 每日 JSON 全量导出（契约 §2：GET /export/v1/daily，需鉴权，可选 ?date=YYYY-MM-DD）。
+    /// 带 query 参数不能走 appendingPathComponent 拼整串（? 会被百分号编码），
+    /// 用 URLComponents 组装。
+    func dailyExport(accessToken: String, date: String? = nil) async throws -> SyncDailyExportData {
+        guard let comps = URLComponents(url: Self.baseURL.appendingPathComponent("export/v1/daily"),
+                                         resolvingAgainstBaseURL: false) else {
+            throw SyncCloudError(code: 50001, message: "云端地址无效")
+        }
+        if let date, !date.isEmpty {
+            comps.queryItems = [URLQueryItem(name: "date", value: date)]
+        }
+        guard let url = comps.url else {
+            throw SyncCloudError(code: 50001, message: "云端地址无效")
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        return try await send(req)
+    }
+
     // MARK: - 通用请求（信封解包，非 code:0 抛 SyncCloudError）
 
     private func get<T: Decodable>(_ path: String, accessToken: String? = nil) async throws -> T {

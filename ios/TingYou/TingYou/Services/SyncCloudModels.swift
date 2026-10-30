@@ -216,3 +216,28 @@ struct SyncBookKeyRef {
         return SyncBookKeyRef(source: src, identifier: ident)
     }
 }
+
+
+// MARK: - 每日导出（契约 §2：GET /export/v1/daily，需鉴权，可选 ?date=YYYY-MM-DD）
+
+struct SyncDailyExportData: Decodable {
+    let format: String?
+    let exportedAt: Int64?
+    let date: String?
+    let mode: String?
+    let payload: SyncDailyExportPayload?
+}
+
+struct SyncDailyExportPayload: Decodable {
+    let user: SyncUserData?
+    let favorites: [SyncFavoriteRecord]?
+    let progress: [SyncProgressRecord]?
+    let settings: [SyncDailySettingRecord]?
+}
+
+/// iOS 端不同步设置项（主题/倍速为本地化配置），此处仅用于导出数据的完整解码
+struct SyncDailySettingRecord: Decodable {
+    let key: String?
+    let value: String?
+    let updatedAt: Int64?
+}
