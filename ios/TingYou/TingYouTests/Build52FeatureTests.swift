@@ -319,7 +319,8 @@ final class Build52FeatureTests: XCTestCase {
         // 对照组：解除注入 → 同一批变更必须落库且游标推进（证明上面的失败来自注入点）
         store.lastSeq = 5
         engine.mergeCommit = nil
-        engine.retryAttempt = 0
+        // 注：不重置 retryAttempt（private(set)，测试不可写）——syncNow 的成败
+        // 不依赖该计数，它只影响后续 scheduleRetry 的退避档位。
         await engine.syncNow()
         XCTAssertEqual(store.lastSeq, 9, "正常落库后游标必须推进到服务端 server_seq")
         XCTAssertGreaterThan(engine.lastSyncAtMs, 0, "全部成功才记上次同步时间")
