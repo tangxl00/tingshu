@@ -71,7 +71,7 @@ final class SyncCloudClient: @unchecked Sendable {
     /// 带 query 参数不能走 appendingPathComponent 拼整串（? 会被百分号编码），
     /// 用 URLComponents 组装。
     func dailyExport(accessToken: String, date: String? = nil) async throws -> SyncDailyExportData {
-        guard let comps = URLComponents(url: Self.baseURL.appendingPathComponent("export/v1/daily"),
+        guard var comps = URLComponents(url: Self.baseURL.appendingPathComponent("export/v1/daily"),
                                          resolvingAgainstBaseURL: false) else {
             throw SyncCloudError(code: 50001, message: "云端地址无效")
         }
