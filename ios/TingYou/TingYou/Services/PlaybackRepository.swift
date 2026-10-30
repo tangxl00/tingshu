@@ -12,11 +12,11 @@ import Foundation
 final class PlaybackRepository: Sendable {
     private let apiClient: APIClient
     private let biliAdapter: BiliAdapter
-    private let yitingshuAdapter: YitingshuAdapter
+    private let yitingshuAdapter: YitingshuAdapter?
 
     init(apiClient: APIClient,
          biliAdapter: BiliAdapter,
-         yitingshuAdapter: YitingshuAdapter) {
+         yitingshuAdapter: YitingshuAdapter? = nil) {
         self.apiClient = apiClient
         self.biliAdapter = biliAdapter
         self.yitingshuAdapter = yitingshuAdapter
@@ -89,7 +89,10 @@ final class PlaybackRepository: Sendable {
             guard let bookId = detailPath, !bookId.isEmpty else {
                 throw URLError(.badURL)
             }
-            return try await yitingshuAdapter.playUrl(bookId: bookId, page: chapterIdx + 1)
+            guard let adapter = yitingshuAdapter else {
+                throw URLError(.unsupportedURL)
+            }
+            return try await adapter.playUrl(bookId: bookId, page: chapterIdx + 1)
         default:
             throw URLError(.unsupportedURL)
         }
