@@ -141,7 +141,7 @@ struct AccountSyncScreen: View {
         message = nil
         Task {
             do {
-                let resend = await engine.requestCode(email: email.trimmingCharacters(in: .whitespaces))
+                let resend = try await engine.requestCode(email: email.trimmingCharacters(in: .whitespaces))
                 codeSent = true
                 isError = false
                 message = "验证码已发送到邮箱，请注意查收"

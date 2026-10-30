@@ -27,7 +27,9 @@ final class SyncEngine {
     private let store: SyncLocalStore
     private let modelContext: ModelContext?
     private var flushTask: Task<Void, Never>?
-    private var observers: [NSObjectProtocol] = []
+    /// deinit 是 nonisolated 上下文，@MainActor 隔离的存储属性不能直接读；
+    /// 观察者 token 只在主线程写入/读取，nonisolated(unsafe) 标注该事实。
+    private nonisolated(unsafe) var observers: [NSObjectProtocol] = []
 
     /// push 客户端分片（契约 push_client_chunk=100；服务端硬上限 500）
     static let pushChunk = 100
@@ -302,7 +304,7 @@ final class SyncEngine {
         // 快照模式：本地独有数据（云端没有的收藏/进度）回传云端——首登上传本地存量
         if data.snapshotRequired == true {
             uploadLocalOnly(cloudKeys: Set((data.favorites ?? []).map(\.bookKey))
-                            | Set((data.progress ?? []).map(\.bookKey)))
+                            .union(Set((data.progress ?? []).map(\.bookKey))))
         }
     }
 
