@@ -101,7 +101,9 @@ final class Build29RegressionTests: XCTestCase {
         XCTAssertNil(SourceRegistry.configOf(src: "mekui"), "书音FM 已下架，config 不得残留")
         XCTAssertNil(SourceRegistry.configOf(src: "bili"), "B站不应进入 msrcSources")
         XCTAssertNil(SourceRegistry.configOf(src: "ting59"), "ting59 不应进入 msrcSources")
-        XCTAssertTrue(SourceRegistry.msrcSources.isEmpty, "MSRC 注册表应已清空")
+        // build 50：易听书注册进 MSRC（对齐 PC 三源基准），注册表不再为空
+        XCTAssertNotNil(SourceRegistry.msrcSources[SourceRegistry.YITINGSHU], "易听书应注册进 MSRC")
+        XCTAssertEqual(SourceRegistry.msrcSources.count, 1, "MSRC 仅易听书一个源（bili 走专用适配器不进 MSRC）")
     }
 
     // MARK: - 版本号断言
@@ -129,8 +131,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "49",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 49（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "50",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 50（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40

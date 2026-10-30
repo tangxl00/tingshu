@@ -3,6 +3,7 @@ import Foundation
 enum SourceRegistry {
     static let TINGYOU = "tingyou"
     static let BILI = "bili"
+    static let YITINGSHU = "yitingshu"
     static let IMPORT = "import"
 
     struct MsrcSourceConfig: Sendable {
@@ -31,7 +32,34 @@ enum SourceRegistry {
     /// 字符串兼容报「源已下架」。
     /// MsrcSourceConfig 结构、MsrcAdapter / MekuiAdapter 解析器与离线解析测试保留，
     /// isKnown / configOf / imageRefererFor 对已下架源自然返回 false / nil / nil。
-    static let msrcSources: [String: MsrcSourceConfig] = [:]
+    ///
+    /// build 50 · 任务 2（音源对齐 PC）：PC 端 v1.1.13 当前音源清单为
+    /// 听友FM（tingyou）/ B站（bili）/ 易听书（yitingshu）三个，iOS 端此前只有
+    /// 前两个（缺 yitingshu）。本次补入 yitingshu——字段逐条取自 PC 端
+    /// server.js 的 MSRC_SOURCES.yitingshu（id/name/siteBase/referer/kind/
+    /// fetchHosts/imgHosts/audioExact/audioSuffix），不做任何新增或改写。
+    static let msrcSources: [String: MsrcSourceConfig] = [
+        // 易听书（stui 模板站）：详情 /tingshu/{id}.html、分类 /yi/{cat}-{page}.html、
+        // 播放 /play/{bookId}-0-{idx0}.html 内联 var now 直链（单步，非两步 token）。
+        // 站点 search.php 全路由被 vdimgck「系统安全验证」gate 拦截 → 搜索走本地
+        // 标题索引兜底（Resources/yts_index.txt，与 PC 端同一份 16,671 条快照）。
+        YITINGSHU: MsrcSourceConfig(
+            id: "yitingshu",
+            name: "易听书",
+            siteBase: "https://www.yitingshu.com",
+            referer: "https://www.yitingshu.com/",
+            searchPOST: false,
+            extraLHeader: false,
+            searchStart: "",
+            searchEnd: "",
+            fetchHosts: ["www.yitingshu.com"],
+            imgHosts: ["imagev2.xmcdn.com"],
+            // PC 端实测 15/15 直链落在 aod.cos.tx.xmcdn.com；后缀 .xmcdn.com 会
+            // 放行 imagev2 等其他子域，故按精确主机放行（与 PC v1.1.8 返修 P2-1 同口径）。
+            audioExact: ["aod.cos.tx.xmcdn.com"],
+            audioSuffixes: []
+        )
+    ]
 
     static func displayName(src: String) -> String {
         switch src {

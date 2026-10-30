@@ -14,12 +14,16 @@ protocol PlaybackHistoryRecording: Sendable {
 actor AlbumRepository: PlaybackHistoryRecording {
     private let apiClient: APIClient
     private let modelContext: ModelContext?
+    /// build 50 · 云同步 outbox 入队出口（未登录时入队方法内部直接跳过）
+    private let syncStore: SyncLocalStore?
     private var cache: [String: Album] = [:]
     private let cacheLock = NSLock()
 
-    init(apiClient: APIClient, modelContext: ModelContext? = nil) {
+    init(apiClient: APIClient, modelContext: ModelContext? = nil,
+         syncStore: SyncLocalStore? = nil) {
         self.apiClient = apiClient
         self.modelContext = modelContext
+        self.syncStore = syncStore
     }
 
     // MARK: - 播放历史 / 收藏落库（Bug 2）
@@ -56,6 +60,11 @@ actor AlbumRepository: PlaybackHistoryRecording {
                 print("recordHistory save failed [\(src)|\(albumId)]: \(error)")
             }
         }
+        // build 50 · 云同步：进度入 outbox（未登录跳过；outbox 批内压缩兜底 5s 节流）
+        syncStore?.enqueueProgress(src: src, albumId: albumId, title: album.title,
+                                   coverUrl: album.coverUrl, chapterIdx: chapter.index,
+                                   positionMs: pos, durationMs: dur,
+                                   detailPath: album.detailPath)
     }
 
     /// 收藏状态查询（书架 @Query 之外的自查入口；PlayerScreen 收藏按钮初始化用）
@@ -86,11 +95,16 @@ actor AlbumRepository: PlaybackHistoryRecording {
                 // build 19 P1-1：收藏写库失败不允许静默
                 print("addFavorite save failed [\(src)|\(albumId)]: \(error)")
             }
+            // build 50 · 云同步：收藏 upsert 入 outbox（未登录跳过）
+            self.syncStore?.enqueueFavoriteUpsert(src: src, albumId: albumId,
+                                                  title: album.title, author: album.author,
+                                                  coverUrl: album.coverUrl,
+                                                  detailPath: album.detailPath)
         }
     }
 
-    /// 删除收藏
-    func removeFavorite(src: String, albumId: Int64) async {
+    /// 删除收藏（detailPath：build 50 云同步 bili 音源的 album_key 需要 bvid）
+    func removeFavorite(src: String, albumId: Int64, detailPath: String? = nil) async {
         guard let ctx = modelContext else { return }
         await MainActor.run {
             let fd = FetchDescriptor<FavoriteModel>(
@@ -100,6 +114,9 @@ actor AlbumRepository: PlaybackHistoryRecording {
                 // build 19 P1-1：删收藏失败不允许静默
                 print("removeFavorite save failed [\(src)|\(albumId)]: \(error)")
             }
+            // build 50 · 云同步：收藏删除（墓碑）入 outbox（未登录跳过）
+            self.syncStore?.enqueueFavoriteDelete(src: src, albumId: albumId,
+                                                  detailPath: detailPath)
         }
     }
 

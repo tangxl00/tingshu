@@ -12,11 +12,14 @@ import Foundation
 final class PlaybackRepository: Sendable {
     private let apiClient: APIClient
     private let biliAdapter: BiliAdapter
+    private let yitingshuAdapter: YitingshuAdapter
 
     init(apiClient: APIClient,
-         biliAdapter: BiliAdapter) {
+         biliAdapter: BiliAdapter,
+         yitingshuAdapter: YitingshuAdapter) {
         self.apiClient = apiClient
         self.biliAdapter = biliAdapter
+        self.yitingshuAdapter = yitingshuAdapter
     }
 
     /// 解析占位 URI 为真实音频直链（AVAssetResourceLoaderDelegate 惰性调用）。
@@ -81,6 +84,12 @@ final class PlaybackRepository: Sendable {
             }
             let streamResult = await biliAdapter.audioStreamUrl(bvid: bvid, cid: page.cid)
             return try streamResult.get()
+        case SourceRegistry.YITINGSHU:
+            // build 50：易听书单步直链——detailPath 即书 id，page = chapterIdx + 1（1 基）
+            guard let bookId = detailPath, !bookId.isEmpty else {
+                throw URLError(.badURL)
+            }
+            return try await yitingshuAdapter.playUrl(bookId: bookId, page: chapterIdx + 1)
         default:
             throw URLError(.unsupportedURL)
         }

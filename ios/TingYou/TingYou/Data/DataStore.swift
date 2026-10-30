@@ -126,9 +126,12 @@ final class SourceEnabledStore {
     /// build 37 · 反馈 1：听十五（ting15）/ 书音FM（mekui）下架，6 → 4 源。
     /// build 38 · 反馈 1：59听书网（ting59）下架，4 → 3 源。
     /// build 45 · 反馈 3：悦听有声书（ytysxs）下架（用户点名），3 → 2 源。
+    /// build 50 · 任务 2（音源对齐 PC）：补入易听书（yitingshu），2 → 3 源
+    ///（与 PC 端 v1.1.13 音源清单对齐：tingyou / bili / yitingshu）。
     static let searchSources: [String] = [
         SourceRegistry.TINGYOU,
         SourceRegistry.BILI,
+        SourceRegistry.YITINGSHU,
     ]
 
     func isEnabled(_ src: String) -> Bool {

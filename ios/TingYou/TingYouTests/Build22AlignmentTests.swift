@@ -198,11 +198,13 @@ final class AggregateSearchTests: XCTestCase {
     }
 
     /// searchSources 固定清单：build 36 删听吧后 6 源；build 37 删听十五/书音FM 后 4 源；
-    /// build 38 删 59听书后 3 源、不含导入；build 45 删悦听后 2 源。
+    /// build 38 删 59听书后 3 源、不含导入；build 45 删悦听后 2 源；
+    /// build 50 补齐易听书（对齐 PC v1.1.8 三源基准）后 3 源。
     func testSearchSourcesFixedOrderExcludesImport() {
         XCTAssertEqual(SourceEnabledStore.searchSources, [
             SourceRegistry.TINGYOU,
             SourceRegistry.BILI,
+            SourceRegistry.YITINGSHU,
         ])
         XCTAssertFalse(SourceEnabledStore.searchSources.contains(SourceRegistry.IMPORT),
                        "导入不参与搜索聚合")

@@ -14,21 +14,26 @@ actor SourceRouter {
     private let apiClient: APIClient
     private let albumRepository: AlbumRepository
     private let biliAdapter: BiliAdapter
+    /// build 50 · 任务 2：易听书适配器（单步直链 + 本地索引搜索 + 分类页）
+    let yitingshuAdapter: YitingshuAdapter
     let biliSearchApi: BiliSearchApi
     let playbackRepository: PlaybackRepository
 
     init(apiClient: APIClient,
          albumRepository: AlbumRepository? = nil,
          biliAdapter: BiliAdapter? = nil,
-         biliSearchApi: BiliSearchApi? = nil) {
+         biliSearchApi: BiliSearchApi? = nil,
+         yitingshuAdapter: YitingshuAdapter? = nil) {
         self.apiClient = apiClient
         self.albumRepository = albumRepository
             ?? AlbumRepository(apiClient: apiClient)
         self.biliAdapter = biliAdapter ?? BiliAdapter()
         self.biliSearchApi = biliSearchApi ?? BiliSearchApi(adapter: self.biliAdapter)
+        self.yitingshuAdapter = yitingshuAdapter ?? YitingshuAdapter(apiClient: apiClient)
         self.playbackRepository = PlaybackRepository(
             apiClient: apiClient,
-            biliAdapter: self.biliAdapter)
+            biliAdapter: self.biliAdapter,
+            yitingshuAdapter: self.yitingshuAdapter)
     }
 
     // MARK: - 搜索
@@ -41,6 +46,10 @@ actor SourceRouter {
         case SourceRegistry.BILI:
             let page = try await biliSearchApi.searchAudiobooks(keyword: keyword, page: 1)
             return page.items.map { Self.albumFromBili($0) }
+        case SourceRegistry.YITINGSHU:
+            // 易听书：站点搜索被验证码 gate 拦截 → 适配器内部回落本地索引（16,671 条）
+            let items = await yitingshuAdapter.search(keyword: keyword)
+            return items.map { Self.albumFromYts($0) }
         default:
             throw URLError(.unsupportedURL)
         }
@@ -52,6 +61,15 @@ actor SourceRouter {
         switch src {
         case SourceRegistry.TINGYOU:
             return try await albumRepository.albumDetail(id: albumId)
+        case SourceRegistry.YITINGSHU:
+            // 易听书详情：detailPath 即书 id（数字串）
+            guard let bookId = detailPath, !bookId.isEmpty else { throw URLError(.badURL) }
+            let d = try await yitingshuAdapter.detail(bookId: bookId)
+            return Album(albumId: albumId, title: d.title, author: d.author, teller: nil,
+                         coverUrl: d.cover, intro: d.intro, category: nil, categoryId: nil,
+                         type: nil, typeId: nil, status: nil, chapterCount: d.chapterCount,
+                         updatedAt: nil, playCount: nil, available: nil,
+                         source: SourceRegistry.YITINGSHU, detailPath: bookId)
         case SourceRegistry.BILI:
             // B站不从此入口取详情；详情在导入环节通过 biliAdapter.videoInfo 获取
             throw URLError(.unsupportedURL)
@@ -66,6 +84,13 @@ actor SourceRouter {
         switch src {
         case SourceRegistry.TINGYOU:
             return try await albumRepository.chapters(albumId: albumId)
+        case SourceRegistry.YITINGSHU:
+            guard let bookId = detailPath, !bookId.isEmpty else { throw URLError(.badURL) }
+            let d = try await yitingshuAdapter.detail(bookId: bookId)
+            // MsrcChapter.page 为 1 基（站点 idx0 + 1）→ Chapter.index 0 基
+            return d.chapters.map {
+                Chapter(chapterId: Int64($0.page), index: $0.page - 1, title: $0.title, durationSec: nil)
+            }
         case SourceRegistry.BILI:
             // v1.4.1 · 发现页点书直达：detailPath 即 bvid，章节 = 分P列表。
             // index 取 0 基（page - 1）：PlaybackRepository BILI 播放口径为
@@ -101,12 +126,27 @@ actor SourceRouter {
             let keyword = BiliCategories.ALL.first(where: { $0.key == categoryId })?.keywords.first ?? categoryId
             let result = try await biliSearchApi.searchAudiobooks(keyword: keyword, page: page)
             return (result.items.map { Self.albumFromBili($0) }, result.hasMore)
+        case SourceRegistry.YITINGSHU:
+            // build 50：易听书分类页 /yi/{cat}-{page}.html（每页 30 条，站点标 1/94 页）
+            let result = try await yitingshuAdapter.category(categoryId: categoryId, page: page)
+            return (result.items.map { Self.albumFromYts($0) }, result.hasMore)
         default:
             throw URLError(.unsupportedURL) // 该源暂不支持发现页
         }
     }
 
     // MARK: - 映射辅助
+
+    /// build 50：易听书 MsrcSearchItem → Album。albumId = 书 id（数字串转 Int64），
+    /// detailPath = 书 id（播放/详情链路都以 detailPath 为准，与 bili 用 detailPath=bvid 同模式）。
+    private static func albumFromYts(_ item: MsrcHtml.MsrcSearchItem) -> Album {
+        let albumId = Int64(item.bookId) ?? 0
+        return Album(albumId: albumId, title: item.title, author: item.author, teller: item.teller,
+                     coverUrl: item.cover, intro: nil, category: nil, categoryId: nil,
+                     type: nil, typeId: nil, status: nil, chapterCount: nil,
+                     updatedAt: nil, playCount: nil, available: nil,
+                     source: SourceRegistry.YITINGSHU, detailPath: item.bookId)
+    }
 
     /// v1.4.1：B站 Album 的稳定 albumId——由 bvid 计算（FNV-1a 64）。
     /// 背景：recordHistory 按 (src, albumId) 去重，此前 albumId 恒为 0 会导致

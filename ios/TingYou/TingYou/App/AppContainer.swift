@@ -16,6 +16,8 @@ final class AppContainer {
     let skipSettingsStore: SkipSettingsStore
     let sourceEnabledStore: SourceEnabledStore
     let shelfLayoutStore: ShelfLayoutStore
+    /// build 50 · 云同步（邮箱验证码登录 + 收藏/进度云端同步 + 断网补传）
+    let syncEngine: SyncEngine
 
     init() {
         let schema = Schema([
@@ -30,7 +32,9 @@ final class AppContainer {
         apiClient = APIClient()
 
         let ctx = modelContainer.mainContext
-        albumRepository = AlbumRepository(apiClient: apiClient, modelContext: ctx)
+        // build 50 · 云同步：outbox 队列（AlbumRepository 入队 / SyncEngine 冲浪共用同一份本地状态）
+        albumRepository = AlbumRepository(apiClient: apiClient, modelContext: ctx,
+                                          syncStore: SyncLocalStore.shared)
         // build 45 · 反馈 3：悦听有声书（ytysxs）全链摘除——
         // ytysxsCookieStore / YtysxsAdapter 装配删除（KeychainTokenStore
         // 专用链随源一并删除，唯一消费方即悦听验证闭环）。
@@ -53,6 +57,7 @@ final class AppContainer {
         skipSettingsStore = SkipSettingsStore()
         sourceEnabledStore = SourceEnabledStore()
         shelfLayoutStore = ShelfLayoutStore()
+        syncEngine = SyncEngine(modelContext: ctx)
     }
 }
 

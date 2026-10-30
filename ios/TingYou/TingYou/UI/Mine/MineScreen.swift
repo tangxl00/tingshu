@@ -16,6 +16,12 @@ struct MineScreen: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("账号与同步") {
+                    NavigationLink("账号与同步") {
+                        AccountSyncScreen()
+                    }
+                }
+
                 Section("听书数据") {
                     HStack {
                         Label("总时长", systemImage: "headphones")

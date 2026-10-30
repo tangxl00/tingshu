@@ -249,7 +249,8 @@ struct PlayerScreen: View {
               let repo = container?.albumRepository else { return }
         Task {
             if isFavorite {
-                await repo.removeFavorite(src: album.source, albumId: album.albumId)
+                await repo.removeFavorite(src: album.source, albumId: album.albumId,
+                                          detailPath: album.detailPath)
             } else {
                 await repo.addFavorite(album: album)
             }

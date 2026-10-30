@@ -31,6 +31,12 @@ enum PinnedDomainAllowlist {
         "mp3.aikeu.com",
         "shuyinfm.oss-cn-hangzhou.aliyuncs.com",
         "imge.kugou.com",
+        // build 50 · 易听书（对齐 PC v1.1.8 音源）：站 / 图床 / 音频 CDN
+        "www.yitingshu.com",
+        "imagev2.xmcdn.com",
+        "aod.cos.tx.xmcdn.com",
+        // build 50 · 云同步（tingshu-sync 云函数，对齐 PC 端同一服务）
+        "tingshu-d2gjera4688800c8e.service.tcloudbase.com",
     ]
 
     /// host 是否在白名单内（对等安卓 includeSubdomains 匹配）

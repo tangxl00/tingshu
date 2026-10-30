@@ -40,7 +40,9 @@ final class SourceRegistryTests: XCTestCase {
         XCTAssertNil(SourceRegistry.configOf(src: "mekui"), "书音FM 已下架，config 不得残留")
         XCTAssertNil(SourceRegistry.configOf(src: "ting08"))
         XCTAssertNil(SourceRegistry.configOf(src: "nope"))
-        XCTAssertTrue(SourceRegistry.msrcSources.isEmpty, "MSRC 注册表应已清空")
+        // build 50：易听书注册进 MSRC（对齐 PC 三源基准），注册表不再为空
+        XCTAssertNotNil(SourceRegistry.msrcSources[SourceRegistry.YITINGSHU], "易听书应注册进 MSRC")
+        XCTAssertEqual(SourceRegistry.msrcSources.count, 1, "MSRC 仅易听书一个源")
         XCTAssertEqual(SourceRegistry.displayName(src: "ting15"), "ting15", "下架源显示名回落原始 id")
         XCTAssertEqual(SourceRegistry.displayName(src: "mekui"), "mekui", "下架源显示名回落原始 id")
         XCTAssertEqual(SourceRegistry.displayName(src: "tingyou"), "听友FM")
@@ -49,7 +51,8 @@ final class SourceRegistryTests: XCTestCase {
     }
 
     func testImageRefererClearedAfterDelisting() {
-        XCTAssertTrue(SourceRegistry.allImgHosts.isEmpty, "MSRC 源全下架后无注册图床")
+        // build 50：易听书图床 imagev2.xmcdn.com 注册（其余下架源图床 referer 仍不得残留）
+        XCTAssertTrue(SourceRegistry.allImgHosts.contains("imagev2.xmcdn.com"), "易听书图床应注册")
         XCTAssertNil(SourceRegistry.imageRefererFor(host: "img-book-oss.guoguo.org.cn"),
                      "ting15/ting08 下架后 guoguo 图床不再配 referer")
         XCTAssertNil(SourceRegistry.imageRefererFor(host: "shuyinfm.oss-cn-hangzhou.aliyuncs.com"),
@@ -61,10 +64,15 @@ final class SourceRegistryTests: XCTestCase {
     }
 
     func testDefensiveEntriesFromPcAreAbsent() {
+        // build 50 改写：易听书（对齐 PC v1.1.8）合法使用 xmcdn 图床/音频域，
+        // 原 blanket 断言「不得含 xmcdn」随之退役；wx.qq.com 防御性条目守卫保留。
+        let yts = SourceRegistry.msrcSources[SourceRegistry.YITINGSHU]
         let hosts = SourceRegistry.msrcSources.values
             .flatMap { $0.fetchHosts + $0.imgHosts + $0.audioExact + $0.audioSuffixes }
         XCTAssertFalse(hosts.contains(where: { $0.contains("wx.qq.com") }))
-        XCTAssertFalse(hosts.contains(where: { $0.contains("xmcdn") }))
+        XCTAssertEqual(yts?.imgHosts, ["imagev2.xmcdn.com"], "易听书图床仅 imagev2.xmcdn.com")
+        XCTAssertEqual(yts?.audioExact, ["aod.cos.tx.xmcdn.com"], "易听书音频域仅 aod.cos.tx.xmcdn.com（PC 实测 15/15 落此域）")
+        XCTAssertEqual(yts?.fetchHosts, ["www.yitingshu.com"], "易听书抓取域仅 www.yitingshu.com")
     }
 
     // MARK: - 白名单纯函数守护（本地同形态 config，逻辑与源存续无关）
