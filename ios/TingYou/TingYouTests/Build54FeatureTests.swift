@@ -26,12 +26,18 @@ import SwiftData
 /// 断言「recorder 零调用 且 HistoryModel.updatedAt 未被顶成 now」，并配一条
 /// `silentWrite: false` 的反证用例（证明测试抓得住回归）。
 ///
-/// build 55 二轮（CI 崩溃修复 · 拆形）：初版四条新用例把真 `AlbumRepository`
-/// 挂进扇出让 PM 内部排水 Task 直写 SwiftData、或真构造 PM 后跨隔离读状态——
-/// CI 0.000s 进程级崩溃（test.log 无断言文本；b54 基线 332/0 全绿，崩溃面为
-/// 本轮新引入）。现按 b53 拆形先例改写：探针独享 recorder 取闸门行为、落库
-/// 顶新改直调 `await repo.recordHistory` 取证、`testPausedForeignQueueIsNotTornDown`
-/// 改决策级纯函数 + 接线守卫。P1-1 / P1-2 证据链不变，仅取证形态更稳。
+/// build 55 二/三轮（CI 崩溃修复 · 隔离形态）：二轮拆形（探针独享 + 直调落库）
+/// 后 NonSilentLoad / PauseChannel / Periodic 仍在 CI 0.000s 进程崩溃（test.log
+/// 无断言文本；b54 基线 332/0 全绿），而**同一套** PM 排水机器（probe recorder +
+/// enqueueHistory 单任务排水 + isHistoryWriteIdle 轮询）在 SkipSettingsTests 与
+/// HistoryAndFavoriteTests 的**非隔离**用例里稳定通过——两轮差分收敛到测试
+/// 隔离域：@MainActor 用例内调 `pause()` / `recordHistory` 触发 `enqueueHistory`
+/// 的非结构化 `Task` 时，该 Task 继承主 actor，排水跑在主 actor 上，与并行测试
+/// 的进程重启相撞即整进程被杀（无断言文本的运行期 trap 一类；两条首轮崩的
+/// 用例如 ApplyPlan / Deinit 因不触发排水 Task 而两轮全过，旁证成立）。
+/// 三轮修复：三条闸门用例改为非隔离 async 形态，SwiftData 种子/读回经
+/// @MainActor helper 收口；取证结构（探针计数 + 落库行断言）不变。
+/// `testPausedForeignQueueIsNotTornDown` 二轮已改决策级纯函数 + 接线守卫并通过。
 final class Build54FeatureTests: XCTestCase {
 
     private var suiteName = ""
@@ -109,13 +115,36 @@ final class Build54FeatureTests: XCTestCase {
     }
 
     /// 等历史串行排水结束（`recordHistory` 是异步入队 + 单任务排水）。
-    @MainActor
+    /// 非隔离形态：`isHistoryWriteIdle` 由 `historyLock` 保护，任意隔离域可安全轮询
+    /// （build 55 三轮：@MainActor 等待器会迫使闸门用例挂主 actor，见类头注释）。
     private func waitForHistoryIdle(_ pm: PlaybackManager) async throws {
         for _ in 0..<200 {
             if pm.isHistoryWriteIdle { return }
             try await Task.sleep(nanoseconds: 5_000_000) // 5ms
         }
         XCTFail("历史排水 1s 内未空闲（isHistoryWriteIdle 恒 false）")
+    }
+
+    // MARK: - SwiftData 主线程收口 helper（build 55 三轮）
+    // mainContext 必须主线程使用；闸门用例本身保持非隔离 async（见类头注释），
+    // 种子 / 读回 / 构造 repo 统一经 @MainActor 收口。
+
+    @MainActor
+    private func seedHistoryRow(_ album: Album, chapterIdx: Int, chapterTitle: String,
+                                positionMs: Int64, updatedAt: Int64 = 300) {
+        seedHistory(container.mainContext, album: album, chapterIdx: chapterIdx,
+                    chapterTitle: chapterTitle, positionMs: positionMs, updatedAt: updatedAt)
+    }
+
+    @MainActor
+    private func firstHistoryRow() throws -> HistoryModel {
+        try XCTUnwrap(allHistory(container.mainContext).first)
+    }
+
+    @MainActor
+    private func makeRepo() -> AlbumRepository {
+        AlbumRepository(apiClient: APIClient(session: RetryStubURLProtocol.makeSession()),
+                        modelContext: container.mainContext)
     }
 
     /// 可记录的历史写入探针（零调用可断言）。与 `HistoryAndFavoriteTests` 里的同名
@@ -572,23 +601,19 @@ final class Build54FeatureTests: XCTestCase {
     /// false，必须**确实写入**且 `updatedAt` 变化。若哪天守卫被误改成「静默这也写」或
     /// 「非静默也不写」，`…Silently` 与这条会各自变红——证明测试抓得住回归。
     ///
-    /// 拆形说明（build 55 二轮 · CI 崩溃修复，与 b53 C1 同理）：初版把真
-    /// `AlbumRepository` 挂进 `RecordingFanout`，让「PM 内部排水 Task → repo actor →
-    /// MainActor.run SwiftData 落库」整链在测试进程里跑——CI 0.000s 进程级崩溃
-    /// （test.log 无断言文本；b54 基线 332/0 全绿，崩溃面为该形态新引入）。拆形后
-    /// 两段各取已验证稳定的形态：
-    /// ① 探针独享 recorder：非静默装载必须入队并排出**恰一次**写（与
-    ///   `testHistoryWriteSerializedLatestChapterWins` 同款探针排水形态）；
+    /// 拆形说明（build 55 二/三轮 · CI 崩溃修复）：二轮「探针独享 + 直调落库」
+    /// 仍在 CI 0.000s 崩溃，差分定位到**测试隔离域**——@MainActor 用例内触发
+    /// `enqueueHistory` 的排水 Task 会继承主 actor（同机器在 SkipSettingsTests /
+    /// HistoryAndFavoriteTests 的非隔离用例里稳定通过，见类头注释）。本用例改
+    /// 非隔离 async，SwiftData 种子/读回经 @MainActor helper 收口。取证结构不变：
+    /// ① 探针独享 recorder：非静默装载必须入队并排出**恰一次**写；
     /// ② 落库顶新直调取证：`await repo.recordHistory(...)`（`testLocalHistoryRoundTrip…`
     ///   先例），DB 行断言不借 PM 内部 Task。
-    @MainActor
     func testNonSilentLoadActuallyWritesHistoryAndBumpsUpdatedAt() async throws {
-        let ctx = container.mainContext
         let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5414)
         let chapters = oneBasedChapters(15, durationSec: 1_500)
-        seedHistory(ctx, album: album, chapterIdx: 11, chapterTitle: "第11章",
-                    positionMs: 480_000, updatedAt: 300)
-        let before = try XCTUnwrap(allHistory(ctx).first)
+        await seedHistoryRow(album, chapterIdx: 11, chapterTitle: "第11章", positionMs: 480_000)
+        let before = try await firstHistoryRow().updatedAt
 
         // ① 探针独享：非静默装载必须入队并排出一次写
         let recorder = ProbeHistoryRecorder()
@@ -601,14 +626,13 @@ final class Build54FeatureTests: XCTestCase {
 
         // ② 落库行为直调取证（同一份生产 repo 实现）：用户点第 4 章（章号值语义）
         //    → 章号 4 / 位置 0 / updatedAt 顶新
-        let repo = AlbumRepository(apiClient: APIClient(session: RetryStubURLProtocol.makeSession()),
-                                   modelContext: ctx)
+        let repo = await makeRepo()
         await repo.recordHistory(album: album, chapter: chapters[3],
                                  positionMs: 0, durationMs: 1_500_000)
-        let after = try XCTUnwrap(allHistory(ctx).first)
+        let after = try await firstHistoryRow()
         XCTAssertEqual(after.chapterIdx, 4, "历史章号应更新为用户点的那章")
         XCTAssertEqual(after.positionMs, 0, "历史位置应更新为本章起点")
-        XCTAssertGreaterThan(after.updatedAt, before.updatedAt,
+        XCTAssertGreaterThan(after.updatedAt, before,
                              "非静默写入必须把 updatedAt 顶新（LWW 判据才会翻成本地较新）")
     }
 
@@ -618,17 +642,15 @@ final class Build54FeatureTests: XCTestCase {
     /// 内部先调 pause()，控制中心暂停键同样直达 pause()）——b54 这里无条件
     /// `recordHistory(force: true)`（第 1549 行），会落一条**旧位置**历史并掀翻云端。
     ///
-    /// 拆形说明（build 55 二轮 · CI 崩溃修复）：初版把真 repo 挂进扇出让 PM 排水
-    /// 直写 SwiftData，CI 0.000s 进程级崩溃；现探针独享 recorder 取闸门行为
-    /// （抑制期零写 / 解除后恰一次且章正确），updatedAt 顶新由 NonSilentLoad
-    /// 用例的直调段（②）另行取证——两段共同覆盖「关得住、放得开」。
-    @MainActor
+    /// 拆形说明（build 55 二/三轮 · CI 崩溃修复）：二轮探针独享后仍 0.000s 崩溃，
+    /// 差分定位到**测试隔离域**——@MainActor 用例内 `pause()` 触发的排水 Task
+    /// 继承主 actor（同类机器在 SkipSettingsTests 非隔离用例稳定通过）。本用例
+    /// 改非隔离 async；抑制期 DB 行只读核验经 @MainActor helper。updatedAt 顶新
+    /// 由 NonSilentLoad 直调段（②）另行取证——两段共同覆盖「关得住、放得开」。
     func testPauseChannelDoesNotWriteDuringSilentPending() async throws {
-        let ctx = container.mainContext
         let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5415)
         let chapters = oneBasedChapters(10, durationSec: 1_200)
-        seedHistory(ctx, album: album, chapterIdx: 6, chapterTitle: "第6章",
-                    positionMs: 500_000, updatedAt: 300)
+        await seedHistoryRow(album, chapterIdx: 6, chapterTitle: "第6章", positionMs: 500_000)
 
         let recorder = ProbeHistoryRecorder()
         let pm = PlaybackManager(playbackRepository: nil)
@@ -644,7 +666,7 @@ final class Build54FeatureTests: XCTestCase {
 
         XCTAssertEqual(recorder.writes.count, 0, "静默装载期暂停不得写历史")
         // 抑制期 DB 行只读核验：探针零调用 ⇒ 不存在任何落库路径可碰这行
-        let row = try XCTUnwrap(allHistory(ctx).first)
+        let row = try await firstHistoryRow()
         XCTAssertEqual(row.updatedAt, 300, "暂停不得把 updatedAt 顶成 now")
         XCTAssertEqual(row.chapterIdx, 6, "暂停不得把历史章号改成静默装载落点")
 
@@ -706,16 +728,14 @@ final class Build54FeatureTests: XCTestCase {
     /// `recordHistoryForTesting` 接缝，非静默装载的 PM 上调用）来证明：
     /// 「抑制态下节流拍的写入同样被拦、且不会消耗节流窗口 / 不落库」。
     ///
-    /// 拆形说明（build 55 二轮 · CI 崩溃修复）：同 PauseChannel——探针独享
-    /// recorder，抑制期 DB 行只读核验；不把真 repo 挂进 PM 排水（该形态 CI
-    /// 0.000s 崩溃）。updatedAt 顶新证据由 NonSilentLoad 直调段承担。
-    @MainActor
+    /// 拆形说明（build 55 二/三轮 · CI 崩溃修复）：同 PauseChannel——@MainActor
+    /// 用例内触发排水 Task 继承主 actor 导致进程崩溃，改非隔离 async；抑制期
+    /// DB 行只读核验经 @MainActor helper。updatedAt 顶新证据由 NonSilentLoad
+    /// 直调段承担。
     func testPeriodicChannelSharesTheSameGate() async throws {
-        let ctx = container.mainContext
         let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5418)
         let chapters = oneBasedChapters(6, durationSec: 1_200)
-        seedHistory(ctx, album: album, chapterIdx: 3, chapterTitle: "第3章",
-                    positionMs: 400_000, updatedAt: 300)
+        await seedHistoryRow(album, chapterIdx: 3, chapterTitle: "第3章", positionMs: 400_000)
 
         let recorder = ProbeHistoryRecorder()
         let pm = PlaybackManager(playbackRepository: nil)
@@ -731,7 +751,7 @@ final class Build54FeatureTests: XCTestCase {
 
         XCTAssertEqual(suppressed.hits, 3, "抑制态下每次周期拍都被闸门拦下（同一入口）")
         XCTAssertEqual(recorder.writes.count, 0, "周期拍不得写历史")
-        let row = try XCTUnwrap(allHistory(ctx).first)
+        let row = try await firstHistoryRow()
         XCTAssertEqual(row.updatedAt, 300, "周期拍不得把 updatedAt 顶成 now")
         XCTAssertEqual(row.chapterIdx, 3, "周期拍不得把历史章号改成静默装载落点")
 
