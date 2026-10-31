@@ -67,23 +67,23 @@ final class Build50FeatureTests: XCTestCase {
     /// 四链路路由守卫：搜索（含本地索引兜底）/ 详情 / 章节 / 发现页分类
     /// 都必须有 YITINGSHU case；播放链路在 PlaybackRepository 必须有
     /// YITINGSHU case。本地索引资源必须随包（Resources/yts_index.txt）。
-    func testYitingshuWiredIntoAllRoutes() {
-        let router = Self.codeOnly(Self.loadSource("TingYou/Services/SourceRouter.swift"))
+    func testYitingshuWiredIntoAllRoutes() throws {
+        let router = Self.codeOnly(try Self.loadSource("TingYou/Services/SourceRouter.swift"))
         let ytsCases = router.components(separatedBy: "case SourceRegistry.YITINGSHU:")
         XCTAssertEqual(ytsCases.count, 5,
                        "SourceRouter 必须有 4 个 YITINGSHU case（搜索/详情/章节/发现页分类），实际 \(ytsCases.count - 1) 个")
         XCTAssertTrue(router.contains("func discoverCategory(src: String, categoryId: String, page: Int)"),
                       "发现页分类路由必须存在（易听书走 /yi/{cat}-{page}.html 分类页口径）")
 
-        let playback = Self.codeOnly(Self.loadSource("TingYou/Services/PlaybackRepository.swift"))
+        let playback = Self.codeOnly(try Self.loadSource("TingYou/Services/PlaybackRepository.swift"))
         XCTAssertTrue(playback.contains("case SourceRegistry.YITINGSHU:"),
                       "PlaybackRepository 播放链路必须有 YITINGSHU case（var now 直链提取）")
 
-        let adapter = Self.codeOnly(Self.loadSource("TingYou/Services/YitingshuAdapter.swift"))
+        let adapter = Self.codeOnly(try Self.loadSource("TingYou/Services/YitingshuAdapter.swift"))
         XCTAssertTrue(adapter.contains("Bundle.main.url(forResource: \"yts_index\", withExtension: \"txt\")"),
                       "搜索必须加载本地标题索引 Resources/yts_index.txt（search.php 被 vdimgck 验证码拦截）")
 
-        let project = Self.loadSource("project.yml")
+        let project = try Self.loadSource("project.yml")
         XCTAssertTrue(project.contains("- path: TingYou/Resources"),
                       "Resources 目录必须整体入包（yts_index.txt 随包分发）")
         XCTAssertTrue(FileManager.default.fileExists(atPath: Self.projectRoot() + "/TingYou/Resources/yts_index.txt"),
@@ -94,8 +94,8 @@ final class Build50FeatureTests: XCTestCase {
 
     /// 云端地址守卫：SyncCloudClient.baseURL 必须指向已部署的
     /// tingshu-sync 云函数网关（与 PC 端 v1.1.14 同一服务），不得漂移。
-    func testSyncCloudClientBaseURLPointsToDeployedGateway() {
-        let client = Self.codeOnly(Self.loadSource("TingYou/Services/SyncCloudClient.swift"))
+    func testSyncCloudClientBaseURLPointsToDeployedGateway() throws {
+        let client = Self.codeOnly(try Self.loadSource("TingYou/Services/SyncCloudClient.swift"))
         XCTAssertTrue(client.contains(#"static let baseURL = URL(string: "https://tingshu-d2gjera4688800c8e.service.tcloudbase.com")!"#),
                       "baseURL 必须为已部署云函数网关常量（与 PC 端同一服务）")
         // 九端点路径必须齐全（契约 v1.0.0；路径常量不带前导斜杠）
@@ -154,14 +154,14 @@ final class Build50FeatureTests: XCTestCase {
 
     /// 设置页入口守卫：「账号与同步」区块必须挂在听书数据之前的
     /// Mine 页，登录表单必须含邮箱 + 验证码 + 60 秒倒计时。
-    func testAccountSyncScreenEntryWired() {
-        let mine = Self.codeOnly(Self.loadSource("TingYou/UI/Mine/MineScreen.swift"))
+    func testAccountSyncScreenEntryWired() throws {
+        let mine = Self.codeOnly(try Self.loadSource("TingYou/UI/Mine/MineScreen.swift"))
         XCTAssertTrue(mine.contains(#"Section("账号与同步")"#),
                       "Mine 页必须有「账号与同步」Section（build 50）")
         XCTAssertTrue(mine.contains("AccountSyncScreen()"),
                       "Section 必须以 NavigationLink 进 AccountSyncScreen")
 
-        let screen = Self.codeOnly(Self.loadSource("TingYou/UI/Mine/AccountSyncScreen.swift"))
+        let screen = Self.codeOnly(try Self.loadSource("TingYou/UI/Mine/AccountSyncScreen.swift"))
         XCTAssertTrue(screen.contains("resendIn"),
                       "登录表单必须有 60 秒重发倒计时（与 PC 端交互一致）")
         XCTAssertTrue(screen.contains("TextField("),
@@ -175,8 +175,8 @@ final class Build50FeatureTests: XCTestCase {
     /// 业务接线守卫：收藏增删与播放进度记录必须入队 outbox——
     /// AlbumRepository 三处调用点（进度/收藏 upsert/收藏删除），
     /// removeFavorite 必须带 detailPath 参数（bili 的 album_key 需要 bvid）。
-    func testAlbumRepositoryEnqueuesSyncOps() {
-        let repo = Self.codeOnly(Self.loadSource("TingYou/Services/AlbumRepository.swift"))
+    func testAlbumRepositoryEnqueuesSyncOps() throws {
+        let repo = Self.codeOnly(try Self.loadSource("TingYou/Services/AlbumRepository.swift"))
         XCTAssertTrue(repo.contains("syncStore?.enqueueProgress("),
                       "recordHistory 必须入队进度 op（build 50）")
         XCTAssertTrue(repo.contains("syncStore?.enqueueFavoriteUpsert("),
@@ -186,7 +186,7 @@ final class Build50FeatureTests: XCTestCase {
         XCTAssertTrue(repo.contains("detailPath: String? = nil"),
                       "removeFavorite 必须带可选 detailPath（bili album_key 需要 bvid，默认 nil 保既有调用兼容）")
 
-        let player = Self.codeOnly(Self.loadSource("TingYou/UI/Player/PlayerScreen.swift"))
+        let player = Self.codeOnly(try Self.loadSource("TingYou/UI/Player/PlayerScreen.swift"))
         XCTAssertTrue(player.contains("removeFavorite(src: album.source, albumId: album.albumId,"),
                       "PlayerScreen 取消收藏必须走 repo.removeFavorite")
         XCTAssertTrue(player.contains("detailPath: album.detailPath)"),
@@ -241,10 +241,10 @@ final class Build50FeatureTests: XCTestCase {
 
     /// 版本守卫：build 51 升位双处一致（project.yml 两处由
     /// Build29RegressionTests 守卫；此处复核 Info.plist）。
-    func testBuild50Version() {
-        let plist = Self.loadSource("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>52</string>"),
-                      "Info.plist CFBundleVersion 必须为 51")
+    func testBuild50Version() throws {
+        let plist = try Self.loadSource("TingYou/Info.plist")
+        XCTAssertTrue(plist.contains("<string>53</string>"),
+                      "Info.plist CFBundleVersion 必须为 53")
         XCTAssertTrue(plist.contains("<string>1.4.4</string>"),
                       "Info.plist CFBundleShortVersionString 维持 1.4.4")
     }
@@ -252,15 +252,17 @@ final class Build50FeatureTests: XCTestCase {
     // MARK: - 工具
 
     /// 读工程源码（相对工程根的路径），口径与 Build29RegressionTests 一致。
-    private static func loadSource(_ rel: String) -> String {
+    private static func loadSource(_ rel: String) throws -> String {
         let testDir = (#filePath as NSString).deletingLastPathComponent
         let projectDir = (testDir as NSString).deletingLastPathComponent
         let path = projectDir + "/" + rel
         guard FileManager.default.fileExists(atPath: path) else {
-            fatalError("\(rel) 不存在：\(path)——路径布局变化时请同步修正本测试")
+            XCTFail("\(rel) 不存在：\(path)——路径布局变化时请同步修正本测试")
+            throw NSError(domain: "TestSourceMissing", code: 1)
         }
         guard let src = try? String(contentsOfFile: path, encoding: .utf8) else {
-            fatalError("\(rel) 不可读：\(path)")
+            XCTFail("\(rel) 不可读：\(path)")
+            throw NSError(domain: "TestSourceUnreadable", code: 2)
         }
         return src
     }

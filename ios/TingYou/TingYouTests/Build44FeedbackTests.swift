@@ -71,8 +71,8 @@ final class Build44FeedbackTests: XCTestCase {
 
     /// PlaybackRepository BILI 分支必须走 playablePages（缓存→pagelist→view 兜底），
     /// 不得退回每章拉 view 的旧路径（412 风控主消耗方）
-    func testPlaybackRepositoryUsesPlayablePages() {
-        let src = Self.loadSource("TingYou/Services/PlaybackRepository.swift")
+    func testPlaybackRepositoryUsesPlayablePages() throws {
+        let src = try Self.loadSource("TingYou/Services/PlaybackRepository.swift")
         XCTAssertFalse(src.contains("videoInfo(bvid:"), "BILI 分支不得直接调 videoInfo（旧 412 路径）")
         XCTAssertTrue(src.contains("playablePages(bvid:"), "BILI 分支必须经 playablePages 复合入口取分P")
     }
@@ -87,8 +87,8 @@ final class Build44FeedbackTests: XCTestCase {
 
     /// TLS 握手失败（外部间歇性问题，客户端不可根治）必须映射为人话 +
     /// 规避建议，不得把 OSStatus 原文直接甩给用户
-    func testDiscoverViewModelMapsSecureConnectionFailed() {
-        let src = Self.loadSource("TingYou/UI/Discover/DiscoverViewModel.swift")
+    func testDiscoverViewModelMapsSecureConnectionFailed() throws {
+        let src = try Self.loadSource("TingYou/UI/Discover/DiscoverViewModel.swift")
         XCTAssertTrue(src.contains(".secureConnectionFailed"), "必须识别 URLError.secureConnectionFailed")
         XCTAssertTrue(src.contains("安全连接失败"), "TLS 错误必须有人话文案（含换音源规避建议）")
     }
@@ -101,8 +101,8 @@ final class Build44FeedbackTests: XCTestCase {
     /// 「≤8 条自然高度 / >8 条包 ScrollView 固定高 160」截断分支删除，
     /// 历史条目无论多少一律全量换行显示（chip 流式排布自增高，不截断、
     /// 不出现内嵌滚动、不占空白）。
-    func testHistorySectionScrollsAllEntries() {
-        let src = Self.loadSource("TingYou/UI/Discover/DiscoverScreen.swift")
+    func testHistorySectionScrollsAllEntries() throws {
+        let src = try Self.loadSource("TingYou/UI/Discover/DiscoverScreen.swift")
         // 提取 historySection 函数段（从声明到下一个 private func）
         guard let start = src.range(of: "privatevarhistorySection"),
               let rest = src[start.upperBound...].range(of: "privatefunc") else {
@@ -132,15 +132,17 @@ final class Build44FeedbackTests: XCTestCase {
 
     /// 读源码文件并归一化（剔除整行注释 + whitespace 连接），口径与
     /// Build29RegressionTests.testKeyboardDismissGestureFormGuards 一致。
-    private static func loadSource(_ rel: String) -> String {
+    private static func loadSource(_ rel: String) throws -> String {
         let testDir = (#filePath as NSString).deletingLastPathComponent
         let projectDir = (testDir as NSString).deletingLastPathComponent
         let path = projectDir + "/" + rel
         guard FileManager.default.fileExists(atPath: path) else {
-            fatalError("\(rel) 不存在：\(path)——路径布局变化时请同步修正本测试")
+            XCTFail("\(rel) 不存在：\(path)——路径布局变化时请同步修正本测试")
+            throw NSError(domain: "TestSourceMissing", code: 1)
         }
         guard let src = try? String(contentsOfFile: path, encoding: .utf8) else {
-            fatalError("\(rel) 不可读：\(path)")
+            XCTFail("\(rel) 不可读：\(path)")
+            throw NSError(domain: "TestSourceUnreadable", code: 2)
         }
         let codeOnly = src.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }

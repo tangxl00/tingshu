@@ -923,24 +923,26 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 // 才触发重试（切章拆旧条目的迟到 .failed 不重试；-999 取消
                 // 态在分类函数里排除）。
                 var networkMirrorNote: String? = nil
-                if let error = item.error,
-                   Self.isMirrorRetryableNetworkError(error),
-                   item === self?.player.currentItem {
-                    if let next = self?.takeNextMirrorCandidate() {
+                // build 53 · A3（复检：条件④用例全是文本扫描、非行为级）：
+                // 把「这条错误能不能/要不要换镜像」抽成 `mirrorRetryDecision(for:)`，
+                // 生产分支与用例**共用同一份实现**——用例真跑分类函数、真出队候选、
+                // 真读计数与上限，不再是「源码里有这行字」的字符串扫描。
+                if let error = item.error, item === self?.player.currentItem {
+                    switch self?.mirrorRetryDecision(for: error) ?? .notRetryable {
+                    case .notRetryable:
+                        break
+                    case .retry(let next, let attempt):
                         let ns = error as NSError
-                        let attempts = self?.currentMirrorAttempts() ?? 0
                         let host = URL(string: next)?.host ?? "?"
-                        self?.recordLoaderMeta("网络错误 \(ns.domain) \(ns.code) → 自动切换镜像第 \(attempts) 次 → \(host)")
+                        self?.recordLoaderMeta("网络错误 \(ns.domain) \(ns.code) → 自动切换镜像第 \(attempt) 次 → \(host)")
                         self?.storeResolved(key: uri, url: next)
                         Task { @MainActor [weak self] in
                             self?.loadCurrentChapter(autoPlay: true, keepMirrorChain: true)
                         }
                         return
+                    case .exhausted(let attempts):
+                        networkMirrorNote = Self.networkMirrorNote(forAttempts: attempts)
                     }
-                    let attempts = self?.currentMirrorAttempts() ?? 0
-                    networkMirrorNote = attempts > 0
-                        ? "网络错误 → 已换镜像 \(attempts) 次仍失败"
-                        : "网络错误 → 无可用 backup 镜像"
                 }
                 let loaderRecord = self?.takeLoaderFailureRecord()
                 // build 45 · 反馈 1a：player 层 NSError 原文（OSStatus domain/code +
@@ -1098,6 +1100,43 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         mirrorAttempts += 1
         return mirrorCandidates.removeFirst()
     }
+
+    // MARK: - build 53 · A3：网络错误 → 镜像重试的**单一决策点**（生产与用例共用）
+
+    /// 一次 `.failed` 之后要做什么。抽成枚举是为了让用例能断言「行为」而不是
+    /// 「源码里有某行字符串」——复检明确指出 b49/b52 的
+    /// `testTLSFailureWiredIntoMirrorRetryChain` 15 条断言全是文本扫描。
+    enum MirrorRetryDecision: Equatable {
+        /// 不属可重试网络错误（4xx/5xx、取消、黑盒错误）→ 直接报错，不换镜像
+        case notRetryable
+        /// 换下一个候选：`next` 为要 redirect 的直链，`attempt` 为第几次切换（1 基）
+        case retry(next: String, attempt: Int)
+        /// 可重试但没有候选了 / 次数用尽：`attempts` 为本轮已换次数（0 = 无可用 backup）
+        case exhausted(attempts: Int)
+    }
+
+    /// 生产 `.failed` 分支的唯一判据。`item === player.currentItem` 的守卫留在调用点
+    /// （它与"这条错误怎么处理"无关，是"这条失败还算不算当前条目"）。
+    func mirrorRetryDecision(for error: Error) -> MirrorRetryDecision {
+        guard Self.isMirrorRetryableNetworkError(error) else { return .notRetryable }
+        if let next = takeNextMirrorCandidate() {
+            return .retry(next: next, attempt: currentMirrorAttempts())
+        }
+        return .exhausted(attempts: currentMirrorAttempts())
+    }
+
+    /// 链耗尽时的诊断文案（唯一事实源，界面与用例共用）。
+    static func networkMirrorNote(forAttempts attempts: Int) -> String {
+        attempts > 0 ? "网络错误 → 已换镜像 \(attempts) 次仍失败" : "网络错误 → 无可用 backup 镜像"
+    }
+
+    /// 测试接缝：供用例直接装一条镜像链（生产路径由 `storeMirrorChain` 在 resolve 后写入）。
+    func setMirrorChainForTesting(_ candidates: [String]) {
+        storeMirrorChain(candidates)
+    }
+
+    /// 测试接缝：本轮已切换次数。
+    var mirrorAttemptsForTesting: Int { currentMirrorAttempts() }
 
     /// build 48 · 需求 4：当前已自动切换的镜像次数（诊断文案用）。
     private func currentMirrorAttempts() -> Int {
@@ -1633,6 +1672,25 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         historyLock.lock()
         defer { historyLock.unlock() }
         return pendingHistoryWrite == nil && historyDrainTask == nil
+    }
+
+    /// build 53 · 专项（复检 C1）：历史串行排水的**可独立驱动**接缝。
+    ///
+    /// 为什么需要它：`testHistoryWriteSerializedLatestChapterWins` 从 b45 起 0.000s
+    /// **进程崩溃**（非断言失败，三轮复现、app 进程实例多次更替）。它当时通过
+    /// `playQueue` → `play()` 走完整播放机器，把「历史串行」这条纯队列语义与
+    /// AVPlayer / AVAudioSession / MPRemoteCommandCenter / 周期观察器的生命周期
+    /// 绑死在一起——崩溃一旦落在那半边，这条语义就**永远拿不到守卫**（整进程被杀，
+    /// 断言根本不执行）。
+    ///
+    /// 该接缝只驱动真正的生产代码 `enqueueHistory` → `drainHistoryQueue`（同一份
+    /// 实现、同一把锁、同一个单任务排水器），不构建任何 AVFoundation 对象，
+    /// 于是「严格串行 + 最新章胜出」可以独立可重复地验证。
+    /// 生产路径完全不使用它（`recordHistory` 才是生产入口）。
+    func enqueueHistoryForTesting(album: Album, chapter: Chapter,
+                                  positionMs: Int64, durationMs: Int64) {
+        enqueueHistory(PendingHistoryWrite(album: album, chapter: chapter,
+                                           positionMs: positionMs, durationMs: durationMs))
     }
 
     private func resolvedPlayUrl(forKey key: String) -> String? {

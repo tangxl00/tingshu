@@ -85,31 +85,86 @@ final class Build49FeatureTests: XCTestCase {
     /// 复用 b48 镜像切换机制（takeNextMirrorCandidate + storeResolved +
     /// keepMirrorChain 重建）→ 链耗尽才拼终局诊断；分类函数体内不得出现
     /// HTTP 状态 / 412 分支（4xx 不盲换的结构性保证）。
-    func testTLSFailureWiredIntoMirrorRetryChain() throws {
+    /// build 53 · A3（复检条件④：原 15 条断言全是文本扫描、非行为级）——
+    /// 重写为**行为级**：用例真装镜像链、真喂 NSError、真跑生产 `.failed`
+    /// 分支用的 `mirrorRetryDecision(for:)` 单一决策点，断言候选出队顺序 /
+    /// 切换计数递增 / mirrorRetryLimit 总预算 / 不可重试族不消耗预算 /
+    /// 链重装清零 / 耗尽文案。行为级与生产走同一份实现——「源码里有这行字」
+    /// 式断言不再出现在本用例（接线面的少量结构性守卫拆到
+    /// testFailedBranchExecutesMirrorDecision，两者互补）。
+    func testTLSFailureWiredIntoMirrorRetryChain() {
+        let pm = PlaybackManager(playbackRepository: nil)
+        func err(_ code: Int, domain: String = NSURLErrorDomain) -> NSError {
+            NSError(domain: domain, code: code)
+        }
+        // 装一条比 mirrorRetryLimit 更长的链：区分「链耗尽」与「次数预算用尽」
+        let chain = (1...5).map { "https://mirror\($0).example.com/v\($0).mp4" }
+        pm.setMirrorChainForTesting(chain)
+
+        // TLS 握手失败（真机取证点 -1200）→ 第 1 次切换，候选按序出队
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-1200)),
+                       .retry(next: chain[0], attempt: 1),
+                       "TLS -1200 必须换第 1 个候选（真机取证点）")
+        // 连接超时 / 连接重置 → 第 2、3 次（与 watchdog 停滞共用同一计数）
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-1001)),
+                       .retry(next: chain[1], attempt: 2),
+                       "连接超时（-1001）必须按序换第 2 个候选")
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-1005)),
+                       .retry(next: chain[2], attempt: 3),
+                       "连接重置（-1005）必须按序换第 3 个候选")
+        // 第 4 次可重试错误：候选还剩 2 个，但 mirrorRetryLimit=3 预算用尽 → 终局
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-1200)),
+                       .exhausted(attempts: 3),
+                       "镜像切换总预算 = mirrorRetryLimit(3)，链再长也不得超出（build 48 需求 4 口径）")
+        XCTAssertEqual(pm.mirrorAttemptsForTesting, 3, "耗尽后计数停留在 3，不得继续递增")
+
+        // 不可重试族：不消耗候选、不递增计数（4xx/5xx/412 不盲换的结构性保证）
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-999)),
+                       .notRetryable, "取消（-999，切章正常取消）不得换镜像")
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-1011)),
+                       .notRetryable, "服务器响应错误（-1011，HTTP 层语义）不得换镜像")
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-11800, domain: "AVFoundationErrorDomain")),
+                       .notRetryable, "非 NSURLErrorDomain（AVFoundation 黑盒）不得换镜像")
+        XCTAssertEqual(pm.mirrorAttemptsForTesting, 3,
+                       "不可重试错误不得消耗镜像预算")
+
+        // 重装链（对应生产 resolve 后 storeMirrorChain）必须清零计数
+        pm.setMirrorChainForTesting([chain[0]])
+        XCTAssertEqual(pm.mirrorAttemptsForTesting, 0, "重装链必须清零切换计数")
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-1200)),
+                       .retry(next: chain[0], attempt: 1))
+        // 只剩 1 个候选：换完后第 2 个可重试错误 → 链耗尽，attempts 如实 = 1
+        XCTAssertEqual(pm.mirrorRetryDecision(for: err(-1001)),
+                       .exhausted(attempts: 1),
+                       "候选耗尽必须如实报已换 1 次（区分链短与预算用尽）")
+
+        // 耗尽文案（界面与用例共用的唯一事实源）
+        XCTAssertEqual(PlaybackManager.networkMirrorNote(forAttempts: 3),
+                       "网络错误 → 已换镜像 3 次仍失败",
+                       "链耗尽诊断必须标注已换镜像次数")
+        XCTAssertEqual(PlaybackManager.networkMirrorNote(forAttempts: 0),
+                       "网络错误 → 无可用 backup 镜像",
+                       "无 backup 镜像时必须如实标注（不得谎报已换镜像）")
+    }
+
+    /// build 53 · A3 附带：`.failed` 分支**接线面**守卫。行为级用例断言
+    /// 「决策正确」；真机 AVFoundation 生命周期（statusObserver 回调、
+    /// currentItem 守卫、条目重建）在单测沙箱无法真跑，这部分保留少量
+    /// 结构性扫描，断言「决策结果被正确执行」：
+    /// 当前条目守卫 → 单一决策点 → 重定向缓存 → 保留镜像链重建条目 →
+    /// 终局诊断拼 networkMirrorNote；分类函数体内无 HTTP 层分支。
+    func testFailedBranchExecutesMirrorDecision() throws {
         let pm = Self.codeOnly(try Self.source("TingYou/Playback/PlaybackManager.swift"))
-        // 分类函数存在且只认 NSURLErrorDomain
-        XCTAssertTrue(pm.contains("static func isMirrorRetryableNetworkError"),
-                      "必须有网络错误分类纯函数（build 49 问题 1）")
-        XCTAssertTrue(pm.contains("guard ns.domain == NSURLErrorDomain else { return false }"),
-                      "分类函数必须只认 NSURLErrorDomain（其它 domain 一律不重试）")
-        // .failed 分支接线：分类 → 当前条目守卫 → 候选出队 → 同机制切换
-        XCTAssertTrue(pm.contains("Self.isMirrorRetryableNetworkError(error),"),
-                      "statusObserver .failed 分支必须先过网络错误分类（build 49 问题 1）")
         XCTAssertTrue(pm.contains("item === self?.player.currentItem {"),
                       "只有当前条目的失败才触发镜像重试（切章拆旧条目的迟到 .failed 不重试）")
-        XCTAssertTrue(pm.contains(#"self?.recordLoaderMeta("网络错误 \(ns.domain) \(ns.code) → 自动切换镜像第 \(attempts) 次 → \(host)")"#),
-                      "网络错误切镜像必须落到诊断文案（build 49 问题 1）")
+        XCTAssertTrue(pm.contains("switch self?.mirrorRetryDecision(for: error) ?? .notRetryable {"),
+                      ".failed 分支必须经单一决策点 mirrorRetryDecision（与行为级用例同一份实现）")
         XCTAssertTrue(pm.contains("storeResolved(key: uri, url: next)"),
                       "网络错误切镜像必须重定向占位 URI 缓存（与 watchdog 同机制）")
         XCTAssertTrue(pm.contains("loadCurrentChapter(autoPlay: true, keepMirrorChain: true)"),
                       "网络错误切镜像必须保留镜像链重建条目（与 watchdog 同机制）")
-        // 链耗尽的终局诊断标注
-        XCTAssertTrue(pm.contains(#"networkMirrorNote = attempts > 0"#),
-                      "镜像链耗尽必须区分「已换 N 次仍失败」与「无可用镜像」两种文案")
-        XCTAssertTrue(pm.contains(#"? "网络错误 → 已换镜像 \(attempts) 次仍失败""#),
-                      "诊断必须标注已换镜像次数（TLS/网络错误 → 已换镜像 N 次仍失败）")
-        XCTAssertTrue(pm.contains(": \"网络错误 → 无可用 backup 镜像\""),
-                      "无 backup 镜像时诊断必须如实标注（不得谎报已换镜像）")
+        XCTAssertTrue(pm.contains(#"自动切换镜像第 \(attempt) 次"#),
+                      "网络错误切镜像必须落到诊断文案（build 49 问题 1）")
         XCTAssertTrue(pm.contains("diagnostic.append(networkMirrorNote)"),
                       "networkMirrorNote 必须拼进终局诊断 [诊断] 段")
         // 结构性保证：分类函数体内无 HTTP 状态 / 4xx / 412 分支
@@ -168,11 +223,11 @@ final class Build49FeatureTests: XCTestCase {
     // MARK: - 版本
 
     /// 版本守卫：Info.plist CFBundleVersion 必须为当前构建号
-    ///（build 52 升位；project.yml 两处在 Build29RegressionTests 已守卫）。
+    ///（build 53 升位；project.yml 两处在 Build29RegressionTests 已守卫）。
     func testBuild49Version() throws {
         let plist = try Self.source("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>52</string>"),
-                      "Info.plist CFBundleVersion 必须为 52")
+        XCTAssertTrue(plist.contains("<string>53</string>"),
+                      "Info.plist CFBundleVersion 必须为 53")
         XCTAssertTrue(plist.contains("<string>1.4.4</string>"),
                       "Info.plist CFBundleShortVersionString 维持 1.4.4")
     }

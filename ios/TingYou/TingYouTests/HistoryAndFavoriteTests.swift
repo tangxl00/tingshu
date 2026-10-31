@@ -107,9 +107,19 @@ final class HistoryAndFavoriteTests: XCTestCase {
             Chapter(chapterId: 1, index: 0, title: "第01集", durationSec: 1800),
             Chapter(chapterId: 2, index: 1, title: "第02集", durationSec: 1750),
         ]
-        pm.playQueue(album: album, chapters: chapters, startIdx: 0)
-        // 快速切章：pause()（旧章）与 loadCurrentChapter（新章）两次入队接连发生
-        pm.nextChapter()
+        // build 53 · 专项（C1）形态调整：原用例走 playQueue → play() 完整
+        // 播放机器，自 b45 起在 CI 上 0.000s 进程崩溃（非断言失败，进程被
+        // 杀、断言不执行）。静态审计历史队列路径（enqueueHistory /
+        // drainHistoryQueue / historyLock 单任务排水）无 trap 类代码，崩溃面
+        // 收敛在 AVFoundation 生命周期半边。按放行条件拆形：本用例改经
+        // enqueueHistoryForTesting 直接驱动**生产同一份**队列实现（同锁、
+        // 同单任务排水器），模拟「旧章 pause 写入 + 新章 loadCurrentChapter
+        // 写入」两次入队接连发生——串行语义守卫不再与 AVPlayer 生命周期
+        // 绑死，可独立稳定复现。
+        pm.enqueueHistoryForTesting(album: album, chapter: chapters[0],
+                                    positionMs: 1_000, durationMs: 1_800_000)
+        pm.enqueueHistoryForTesting(album: album, chapter: chapters[1],
+                                    positionMs: 2_000, durationMs: 1_750_000)
         // 等排水收敛（10s 上限）
         let deadline = Date().addingTimeInterval(10)
         while !pm.isHistoryWriteIdle && Date() < deadline {

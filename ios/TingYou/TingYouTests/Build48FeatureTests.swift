@@ -21,8 +21,8 @@ final class Build48FeatureTests: XCTestCase {
     /// 需求 2 守卫：折叠面板与入口按钮形态必须消失，横向分类标签栏必须常驻，
     /// 且样式沿用原展开态蓝框（选中粗体主色 / 未选中次级色），
     /// 音源切换后标签栏随之刷新（选中项重置 + 分类源取自当前 browseSource）。
-    func testDiscoverCategoryBarAlwaysVisible() {
-        let src = Self.codeOnly(Self.loadSource("TingYou/UI/Discover/DiscoverScreen.swift"))
+    func testDiscoverCategoryBarAlwaysVisible() throws {
+        let src = Self.codeOnly(try Self.loadSource("TingYou/UI/Discover/DiscoverScreen.swift"))
         // 折叠面板与入口按钮形态消失
         XCTAssertFalse(src.contains("DisclosureGroup"),
                        "分类折叠面板必须已删除（build 48 需求 2）")
@@ -56,10 +56,10 @@ final class Build48FeatureTests: XCTestCase {
     /// 需求 4 守卫（接线面）：resolve 阶段一次取回「主选 + backup 镜像链」，
     /// watchdog 超时后自动切镜像重试（上限 3 次），链耗尽才报错；
     /// b47 的 Content-Type 改写 / ftyp 嗅探 / Referer+Range 注入不得回退。
-    func testBiliMirrorRetryChainGuard() {
-        let pm = Self.codeOnly(Self.loadSource("TingYou/Playback/PlaybackManager.swift"))
-        let repo = Self.codeOnly(Self.loadSource("TingYou/Services/PlaybackRepository.swift"))
-        let adapter = Self.codeOnly(Self.loadSource("TingYou/Services/BiliAdapter.swift"))
+    func testBiliMirrorRetryChainGuard() throws {
+        let pm = Self.codeOnly(try Self.loadSource("TingYou/Playback/PlaybackManager.swift"))
+        let repo = Self.codeOnly(try Self.loadSource("TingYou/Services/PlaybackRepository.swift"))
+        let adapter = Self.codeOnly(try Self.loadSource("TingYou/Services/BiliAdapter.swift"))
         // ① 候选链：主选 + backup 镜像
         XCTAssertTrue(repo.contains("func getPlayUrlCandidates"),
                       "仓储层必须提供候选链接口（主选 + backup 镜像）")
@@ -145,8 +145,8 @@ final class Build48FeatureTests: XCTestCase {
     /// 需求 3 边界守卫：导入 tab / 空态页 / 导入列表视图必须消失，
     /// 收藏与历史两 tab 必须保留；外部导入入口（本地/网页导入菜单）
     /// 属「我的」能力链，按组长指令不在本次删除范围，必须保留。
-    func testShelfImportTabRemovedButExternalImportKept() {
-        let src = Self.codeOnly(Self.loadSource("TingYou/UI/Shelf/ShelfScreen.swift"))
+    func testShelfImportTabRemovedButExternalImportKept() throws {
+        let src = Self.codeOnly(try Self.loadSource("TingYou/UI/Shelf/ShelfScreen.swift"))
         XCTAssertFalse(src.contains("importedContent"), "导入 tab 内容卡片必须已删除")
         XCTAssertFalse(src.contains("暂无导入书籍"), "导入空态页必须已删除")
         XCTAssertFalse(src.contains("ImportedBookRow"), "导入行视图必须已删除")
@@ -159,15 +159,17 @@ final class Build48FeatureTests: XCTestCase {
     // MARK: - 工具
 
     /// 读工程源码（相对工程根的路径），口径与 Build29RegressionTests 一致。
-    private static func loadSource(_ rel: String) -> String {
+    private static func loadSource(_ rel: String) throws -> String {
         let testDir = (#filePath as NSString).deletingLastPathComponent
         let projectDir = (testDir as NSString).deletingLastPathComponent
         let path = projectDir + "/" + rel
         guard FileManager.default.fileExists(atPath: path) else {
-            fatalError("\(rel) 不存在：\(path)——路径布局变化时请同步修正本测试")
+            XCTFail("\(rel) 不存在：\(path)——路径布局变化时请同步修正本测试")
+            throw NSError(domain: "TestSourceMissing", code: 1)
         }
         guard let src = try? String(contentsOfFile: path, encoding: .utf8) else {
-            fatalError("\(rel) 不可读：\(path)")
+            XCTFail("\(rel) 不可读：\(path)")
+            throw NSError(domain: "TestSourceUnreadable", code: 2)
         }
         return src
     }

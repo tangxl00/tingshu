@@ -83,6 +83,7 @@ final class Build52FeatureTests: XCTestCase {
         XCTAssertEqual(engine.pendingOps, 0, "界面绑定的待补传数必须同步归零")
         XCTAssertGreaterThan(engine.lastSyncAtMs, 0, "成功后必须记录上次同步时间")
         XCTAssertEqual(engine.renewalState, .idle, "成功路径不得残留任何续期告警")
+        XCTAssertEqual(engine.syncFailure, .none, "成功路径不得残留任何同步失败告警")
         XCTAssertEqual(engine.phase, .loggedIn, "成功路径必须保持登录态")
     }
 
@@ -140,6 +141,7 @@ final class Build52FeatureTests: XCTestCase {
         XCTAssertEqual(store.outboxCount, 0, "瞬态失败后必须自动重试到清零（无需用户点按钮）")
         XCTAssertGreaterThan(engine.lastSyncAtMs, 0, "重试成功必须记上次同步时间")
         XCTAssertEqual(engine.renewalState, .idle, "自愈后不得残留告警")
+        XCTAssertEqual(engine.syncFailure, .none, "自愈后同步维度也不得残留告警")
         XCTAssertEqual(engine.retryAttempt, 0, "成功后退避计数必须归零")
     }
 
@@ -266,8 +268,11 @@ final class Build52FeatureTests: XCTestCase {
         XCTAssertEqual(engine.lastPushFailedCount, 1, "failed 计数必须为 1")
         XCTAssertEqual(engine.lastSyncAtMs, 0,
                        "push 部分失败时不得刷新「上次同步成功」（#140 条件 3 点名修复点）")
-        XCTAssertTrue(engine.renewalState.isRetrying,
+        // build 53 · P1-3：push 部分失败属**同步维度**，不得写进续期维度
+        XCTAssertTrue(engine.syncFailure.isRetrying,
                       "部分失败必须落到「稍后自动重试」，不得显示成功")
+        XCTAssertEqual(engine.renewalState, .idle,
+                       "push 部分失败与令牌续期无关，续期维度必须保持 idle（b52 误用同一通道）")
         engine.stopRetry()
     }
 
@@ -312,7 +317,9 @@ final class Build52FeatureTests: XCTestCase {
                        "落库失败不得推进游标（否则 next since 越过这批变更、数据永久丢）")
         XCTAssertEqual(engine.lastSyncAtMs, 0, "落库失败的一轮不得记成功")
         XCTAssertNotNil(engine.lastMessage, "落库失败必须有明确文案（不得静默）")
-        XCTAssertTrue(engine.renewalState.isRetrying, "落库失败属可恢复，必须挂重试")
+        // build 53 · P1-3：落库失败属**同步维度**
+        XCTAssertTrue(engine.syncFailure.isRetrying, "落库失败属可恢复，必须挂重试")
+        XCTAssertEqual(engine.renewalState, .idle, "落库失败与续期无关，续期维度必须保持 idle")
         XCTAssertFalse(engine.syncing, "本轮结束必须复位 syncing")
         engine.stopRetry()
 

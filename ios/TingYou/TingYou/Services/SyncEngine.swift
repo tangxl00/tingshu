@@ -21,6 +21,15 @@ final class SyncEngine {
     /// 展示文案是「登录状态已过期，正在自动续期」——终局失败被伪装成进行中，
     /// 真机实测红字挂 3.5 小时不动、待补传数永不归零。
     /// 现拆成四个可区分状态：进行中 / 瞬态失败（可自动恢复）/ 终局失败（需重新登录）。
+    ///
+    /// build 53 · P1-3（复检 B1）：这个枚举是**续期维度**，不得再当通用失败通道。
+    /// b52 曾把 push 部分失败、merge 落库失败等普通同步失败也写成
+    /// `.retryScheduled`，界面于是显示「同步未完成，稍后自动重试」底下挂一句
+    /// 续期口径文案——用户会以为令牌出了问题、去做重新登录这个无效动作。
+    /// 现拆成两个维度：
+    /// - `renewalState`（本枚举）：只描述**令牌续期**这件事（refreshing/retry/terminal）；
+    /// - `syncFailure`（见 `SyncFailure`）：只描述**普通同步**（push/pull/落库）失败。
+    /// 界面两行分别呈现，任何一侧失败都不影响另一侧显示。
     enum RenewalState: Equatable {
         /// 无续期动作、无异常
         case idle
@@ -41,6 +50,38 @@ final class SyncEngine {
             if case .retryScheduled = self { return true }
             return false
         }
+        /// build 53 · 供持久化/跨事件判断：是否有未完成的续期动作
+        var isActive: Bool {
+            if case .idle = self { return false }
+            return true
+        }
+    }
+
+    /// build 53 · P1-3：普通同步失败维度（push 部分失败 / pull 或落库失败 /
+    /// 传输层失败）。与 `RenewalState` 互不覆盖——一次失败只记到一个维度，
+    /// 界面按维度分别展示，用户不会把「云端没确认某条变更」误读成「令牌过期」。
+    enum SyncFailure: Equatable {
+        /// 本轮全部成功（或无失败）
+        case none
+        /// 可自动恢复的同步失败（网络 / 5xx / 部分变更未确认 / 落库失败）
+        case retryScheduled(String)
+        /// 终局失败（已回未登录态等，同步本身不再继续）
+        case terminal(String)
+
+        var text: String? {
+            switch self {
+            case .none: return nil
+            case .retryScheduled(let t), .terminal(let t): return t
+            }
+        }
+        var isRetrying: Bool {
+            if case .retryScheduled = self { return true }
+            return false
+        }
+        var isTerminal: Bool {
+            if case .terminal = self { return true }
+            return false
+        }
     }
 
     private(set) var phase: Phase = .loggedOut
@@ -51,18 +92,30 @@ final class SyncEngine {
     private(set) var lastMessage: String?
     /// build 52 · 条件 1：同步页据此区分「瞬态续期中」与「续期失败，请重新登录」
     private(set) var renewalState: RenewalState = .idle
+    /// build 53 · P1-3：普通同步失败（push 部分失败 / pull / 落库 / 传输层）。
+    /// 与 `renewalState` 是两个独立维度：续期正常而同步失败时此前会被写成
+    /// 「续期」问题，用户看到「同步未完成」下面挂一句续期口气的文案，
+    /// 会误以为要去重新登录（无效动作）。现已分离，界面各占一行。
+    private(set) var syncFailure: SyncFailure = .none
     /// build 51 · P1-2：本轮 push 中被服务端判为 failed（非 success/duplicate）的 op 数
     private(set) var lastPushFailedCount = 0
     /// build 51 · P1-3：本轮 push 未能确认处理（缺 client_op_id / 未回 results）的 op 数
     private(set) var lastPushUnhandledCount = 0
     /// build 52 · 条件 2：当前已失败几次（退避阶梯下标），成功后归零
     private(set) var retryAttempt = 0
+    /// build 53 · A1：是否处于前台（进后台是唯一允许停退避链的时机；此处仅作可观测状态）
+    private(set) var isForeground = true
 
     private let client: SyncCloudClient
     private let store: SyncLocalStore
     private let modelContext: ModelContext?
     private var flushTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
+    /// build 53 · P1-3：本轮同步里**续期这一步**是否失败过。
+    /// 只用 `renewalState.isRetrying` 判断会被上一轮残留状态误导（上一轮续期失败、
+    /// 这一轮续期正常但 push 失败，仍会被归到续期维度）。此标记每轮 syncNow 归零，
+    /// 只在 withAuth / renewAccessTokenInAdvance 的续期失败分支置真。
+    private var renewalFailedThisRound = false
 
     /// build 52 · 条件 3 测试接缝：merge 的落库动作（生产路径走 `try ctx.save()`）。
     /// 行为级用例注入抛错闭包，验证「save 抛错 → lastSeq 不推进 + 有明确文案」。
@@ -90,11 +143,18 @@ final class SyncEngine {
     /// build 52 · 条件 1：三种续期/同步状态的**唯一文案事实源**（界面与用例共用，
     /// 避免「界面上写一套、用例里扫另一套字符串」）。语义硬约束：
     /// - `refreshingHeadline` 只描述**真的在进行中**的动作；
-    /// - `retryHeadline` 描述可自动恢复的失败（不是成功态）；
+    /// - `renewalRetryHeadline` / `syncRetryHeadline` 描述可自动恢复的失败（不是成功态）；
     /// - `terminalHeadline` 必须明确「重新登录」——用户看到才知道点「立即同步」无用。
+    ///
+    /// build 53 · P1-3：文案也按维度分开。续期维度用「自动续期未成功」，
+    /// 同步维度用「同步未完成」——b52 两个维度共用一句「同步未完成，稍后自动重试」，
+    /// 挂在续期行下面，用户读到的潜台词就是「令牌出问题了，得重新登录」。
     static let refreshingHeadline = "正在自动续期…"
-    static let retryHeadline = "同步未完成，稍后自动重试"
+    static let renewalRetryHeadline = "自动续期未成功，稍后自动重试"
     static let terminalHeadline = "续期失败，请重新登录"
+    /// build 53 · P1-3：普通同步（push 部分失败 / pull / 落库 / 传输层）维度
+    static let syncRetryHeadline = "同步未完成，稍后自动重试"
+    static let syncTerminalHeadline = "同步已中断，请重新登录"
 
     init(client: SyncCloudClient = SyncCloudClient(),
          store: SyncLocalStore = .shared,
@@ -132,10 +192,55 @@ final class SyncEngine {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.refreshOnForeground()
+                self.handleBecomeActive()
             }
         }
-        observers = [outboxObs, activeObs]
+        // build 53 · A1（复检放行条件 A1）：退避链只允许在 App 真正进后台时停。
+        // b52 的停链点是 AccountSyncScreen 的 .onDisappear——用户「看一眼、退回上一级」
+        // （最常见的操作）就把退避链拆掉，而恢复入口只有 didBecomeActive
+        //（用户没离开 App 就永不触发）→ 进页自愈在真机主路径上失效。
+        // 现改为：进后台停（后台空转无意义，且 App 可能被挂起）；回前台/回页恢复。
+        let backgroundObs = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.handleEnterBackground()
+            }
+        }
+        observers = [outboxObs, activeObs, backgroundObs]
+    }
+
+    /// build 53 · A1：App 进后台——这是**唯一**允许停退避链的时机。
+    /// 只取消在途定时器；失败意图（renewalState / syncFailure 的 retryScheduled）
+    /// 保留，回前台由 `handleBecomeActive` 续挂。
+    func handleEnterBackground() {
+        isForeground = false
+        guard phase == .loggedIn else { return }
+        stopRetry()
+    }
+
+    /// build 53 · A1：回到前台——若本轮仍有未完成的失败意图、且没有在途重试任务，
+    /// 立即续挂退避（不必等用户再进同步页）。随后走原有的「回前台补同步」逻辑。
+    func handleBecomeActive() {
+        isForeground = true
+        guard phase == .loggedIn, store.isLoggedIn else { return }
+        resumeRetryIfNeeded()
+        refreshOnForeground()
+    }
+
+    /// 当前是否存在「已失败、待自动重试」的意图（两个维度任一）。
+    /// 退出重试任务（进后台 / 手动同步开始）不改变意图，故它可跨事件保存。
+    var hasPendingRetryIntent: Bool {
+        renewalState.isRetrying || syncFailure.isRetrying
+    }
+
+    /// build 53 · A1：按失败意图续挂退避（同一时刻只挂一个；已有在途任务则不重复挂）。
+    /// 非失败态不挂——避免把「已成功」误判成需要重试。
+    func resumeRetryIfNeeded() {
+        guard phase == .loggedIn, store.isLoggedIn, !syncing else { return }
+        guard retryTask == nil, hasPendingRetryIntent else { return }
+        scheduleRetry()
     }
 
     /// outbox 变化后 3 秒去抖补传（进度 5s 节流入队不打爆云端）
@@ -169,12 +274,24 @@ final class SyncEngine {
     /// 进入同步页 / 回前台时的统一入口：先按 accessExpireAtMs 提前续期，
     /// 再触发一次同步。原实现同步页既无 syncNow 调用也无任何定时器，
     /// 叠加「续期失败无重试」→ 真机待补传 1 条恒挂 3.5h（#140 实测）。
+    ///
+    /// build 53 · A2：进页即开启**新一轮**重试档位（`retryAttempt` 归零）。
+    /// b52 的档位是「进程生命周期内累计失败次数」且 stopRetry 不碰计数——
+    /// 用户进页看到失败、退出去、再回来（每轮都失败）会让档位跨轮继承，
+    /// 4 次往返就饱和到 10 分钟档，红字反而挂得更久。改为按「本轮连续失败」
+    /// 计档：进页归零、本轮内每次失败 +1、成功后归零。
     func onSyncPageEnter() async {
         guard phase == .loggedIn, store.isLoggedIn, !syncing else { return }
+        // 进页 = 新一轮：档位归零（否则跨轮继承会提前饱和到 10 分钟档）
+        retryAttempt = 0
         if needsProactiveRenewal(), await renewAccessTokenInAdvance() == false {
             return   // 提前续期失败：renewAccessTokenInAdvance 内已挂退避重试
         }
         await syncNow()
+        // build 53 · A1：同步结束后若仍有失败意图却没有在途重试（例如进页时
+        // 上一轮链已因进后台被停、本轮 syncNow 又因 guard 提前返回），
+        // 这里补挂一次——「重新进页」同样是恢复入口。
+        resumeRetryIfNeeded()
     }
 
     /// 提前续期（不经服务端 40003 触发）。成功返回 true 并落盘新令牌；
@@ -201,6 +318,7 @@ final class SyncEngine {
             let text = "自动续期未成功：\(friendlyMessage(error))"
             lastMessage = text
             renewalState = .retryScheduled(text)
+            renewalFailedThisRound = true
             scheduleRetry()
             return false
         }
@@ -281,6 +399,9 @@ final class SyncEngine {
         lastSyncAtMs = 0
         lastMessage = nil
         renewalState = .idle
+        // build 53 · P1-3：登出即清两个维度的失败态，避免下一账号看到上一账号的红字
+        syncFailure = .none
+        renewalFailedThisRound = false
         retryAttempt = 0
         stopRetry()
     }
@@ -293,6 +414,9 @@ final class SyncEngine {
         syncing = true
         // build 52 · 条件 2：本次同步会覆盖重试意图，先摘掉挂着的旧定时器
         stopRetry()
+        // build 53 · P1-3：本轮续期维度归零（否则上一轮的续期失败会把本轮
+        // 普通同步失败也归到续期口径，界面又分不清两个维度）
+        renewalFailedThisRound = false
         // build 52 · 条件 3：每轮开始先归零 push 计数，避免上一轮的残留值
         // 让本轮（队列已空、根本没 push）也判成「部分失败」而不刷新同步时间。
         lastPushFailedCount = 0
@@ -304,8 +428,10 @@ final class SyncEngine {
             // build 51 · P1-3：落库失败时 merge 已写入 lastMessage，
             // 这里不能再把 lastMessage 清成 nil、也不能记账「同步成功」
             if !merged {
-                // 落库失败属可恢复（下次重试会再拉同一批），同样要挂退避重试
-                renewalState = .retryScheduled(lastMessage ?? "本地数据写入失败")
+                // 落库失败属可恢复（下次重试会再拉同一批），同样要挂退避重试。
+                // build 53 · P1-3：属**同步**维度失败，不得写成续期状态。
+                let text = lastMessage ?? "本地数据写入失败"
+                syncFailure = .retryScheduled(text)
                 scheduleRetry()
                 return
             }
@@ -321,7 +447,9 @@ final class SyncEngine {
                 let left = max(lastPushFailedCount, lastPushUnhandledCount)
                 let text = "有 \(left) 条变更云端未确认，已保留在队列中，稍后自动重试"
                 lastMessage = text
-                renewalState = .retryScheduled(text)
+                // build 53 · P1-3：同样是**同步**维度失败（云端没确认变更），
+                // 与令牌续期无关——用户不该被引导去重新登录。
+                syncFailure = .retryScheduled(text)
                 scheduleRetry()
                 return
             }
@@ -329,6 +457,7 @@ final class SyncEngine {
             lastSyncAtMs = store.lastSyncAtMs
             lastMessage = nil
             renewalState = .idle
+            syncFailure = .none
             retryAttempt = 0
         } catch {
             let text = friendlyMessage(error)
@@ -337,11 +466,25 @@ final class SyncEngine {
             // build 52 · 条件 1：withAuth 已在续期分支写入语义明确的
             // 「自动续期未成功：<真实原因>」——这里**不得再覆盖**成通用文案，
             // 否则界面又变回看不出「是续期失败还是普通同步失败」的同一句话。
+            //
+            // build 53 · P1-3：**按维度分流**——续期维度已有瞬态失败就只挂重试，
+            // 不再往同步维度写一句重复文案；否则续期正常而普通同步失败，
+            // 又被续期状态吞掉（b52 的「续期误用为通用失败通道」）。
+            // 判据用**本轮**标记而不是 renewalState：renewalState 可能是上一轮
+            // 遗留的 .retryScheduled，拿它判会把本轮普通同步失败误算成续期失败。
             if phase == .loggedIn {
-                if !renewalState.isRetrying {
-                    renewalState = .retryScheduled(text)
+                if renewalFailedThisRound {
+                    // 续期维度已如实记录（withAuth / renewAccessTokenInAdvance 内写入），
+                    // 同步维度保持无失败——两个维度不重复记账
+                    syncFailure = .none
+                } else {
+                    syncFailure = .retryScheduled(text)
                 }
                 scheduleRetry()
+            } else {
+                // 已回落未登录：终局由 demoteToLoggedOut 的 renewalState = .terminal 呈现，
+                // 同步维度不再重复写一句同样的红字
+                syncFailure = .none
             }
         }
     }
@@ -385,6 +528,7 @@ final class SyncEngine {
         } catch {
             // 瞬态：网络 / 超时 / 5xx。**原样抛出真实错误，不重包 40003**（#140 根因）
             renewalState = .retryScheduled("自动续期未成功：\(friendlyMessage(error))")
+            renewalFailedThisRound = true
             throw error
         }
 
