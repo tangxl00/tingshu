@@ -119,17 +119,25 @@ enum OpenResumePlanner {
     /// 打开书是否要把播放器静默装载到目标章（需求 e：到位即静默，不制造声音闪断）。
     /// - 正在播放任何一本 → 不动播放器（打开详情页不得打断正在听的音频；
     ///   用户点「继续收听」/ 点该章时才切换，切换本身带历史位置）；
+    /// - **播放器里装着另一本书（本次仅暂停）→ 保留原队列，不静默替换**
+    ///   （build 55 · P2-4 收窄：b54 只判 `isPlaying`，用户在 A 书暂停、打开 B 书详情页
+    ///   就会把 A 的队列掀掉——不丢历史但需重新取流，且迷你条显示成 B。
+    ///   定位与「继续收听」按钮不受影响：它们由 plan 的 chapter/startPosMs 提供，
+    ///   用户点播放时才真正切换队列）；
+    /// - 播放器为空 → 装载；
     /// - 已装载本书且正停在目标章 → 不重复装载（避免重新取流 + 重写历史）；
-    /// - 其余（空闲 / 停在别的书 / 本书停在别的章）→ 静默装载到目标章。
+    /// - 本书但停在别的章 → 装载。
+    ///
+    /// 入参 `anchor` 必须是**播放器实际装载态**（不论是不是本书）——调用侧据此
+    /// 才能分辨「空播放器」与「另一本书的暂停队列」。
     static func shouldPrepare(anchor: QueueAnchor?, isPlaying: Bool,
                               album: Album, target: ResumeTarget,
                               chapters: [Chapter]) -> Bool {
         if isPlaying { return false }
-        guard let anchor,
-              anchor.src == album.source, anchor.albumId == album.albumId,
-              let pos = anchor.arrayPosition, chapters.indices.contains(pos),
-              chapters[pos].index == target.chapterIdx else { return true }
-        return false
+        guard let anchor else { return true }
+        if anchor.src != album.source || anchor.albumId != album.albumId { return false }
+        guard let pos = anchor.arrayPosition, chapters.indices.contains(pos) else { return true }
+        return chapters[pos].index != target.chapterIdx
     }
 
     /// 由目标 + 章节列表产出完整定位结论（所有分支共用的唯一构造点）。

@@ -166,9 +166,10 @@ struct AlbumScreen: View {
     }
 
     private func queueAnchorForThisAlbum() -> QueueAnchor? {
-        guard let pm = container?.playbackManager,
-              let cur = pm.currentAlbum,
-              cur.source == album.source, cur.albumId == album.albumId else { return nil }
+        // build 55 · P2-4：这里必须返回**播放器实际装载态**（哪怕装的是另一本书）——
+        // b54 只在本专辑时返回 anchor、否则返回 nil，`shouldPrepare` 把 nil 当成
+        // 「播放器空闲」→ 暂停态下打开另一本书就把原队列掀掉。
+        guard let pm = container?.playbackManager, let cur = pm.currentAlbum else { return nil }
         return QueueAnchor(src: cur.source, albumId: cur.albumId,
                            arrayPosition: pm.currentChapters.indices.contains(pm.currentChapterIdx)
                                ? pm.currentChapterIdx : nil)

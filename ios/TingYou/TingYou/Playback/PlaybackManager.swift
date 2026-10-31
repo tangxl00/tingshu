@@ -546,6 +546,43 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private var historyDrainTask: Task<Void, Never>?
     private let historyLock = NSLock()
 
+    // MARK: - build 55 · P1-2：静默装载期的写历史抑制（状态机）
+
+    /// 静默装载（打开详情页定位 / 启动恢复）之后、用户真正开始播放之前，
+    /// **所有自动落历史通道**一律抑制：装载瞬间（原有 silentWrite 两点）、
+    /// 暂停 `pause()`、退页 `deinit`（末行调 pause()）、周期观察器（每秒一拍）、
+    /// 章末自动落库——它们此前都不看 silentWrite（b54 复检 3b：三通道漏守卫）。
+    ///
+    /// 后果不可接受的原因（复检反向推演，比研发自述更重一层）：落一条旧位置历史
+    /// 会走 `AlbumRepository.recordHistory` 把 `updatedAt` 顶成 now，随后
+    /// `syncStore.enqueueProgress` 入 outbox：
+    /// ① `SyncEngine.merge` 判据是 `rec.updatedAt > local.updatedAt`（严格大于，
+    ///    相等本地胜出）→ 云端**真正较新**的进度时间戳小于本地 now → 被拒收，
+    ///    跨端续播回退；
+    /// ② 那条陈旧本地进度还会经 outbox 反向推上云，在服务端盖掉正确值（污染云端）。
+    ///
+    /// 状态机（唯一事实源 = 本标志，读写都在主线程/装载入口）：
+    /// * 置真：`loadCurrentChapter(silentWrite: true)`（`prepareQueue` 静默分支透传）
+    /// * 置假：① `play()` —— 用户按下播放（即便条目尚未就绪，收听意图已成立）；
+    ///        ② 任何 `loadCurrentChapter(silentWrite: false)` —— 非静默装载本身就是
+    ///           收听行为（用户点章 / 继续收听 / 切章 / 重试 / 镜像重试 / 章末连播）。
+    /// * 不会长期粘滞：静默装载 `autoPlay: false` 不自动起播，故解除点只在用户动作上。
+    private(set) var historyWriteSuppressed = false
+
+    private func suppressHistoryWrites() { historyWriteSuppressed = true }
+    private func releaseHistorySuppression() { historyWriteSuppressed = false }
+
+    /// 测试可观测（build 55 · P1-2）：抑制态下被闸门拦下的写历史尝试。
+    ///
+    /// 为什么需要这个同步回调（而不是只看 recorder 调用次数）：`deinit` 通道经
+    /// `deinit` 末行 → `pause()` → `recordHistory` 触发，而落库走的是
+    /// `Task { [weak self] in await self?.drainHistoryQueue() }`——deinit 期间对
+    /// 正在析构对象的 weak 引用**立即解引用为 nil**，排水任务根本不会执行，
+    /// 因此 recorder 侧「零调用」在有无闸门两种实现下都成立，不能作为证据。
+    /// 本回调在闸门处**同步**触发，使 deinit 通道可被真实构造、真实驱动、同步取证。
+    /// 生产恒为 nil。
+    var onSuppressedHistoryWriteForTesting: (() -> Void)?
+
     /// 下一章直链预取任务（每次换章重建）
     private var prefetchTask: Task<Void, Never>?
     /// 已解析直链缓存：占位 URI → 真实直链；resourceLoader 命中即秒回，切章零等待
@@ -853,6 +890,19 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private func loadCurrentChapter(startPosMs: Int64 = 0, autoPlay: Bool = true,
                                     keepMirrorChain: Bool = false, silentWrite: Bool = false) {
         guard currentChapterIdx < currentChapters.count else { return }
+        // build 55 · P1-2（状态机）：静默装载 → 进入抑制态；**真正进入播放态**或
+        // **用户动作触发的非静默装载** → 退出抑制态（点章 / 继续收听 / 切章 / 重试 /
+        // 章末连播本身就是收听行为）。
+        // 例外：镜像重试（keepMirrorChain）是**同一装载过程的内部重建**（取流失败后
+        // 换 backup 镜像重建条目），在**未起播**时不改变本次装载的静默/非静默性质——
+        // 不得借它解除抑制（否则静默装载 + 20s 看门狗换镜像即可绕过闸门写历史）；
+        // 若该次重建确实以 autoPlay 起播，则确属真实收听，按 autoPlay 解除。
+        // 标志在函数**入口**置位，早退分支同样生效。
+        if silentWrite {
+            suppressHistoryWrites()
+        } else if autoPlay || !keepMirrorChain {
+            releaseHistorySuppression()
+        }
         // v1.4.3 · P0（取证 D）：新章加载即清上次播放失败提示（切章/重试共用）
         playbackError = nil
         // build 45 · 反馈 1a（错误透传）：同步清 loader 层失败记录槽
@@ -1530,6 +1580,10 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     }
 
     func play() {
+        // build 55 · P1-2（状态机解除点）：用户按下播放即视为「真正开始收听」——
+        // 解除静默装载期的写历史抑制（放在 guard 之前：即便条目尚未就绪，收听意图已成立，
+        // 之后的暂停 / 退页 / 周期拍都属真实收听，应当落历史）。
+        releaseHistorySuppression()
         guard player.currentItem != nil else { return }
         isPlaying = true
         // build 27：先置播放态再 applyRate（guard isPlaying 语义要求）
@@ -1546,6 +1600,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             listenStartMs = 0
         }
         // Bug 2：暂停立即落一次历史（保住最后进度）
+        // build 55 · P1-2：不再在此处判 silentWrite——统一由 recordHistory 入口的
+        // `historyWriteSuppressed` 闸门收口（静默装载后未真正收听 → 拦住；已收听 → 照写）。
+        // 本通道正是 b54 漏掉的三通道之一（复检 3b 第 1549 行）。
         recordHistory(force: true)
     }
 
@@ -1662,6 +1719,14 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
 
     /// 历史落库：force=true 立即写（起播/切章/暂停）；否则按 ~5s 节流（进度观察器 1s 调用）
     private func recordHistory(force: Bool = false, positionMs: Int64? = nil) {
+        // build 55 · P1-2：**唯一闸门**。静默装载后（用户还没真正开始播放）所有自动
+        // 落历史通道都在这里被拦下：装载瞬间两点（force:true）、pause()、deinit、
+        // 周期观察器、章末自动落库。b54 的 silentWrite 只包住了装载两点，三通道裸奔
+        // （复检 3b）。状态机见 `historyWriteSuppressed` 注释。
+        guard !historyWriteSuppressed else {
+            onSuppressedHistoryWriteForTesting?()
+            return
+        }
         guard let recorder = historyRecorder, let album = currentAlbum,
               currentChapterIdx >= 0, currentChapterIdx < currentChapters.count else { return }
         let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -1731,6 +1796,20 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                                   positionMs: Int64, durationMs: Int64) {
         enqueueHistory(PendingHistoryWrite(album: album, chapter: chapter,
                                            positionMs: positionMs, durationMs: durationMs))
+    }
+
+    /// build 55 · P1-2：落历史**入口**的可独立驱动接缝（周期观察器 / pause / deinit
+    /// 三通道共同的入口 `recordHistory`）。
+    ///
+    /// 为什么需要：周期观察器（`addPeriodicTimeObserver` 每秒一拍，`force: false`
+    /// 走 5s 节流）的回调由 AVPlayer 时钟驱动，必须条目 readyToPlay 且在播才回调；
+    /// 单测沙箱里 `playbackRepository: nil` 不建播放机器、条目永不 ready，那段闭包
+    /// 无法自然触发（伪造 CMTime 也只是打到同一个私有闭包，不是真通道）。三通道走的
+    /// 是**同一个**入口与**同一道**闸门，故在此直接驱动该入口即可等价取证。
+    /// `force: false` 保持节流语义（闸门在节流**之前**，故抑制期的空跑不会吃掉窗口）。
+    /// 生产路径不使用它。
+    func recordHistoryForTesting() {
+        recordHistory(force: false)
     }
 
     private func resolvedPlayUrl(forKey key: String) -> String? {
