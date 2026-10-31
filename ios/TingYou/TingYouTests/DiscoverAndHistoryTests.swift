@@ -367,9 +367,9 @@ final class StartupRestoreTests: XCTestCase {
         }
         pm.prepareQueue(album: album, chapters: chapters, startIdx: 1, startPosMs: 120_000)
         XCTAssertEqual(pm.currentAlbumTitle, "恢复的书", "专辑应载入播放器（迷你条可见）")
-        // build 36 返修（CI #2）：prepareQueue 双语义——index 匹配优先（$0.index == startIdx）。
-        // 本章 index 为 1/2/3、startIdx=1 → 按「章 index 值」命中第 1 章（数组位置 0）。
-        // 旧断言按数组位置语义期望 1，与 build 36 恢复链路语义错位修复冲突（实现是对的）。
+        // prepareQueue 兼容重载：按「章 index 值」匹配（$0.index == startIdx）。
+        // 本章 index 为 1/2/3、startIdx=1 → 命中第 1 章（数组位置 0）。
+        // build 54 起恢复链路改走 `.arrayPosition`，本用例锁定兼容重载仍按章号值解释。
         XCTAssertEqual(pm.currentChapterIdx, 0, "startIdx=1（1 基连续章节）按章 index 匹配定位到第 1 章（位置 0）")
         XCTAssertFalse(pm.isPlaying, "启动恢复不得自动出声——用户点播放才播")
     }
@@ -392,8 +392,11 @@ final class StartupRestoreTests: XCTestCase {
         XCTAssertEqual(pm.currentChapterIdx, 1, "startIdx=章 index 值时按 index 匹配定位")
     }
 
-    /// 语义 B：启动/书架恢复链路传「数组位置」（HistoryResumePlanner.locate 输出）——
-    /// index 失配时夹取兜底（对齐 planner 兜底同款语义）。
+    /// 语义 B：`startIdx:` 兼容重载（默认按「章 index 值」解释）在 index 失配时夹取兜底。
+    /// build 54 起启动恢复 / 书架恢复 / 打开书定位**不再走 `startIdx:`**，改传
+    /// `start:` 的 `.arrayPosition` / `startArrayPosition:`（见 Build54FeatureTests
+    /// `testPlaybackManagerArrayPositionAvoidsOffByOneOnOneBasedSource`）；
+    /// 本用例保留为兼容重载的边界守卫（越界夹取 / index 无匹配）。
     func testPrepareQueueArrayPositionSemanticsClampsOnIndexMismatch() {
         let album = Album(albumId: 2, title: "双语义书", author: nil, teller: nil,
                           coverUrl: nil, intro: nil, category: nil, categoryId: nil,
@@ -406,7 +409,7 @@ final class StartupRestoreTests: XCTestCase {
         let pm = PlaybackManager(playbackRepository: nil)
         // 传「数组位置」0（无任何章 index==0）→ index 失配夹取兜底到位置 0
         pm.prepareQueue(album: album, chapters: chapters, startIdx: 0)
-        XCTAssertEqual(pm.currentChapterIdx, 0, "startIdx=数组位置时 index 失配走夹取兜底")
+        XCTAssertEqual(pm.currentChapterIdx, 0, "startIdx=0 且无章 index==0 → 夹取兜底到 0")
         // 位置越界夹取到末章
         pm.prepareQueue(album: album, chapters: chapters, startIdx: 99)
         XCTAssertEqual(pm.currentChapterIdx, 2, "startIdx 越界时夹取到最后一章")

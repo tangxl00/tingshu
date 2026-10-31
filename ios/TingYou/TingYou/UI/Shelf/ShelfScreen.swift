@@ -241,13 +241,21 @@ struct ShelfScreen: View {
                 chapterIdx: h.chapterIdx, chapterTitle: h.chapterTitle
             )
             switch outcome {
+            // build 54 · 需求 b / c（1 基源早一章缺陷修复）：
+            // `HistoryResumePlanner.locate` 输出的是**数组位置（0 基）**，而旧实现传
+            // `startIdx:` 会按「章 index 值」再匹配一次——1 基源（tingyou / 听友FM）
+            // 上位置 k-1 命中章号 k-1，恢复稳定早一章（跨端续播在主力源上不可用）。
+            // 现走 `startArrayPosition:` 直接按位置装载，不做二次猜测。
             case .fullQueue(let chapters, let startIdx):
                 container?.playbackManager.playQueue(
-                    album: album, chapters: chapters, startIdx: startIdx, startPosMs: h.positionMs
+                    album: album, chapters: chapters,
+                    startArrayPosition: startIdx, startPosMs: h.positionMs
                 )
             case .singleChapter(let chapter):
+                // 降级单章：数组只有一章，位置恒为 0（不再用历史章号去猜）
                 container?.playbackManager.playQueue(
-                    album: album, chapters: [chapter], startIdx: h.chapterIdx, startPosMs: h.positionMs
+                    album: album, chapters: [chapter],
+                    startArrayPosition: 0, startPosMs: h.positionMs
                 )
             }
             onOpenPlayer()

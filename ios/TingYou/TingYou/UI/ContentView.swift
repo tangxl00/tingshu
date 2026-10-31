@@ -88,14 +88,26 @@ struct ContentView: View {
         )
         // 恢复不出声：prepareQueue 只装载（autoPlay:false），不调用 play()。
         // 迷你播放条由 currentAlbum 驱动自然显示，用户点播放续听。
+        // build 54 · 需求 c（1 基源早一章缺陷修复）：`HistoryResumePlanner.locate`
+        // 给出的是**数组位置（0 基）**，旧实现传 `startIdx:` 会被当成「章 index 值」
+        // 再匹配一次——1 基源上位置 k-1 命中章号 k-1，启动恢复稳定早一章。
+        // 现显式走 `start:` 的 `.arrayPosition`，不做二次猜测。
         switch outcome {
+        // build 54 · 需求 c：启动恢复同样 silentWrite——恢复是「读取历史」而非「产生进度」，
+        // 若照写会把本书 updatedAt 顶成「现在」，令 SyncEngine LWW 把云端真正较新的
+        // 进度判成「旧」而拒绝合并（跨端续播回退）。用户真点播放才落历史。
         case .fullQueue(let chapters, let startIdx):
             container.playbackManager.prepareQueue(
-                album: album, chapters: chapters, startIdx: startIdx, startPosMs: latest.positionMs
+                album: album, chapters: chapters,
+                start: .arrayPosition(startIdx), startPosMs: latest.positionMs,
+                silentWrite: true
             )
         case .singleChapter(let chapter):
+            // 降级单章：数组只有一章，位置恒为 0
             container.playbackManager.prepareQueue(
-                album: album, chapters: [chapter], startIdx: 0, startPosMs: latest.positionMs
+                album: album, chapters: [chapter],
+                start: .arrayPosition(0), startPosMs: latest.positionMs,
+                silentWrite: true
             )
         }
     }

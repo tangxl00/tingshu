@@ -129,7 +129,7 @@ final class Build29RegressionTests: XCTestCase {
     /// `ios/TingYou/project.yml`（测试文件在 TingYouTests/ 下，上溯两级即工程目录，
     /// 与 CI checkout 布局一致），逐行解析 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`
     /// 首个定义并断言精确值。版本号忘改或格式漂移即测试红（CI 兜底）。
-    /// v1.4.4：断言值随之升位；build 53 返修升 CURRENT_PROJECT_VERSION → 53。
+    /// v1.4.4：断言值随之升位；build 54 升 CURRENT_PROJECT_VERSION → 54。
     func testMarketingVersionIs144() {
         // #filePath = …/ios/TingYou/TingYouTests/Build29RegressionTests.swift
         // 上溯两级：TingYouTests → TingYou（project.yml 所在，与 xcodegen 读取位置一致）
@@ -147,8 +147,8 @@ final class Build29RegressionTests: XCTestCase {
         }
         XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "1.4.4",
                        "project.yml MARKETING_VERSION 必须为 1.4.4（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "53",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 53（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "54",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 54（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40

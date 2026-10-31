@@ -790,20 +790,51 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
-    func prepareQueue(album: Album, chapters: [Chapter], startIdx: Int, startPosMs: Int64 = 0) {
+    /// 起始章语义（build 54 · 需求 a/c：把 b36 的「双语义靠 index 优先匹配蒙混」显式化）。
+    ///
+    /// 为什么必须显式：`startIdx` 历史上被两种口径共用——
+    /// * AlbumScreen 点章传的是 **`ch.index`（源原生章号）**；
+    /// * 恢复链路（启动恢复 / 书架恢复 / build 54 打开书定位）传的是
+    ///   `HistoryResumePlanner.locate` 输出的 **数组位置（0 基）**。
+    /// 两者在 1 基源（tingyou）上**相差 1**：`locate` 给出位置 k-1（k 是章号），
+    /// 而 `firstIndex(where: { $0.index == k-1 })` 正好命中章号 k-1 —— 早一章。
+    /// b36 注释声称「index 0 基连续的源两种语义重合」，只对 0 基源成立，
+    /// 1 基主力源（听友FM）恢复稳定早一章，跨端续播（需求 c）在主力源不可用。
+    /// 现改为显式枚举，两种口径各自走各自的解析，不再靠「先按 index 猜一次」。
+    enum ChapterStart: Equatable, Sendable {
+        /// 章 index 值（源原生章号，UI 点章用）
+        case indexValue(Int)
+        /// 章节数组位置（0 基，恢复 / 定位链路用）
+        case arrayPosition(Int)
+    }
+
+    /// `silentWrite`（build 54 · 需求 c）：静默装载（打开详情页定位）**不得写历史**。
+    /// 装载内部会 `recordHistory(force: true)` 落一条起播记录——若照写，打开一次详情页
+    /// 就会把本书 `updatedAt` 顶成「现在」并把 cloud/LWW 判定翻转为「本地较新」，
+    /// 云端真正较新的进度反而被本地旧位置压住（跨端续播回退）。故定位装载走 silent。
+    func prepareQueue(album: Album, chapters: [Chapter], start: ChapterStart,
+                      startPosMs: Int64 = 0, silentWrite: Bool = false) {
         currentAlbum = album
         currentChapters = chapters
-        // build 36 · 恢复链路语义错位修复：startIdx 有两种语义来源——
-        // AlbumScreen 传 ch.index（章 index 值，首选 index 匹配正确）；恢复链路
-        // （ContentView 启动恢复 / ShelfScreen 书架恢复）把 HistoryResumePlanner.locate
-        // 输出的【数组位置】传进来。index 匹配失败时原先兜底到 0（章首），对非 0 基 /
-        // 乱序 index 的源会恢复错章。改为按 planner 兜底同款夹取语义回退（1 基章号 →
-        // 0 基数组位置的最接近值），index 0 基连续的源两种语义重合、行为不变。
-        currentChapterIdx = chapters.firstIndex(where: { $0.index == startIdx })
-            ?? min(max(0, startIdx), max(chapters.count - 1, 0))
+        switch start {
+        case .indexValue(let idx):
+            // 章号值：精确 index 匹配优先；源重排 / 乱序时夹取兜底（旧行为不变）
+            currentChapterIdx = chapters.firstIndex(where: { $0.index == idx })
+                ?? min(max(0, idx), max(chapters.count - 1, 0))
+        case .arrayPosition(let pos):
+            // 数组位置：直接夹取到有效范围。**不得再按 index 值二次猜测**——
+            // 那正是 1 基源早一章的来源。
+            currentChapterIdx = min(max(0, pos), max(chapters.count - 1, 0))
+        }
         currentAlbumTitle = album.title
         coverUrl = album.coverUrl
-        loadCurrentChapter(startPosMs: startPosMs, autoPlay: false)
+        loadCurrentChapter(startPosMs: startPosMs, autoPlay: false, silentWrite: silentWrite)
+    }
+
+    /// 兼容重载：默认按「章 index 值」解释（既有 AlbumScreen / 单测调用点口径）。
+    func prepareQueue(album: Album, chapters: [Chapter], startIdx: Int, startPosMs: Int64 = 0) {
+        prepareQueue(album: album, chapters: chapters,
+                     start: .indexValue(startIdx), startPosMs: startPosMs)
     }
 
     func playQueue(album: Album, chapters: [Chapter], startIdx: Int, startPosMs: Int64 = 0) {
@@ -811,8 +842,16 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         play()
     }
 
+    /// 恢复 / 定位链路专用：按数组位置起播（build 54 需求 a/b）。
+    func playQueue(album: Album, chapters: [Chapter], startArrayPosition pos: Int,
+                   startPosMs: Int64 = 0) {
+        prepareQueue(album: album, chapters: chapters,
+                     start: .arrayPosition(pos), startPosMs: startPosMs)
+        play()
+    }
+
     private func loadCurrentChapter(startPosMs: Int64 = 0, autoPlay: Bool = true,
-                                    keepMirrorChain: Bool = false) {
+                                    keepMirrorChain: Bool = false, silentWrite: Bool = false) {
         guard currentChapterIdx < currentChapters.count else { return }
         // v1.4.3 · P0（取证 D）：新章加载即清上次播放失败提示（切章/重试共用）
         playbackError = nil
@@ -862,7 +901,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             let albumId = currentAlbum?.albumId ?? 0
             let startMs = Self.chapterStartMs(startPosMs: startPosMs,
                                                introSec: skipStore.intro(for: albumSource, albumId: albumId))
-            recordHistory(force: true, positionMs: startMs)
+            if !silentWrite { recordHistory(force: true, positionMs: startMs) }
             scheduleNextChapterPrefetch()
             return
         }
@@ -999,7 +1038,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         }
         updateNowPlaying()
         // Bug 2：起播/切章立即落一次历史（记录新章节起点；build 25：含片头跳过后的位置）
-        recordHistory(force: true, positionMs: startMs)
+        // build 54：静默定位装载不写（silentWrite），避免把 updatedAt 顶成「现在」
+        if !silentWrite { recordHistory(force: true, positionMs: startMs) }
         // 增强 5.3：预取下一章直链（提前解析 + AVFoundation 预热），切章零等待
         scheduleNextChapterPrefetch()
         // build 45 · CI 第一轮（反馈 2b）：取流看门狗——20s 未就绪且未报错，
