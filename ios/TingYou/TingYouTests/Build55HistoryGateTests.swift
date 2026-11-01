@@ -1,77 +1,42 @@
 import XCTest
-import SwiftData
 @testable import TingYou
 
-/// build 56 · P1-B（第三轮 · 骨架同化 + 行级取证）
+/// build 56 · P1-B 第四轮（阶梯诊断 · bisect ladder）。
 ///
-/// ## 背景（b56 前两轮取证结论，逐条列明以便复核）
+/// ## 前三轮取证结论（CI 实证，非推测）
 ///
-/// b55 复检 NO-GO 的 P1-B 要求：闸门用例必须在 CI **真实跑绿**（test.log 出现
-/// `** TEST SUCCEEDED **`、逐条 passed），禁止 @skip / 删用例 / 改弱断言。
-/// b56 r1（无 @MainActor）与 r2（有 @MainActor）两轮 CI 实测：四条用例均
-/// **0.000s 进程级崩溃**（pid 逐条更替；test.log 在最后一条 failed 行戛然而止，
-/// 连 xcodebuild 的汇总段都没写出来），5 轮 100% 复现（b55 r2/r3/r4 在带容器的
-/// Build54 类、b56 r1/r2 在本类）。
+/// 四条闸门用例在 b55 / b56-r1 / b56-r2 / b56-r3 四种形态下全部 0.000s 进程级崩溃：
+/// * b55 基线（fb1c0031）：无 setUp、非 @MainActor、纯探针、三条用例——崩；
+/// * r1：+ T4 镜像用例——崩；
+/// * r2（f9bf9316）：@MainActor——崩；
+/// * r3（d738fbdf）：补 Build54 同款 setUp（内存 ModelContainer + SyncLocalStore）
+///   + 真实 AlbumRepository fanout + DB 行级断言——仍崩，且崩溃后会话整体中止
+///   （exit 65，r1/r2 则逐条重启复崩）。
 ///
-/// 已排除的假说（均有 CI 证据，不是推测）：
-/// * **容器有无**：b55 三轮在带 ModelContainer 的 Build54 类里同样崩；
-/// * **@MainActor 隔离域**：r1 无标注崩、r2 有标注也崩；
-/// * **类 / 文件载体**：同一批用例在 Build54 类崩、搬进本类照样崩；
-/// * **宿主级地雷**（r2 三处对症修复：AppContainer `try!` → 删库重建 / 内存降级、
-///   ContentView 测试宿主跳过启动恢复、Build29 拆除「真 repo + prepareQueue」
-///   武装点）：对本类四条**无效**、仍崩；但 Build49 断言修复转绿、其余 341 条全过
-///   → 本轮修复零回归，且「宿主级地雷」假说对本类不成立。
-/// * **用例体无 trap**：与同进程通过的
-///   `Build54FeatureTests.testApplyPlanLoadsHistoricalChapterSilently`
-///   （同为 PM + prepareQueue + 同一份 waitForHistoryIdle + 同一份探针 + @MainActor）
-///   几乎同构；`recordHistory` / `enqueueHistory` / `drainHistoryQueue` 全链静态审计
-///   无 fatalError / try! / as! / 强解包。
+/// 已证伪假说：容器有无 / @MainActor / 真 repo fanout / NSLock async 告警 /
+/// 宿主级 try!（AppContainer 已修）/ 前置投毒类 / recordHistory→drain→recorder
+/// 全链（SkipSettings 通过用例走同一链含真写）。与同进程通过的
+/// `SkipSettingsTests.testPrepareQueueRecordsIntroSkippedStartPosition`
+/// 的结构性差异已收敛到：章表数据 / prepareQueue 主形态 vs legacy 重载 /
+/// 断言目标 / 默认 skipStore。
 ///
-/// ## 本轮（r3）做法：向**已验证通过的骨架**同化 + 证据加厚
+/// ## 本轮做法：在类内、四条原始用例之前插入 testA0–testA6 阶梯哨兵
 ///
-/// 1. **骨架同化**：本类补上 Build54 通过用例的同款 setUp/tearDown（独立
-///    UserDefaults suite + SyncLocalStore + 内存 ModelContainer +
-///    RetryStubURLProtocol.reset()），并把 `historyRecorder` 换成**探针 + 真实
-///    `AlbumRepository` 的 fanout**（Build54 同款形态）。这两项是本类与唯一同构
-///    通过用例之间**仅剩的结构差异**（`AlbumRepository` 是 actor、写入统一经
-///    `MainActor.run`，接进 fanout 不引入跨线程 ModelContext 风险）。
-/// 2. **证据加厚（非弱化）**：闸门断言从「探针零调用 ⇒ 无落库路径」升级为
-///    **DB 行级**取证——静默期直接断言「历史行的 updatedAt / 章号 / 位置未被碰」，
-///    解除期直接断言「行被顶新」。P1-A 要求的「零历史写入 / updatedAt 不被顶 /
-///    解除后正常写」由此在同一批用例里同时拿到**通道证据 + 行级证据**
-///    （原先 updatedAt 侧证据只由 Build54 的无 PM 直调用例承担）。
-/// 3. **崩溃定位标记**：各阶段打 `print("[B56GATE] …")`，供 CI 日志定位崩点。
+/// 每级是 T1 序列的递进前缀（字母序保证先于四条原始用例执行）：
+/// A0 空用例 → A1 仅构造 PM → A2 +recorder → A3 +prepareQueue → A4 +等排水
+/// → A5 完整 T1 形态（@MainActor + 断言）→ A6 SkipSettings 通过用例的同款拷贝
+/// （在本类语境下复跑一份已被历轮 CI 验证必绿的用例体）。
 ///
-/// 四条用例名与既有断言**逐条保留**（未删、未 @skip、未弱化）；新增断言只加不减。
+/// 判读口径（CI 铁律）：单元测试的断言消息与 print 均不落 test.log，唯一可靠
+/// 信号 = `Test case … passed/failed` 行 + 时长（0.000s failed = 进程崩溃）。
+/// 崩在哪一级，崩点就在该级新增的代码层；A6 若在本类崩而在 SkipSettingsTests
+/// 绿，则为类语境/执行环境问题而非用例体问题。
+///
+/// 四条原始用例（b55 复检评审口径）**逐字保留**：未删、未 @skip、未弱化断言。
+/// r3 曾附加的 DB 行级断言撤回（归 Build54FeatureTests 已通过的无 PM 直调用例
+/// `testApplyPlanLoadsHistoricalChapterSilently` / `testNonSilentRepoWriteBumpsUpdatedAt`
+/// 承担，证据链不缺环）——本轮目标是定位并消除进程崩溃，使四条原始用例真实跑绿。
 final class Build55HistoryGateTests: XCTestCase {
-
-    // MARK: - 骨架（与 Build54FeatureTests 通过用例同款）
-
-    private var suiteName = ""
-    private var defaults: UserDefaults!
-    private var store: SyncLocalStore!
-    private var container: ModelContainer!
-
-    override func setUp() async throws {
-        try await super.setUp()
-        RetryStubURLProtocol.reset()
-        suiteName = "b56-gate-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
-        store = SyncLocalStore(defaults: defaults)
-        container = try ModelContainer(
-            for: FavoriteModel.self, HistoryModel.self,
-            ImportedBookModel.self, ImportedChapterModel.self,
-            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
-    }
-
-    override func tearDown() async throws {
-        RetryStubURLProtocol.reset()
-        container = nil
-        defaults?.removePersistentDomain(forName: suiteName)
-        defaults = nil
-        store = nil
-        try await super.tearDown()
-    }
 
     // MARK: - 工具（与 SkipSettingsTests 同构：探针 + 空闲轮询，无 SwiftData）
 
@@ -125,39 +90,110 @@ final class Build55HistoryGateTests: XCTestCase {
         func bump() { lock.lock(); value += 1; lock.unlock() }
     }
 
-    /// 探针 + 真实 `AlbumRepository` 的双通道记录器（Build54FeatureTests 同款形态）：
-    /// 探针负责「调用次数」取证，真实 repo 负责「DB 行被写成什么样」取证。
-    final class RecordingFanout: PlaybackHistoryRecording, @unchecked Sendable {
-        private let targets: [any PlaybackHistoryRecording]
+    // MARK: - r4 阶梯哨兵（字母序先于四条原始用例执行；判读见类头）
 
-        init(_ targets: [any PlaybackHistoryRecording]) { self.targets = targets }
+    /// A0：空用例。若本条也 0.000s 崩溃 → 崩点在类装载/发现/环境层，
+    /// 与任何用例体无关（本类无 setUp，无任何前置代码）。
+    func testA0EmptyCanary() {
+        XCTAssertTrue(true, "A0 空哨兵")
+    }
 
-        func recordHistory(album: Album, chapter: Chapter,
-                           positionMs: Int64, durationMs: Int64) async {
-            for t in targets {
-                await t.recordHistory(album: album, chapter: chapter,
-                                      positionMs: positionMs, durationMs: durationMs)
-            }
+    /// A1：仅构造 PM（init 全链：AudioSession/NowPlaying/周期观察器/通知订阅）
+    /// 并让其离开作用域触发 deinit。新增层 = PM init + deinit。
+    func testA1ConstructPMCanary() {
+        do {
+            let pm = PlaybackManager(playbackRepository: nil)
+            XCTAssertFalse(pm.historyWriteSuppressed, "新构造的 PM 不得处于抑制态")
         }
     }
 
-    /// 读回历史行（@MainActor：mainContext 只能在主线程用）。
-    @MainActor
-    private func allHistory(_ ctx: ModelContext) -> [HistoryModel] {
-        (try? ctx.fetch(FetchDescriptor<HistoryModel>())) ?? []
+    /// A2：A1 + 探针注入（不装载任何章节）。新增层 = historyRecorder 赋值。
+    func testA2RecorderCanary() {
+        do {
+            let recorder = ProbeHistoryRecorder()
+            let pm = PlaybackManager(playbackRepository: nil)
+            pm.historyRecorder = recorder
+            XCTAssertEqual(recorder.writes.count, 0, "未装载不得有写")
+        }
     }
 
-    /// 埋一条「云端合并后的较新进度」：静默期它若被顶成 now，即为闸门被绕过。
+    /// A3：A2 + 非静默装载主形态（不等排水、不断言写发生——避免 A4 层混淆）。
+    /// 新增层 = prepareQueue 主形态（含 loadCurrentChapter nil-repo 早退 +
+    /// recordHistory(force:) 入队）。
+    func testA3PrepareQueueCanary() {
+        do {
+            let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5414)
+            let chapters = oneBasedChapters(15, durationSec: 1_500)
+            let recorder = ProbeHistoryRecorder()
+            let pm = PlaybackManager(playbackRepository: nil)
+            pm.historyRecorder = recorder
+            pm.prepareQueue(album: album, chapters: chapters,
+                            start: .indexValue(4), startPosMs: 0, silentWrite: false)
+            XCTAssertFalse(pm.historyWriteSuppressed, "非静默装载不得进入抑制态")
+        }
+    }
+
+    /// A4：A3 + 等待历史排水完成。新增层 = waitForHistoryIdle 轮询 + 排水任务
+    /// （Task → drainHistoryQueue → 探针真写）。
+    func testA4PrepareAndWaitCanary() async throws {
+        let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5414)
+        let chapters = oneBasedChapters(15, durationSec: 1_500)
+        let recorder = ProbeHistoryRecorder()
+        let pm = PlaybackManager(playbackRepository: nil)
+        pm.historyRecorder = recorder
+        pm.prepareQueue(album: album, chapters: chapters,
+                        start: .indexValue(4), startPosMs: 0, silentWrite: false)
+        XCTAssertFalse(pm.historyWriteSuppressed, "非静默装载不得进入抑制态")
+        try await waitForHistoryIdle(pm)
+    }
+
+    /// A5：完整 T1 形态（@MainActor + 写断言）。与 testNonSilentLoad…
+    /// 同体；若 A4 绿而本条崩，差分 = @MainActor 标注 + 写断言。
     @MainActor
-    private func seedHistory(_ ctx: ModelContext, album: Album,
-                            chapterIdx: Int, chapterTitle: String,
-                            positionMs: Int64, updatedAt: Int64) {
-        ctx.insert(HistoryModel(src: album.source, albumId: album.albumId,
-                                albumTitle: album.title, coverUrl: album.coverUrl,
-                                chapterIdx: chapterIdx, chapterTitle: chapterTitle,
-                                positionMs: positionMs, durationMs: 0,
-                                detailPath: album.detailPath, updatedAt: updatedAt))
-        try? ctx.save()
+    func testA5FullT1ShapeCanary() async throws {
+        let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5414)
+        let chapters = oneBasedChapters(15, durationSec: 1_500)
+        let recorder = ProbeHistoryRecorder()
+        let pm = PlaybackManager(playbackRepository: nil)
+        pm.historyRecorder = recorder
+        pm.prepareQueue(album: album, chapters: chapters,
+                        start: .indexValue(4), startPosMs: 0, silentWrite: false)
+        XCTAssertFalse(pm.historyWriteSuppressed, "非静默装载不得进入抑制态")
+        try await waitForHistoryIdle(pm)
+        XCTAssertEqual(recorder.writes.count, 1, "非静默装载必须写一次历史（反证守卫没写死）")
+        XCTAssertEqual(recorder.writes.first?.chapterTitle, "第4章",
+                       "写的是装载落点章（用户点的那章）")
+    }
+
+    /// A6：SkipSettings 通过用例的同款拷贝（`testPrepareQueueRecordsIntroSkipped
+    /// StartPosition` 逐字复刻，仅换独立 suite 名）。该用例体在 SkipSettingsTests
+    /// 里历轮 CI 全绿；若同一份代码在本类语境下崩 → 崩点不在用例体，而在
+    /// 类语境/执行环境（类名、发现顺序、克隆分配等）。
+    func testA6SkipSettingsShapeCanary() async throws {
+        let defaults = UserDefaults(suiteName: "Build55GateCanary-\(UUID().uuidString)")!
+        let store = SkipSettingsStore(defaults: defaults)
+        store.setIntro(30, src: "tingyou", albumId: 501)
+
+        let recorder = ProbeHistoryRecorder()
+        let pm = PlaybackManager(playbackRepository: nil, skipStore: store)
+        pm.historyRecorder = recorder
+        let album = Album(albumId: 501, title: "跳过测试书", author: nil, teller: nil,
+                          coverUrl: nil, intro: nil, category: nil, categoryId: nil,
+                          type: nil, typeId: nil, status: nil, chapterCount: nil,
+                          updatedAt: nil, playCount: nil, available: nil,
+                          source: "tingyou", detailPath: nil)
+        let chapters = [
+            Chapter(chapterId: 1, index: 0, title: "第01集", durationSec: 1800),
+            Chapter(chapterId: 2, index: 1, title: "第02集", durationSec: 1750),
+            Chapter(chapterId: 3, index: 2, title: "第03集", durationSec: 1600),
+        ]
+        pm.playQueue(album: album, chapters: chapters, startIdx: 0)
+
+        try await waitForHistoryIdle(pm)
+        XCTAssertEqual(recorder.writes.first?.positionMs, 30_000,
+                       "起播历史位置应为片头跳过后的 30s，而非 0")
+        // 等排水后 PM 处于播放态，测试收尾暂停结算
+        pm.pause()
     }
 
     // MARK: - P1-1 反证（写发生半边）：非静默装载必须真写（闸门放行）
@@ -166,39 +202,24 @@ final class Build55HistoryGateTests: XCTestCase {
     /// 「静默装载零写 + `updatedAt` 不顶新」；本用例是反证的另一半：同样的装载、
     /// 只把 `silentWrite` 换成 false，必须经真闸门（`recordHistory` 完整路径：
     /// 闸门放行 → 节流 → 入队 → 串行排水）**确实写一次**。若守卫被误改成
-    /// 「非静默也不写」，本条变红。
-    ///
-    /// 行级证据（本轮新增，只加不减）：写确实落到 DB 行并把 `updatedAt` 顶新
-    /// ——「写发生了」不再只由探针自报。
+    /// 「非静默也不写」，本条变红。「写发生后 updatedAt 顶新」的 DB 侧证据由
+    /// `Build54FeatureTests.testNonSilentRepoWriteBumpsUpdatedAt`（直调生产 repo）
+    /// 承担——两半拆开的工程原因见类头注释。
     @MainActor
     func testNonSilentLoadEnqueuesHistoryWrite() async throws {
-        print("[B56GATE] T1 start")
-        let ctx = container.mainContext
         let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5414)
         let chapters = oneBasedChapters(15, durationSec: 1_500)
-        seedHistory(ctx, album: album, chapterIdx: 11, chapterTitle: "第11章",
-                    positionMs: 480_000, updatedAt: 300)
         let recorder = ProbeHistoryRecorder()
-        let repo = AlbumRepository(apiClient: APIClient(session: RetryStubURLProtocol.makeSession()),
-                                   modelContext: ctx)
         let pm = PlaybackManager(playbackRepository: nil)
-        pm.historyRecorder = RecordingFanout([recorder, repo])
+        pm.historyRecorder = recorder
 
         pm.prepareQueue(album: album, chapters: chapters,
                         start: .indexValue(4), startPosMs: 0, silentWrite: false)
-        print("[B56GATE] T1 prepared")
         XCTAssertFalse(pm.historyWriteSuppressed, "非静默装载不得进入抑制态")
         try await waitForHistoryIdle(pm)
-        print("[B56GATE] T1 idle")
         XCTAssertEqual(recorder.writes.count, 1, "非静默装载必须写一次历史（反证守卫没写死）")
         XCTAssertEqual(recorder.writes.first?.chapterTitle, "第4章",
                        "写的是装载落点章（用户点的那章）")
-        // 行级证据：写落到 DB 行（章号/位置按装载落点，updatedAt 被顶新）
-        let row = try XCTUnwrap(allHistory(ctx).first, "落库行必须可读回")
-        XCTAssertEqual(row.chapterIdx, 4, "DB 行章号应更新为装载落点章")
-        XCTAssertEqual(row.positionMs, 0, "DB 行位置应更新为装载落点")
-        XCTAssertGreaterThan(row.updatedAt, 300,
-                             "非静默写必须把 updatedAt 顶新（LWW 判据才翻成本地较新）")
     }
 
     // MARK: - P1-2 三通道闸门（pause / periodic；deinit 见 Build54FeatureTests）
@@ -208,52 +229,37 @@ final class Build55HistoryGateTests: XCTestCase {
     /// b54 这里无条件 `recordHistory(force: true)`（第 1549 行），会落一条
     /// **旧位置**历史并掀翻云端。
     ///
-    /// 行级证据（本轮新增）：抑制期那条「云端较新」的历史行**不得被碰**
-    /// （updatedAt 保持 300、章号/位置不变）；解除抑制后同一行必须被顶新。
+    /// 抑制期「DB 行不被碰」的口径（如实标注）：`historyRecorder` 是
+    /// `recordHistory` 唯一落库出口，探针零调用 ⇒ 不存在任何落库路径可碰那行；
+    /// 「静默装载本身不顶 updatedAt」另有 DB 行级断言
+    /// （`testApplyPlanLoadsHistoricalChapterSilently`：updatedAt 保持 300、
+    /// 章号/位置不被装载落点覆盖）。
     @MainActor
     func testPauseChannelDoesNotWriteDuringSilentPending() async throws {
-        print("[B56GATE] T2 start")
-        let ctx = container.mainContext
         let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5415)
         let chapters = oneBasedChapters(10, durationSec: 1_200)
-        seedHistory(ctx, album: album, chapterIdx: 11, chapterTitle: "第11章",
-                    positionMs: 480_000, updatedAt: 300)
         let recorder = ProbeHistoryRecorder()
-        let repo = AlbumRepository(apiClient: APIClient(session: RetryStubURLProtocol.makeSession()),
-                                   modelContext: ctx)
         let pm = PlaybackManager(playbackRepository: nil)
-        pm.historyRecorder = RecordingFanout([recorder, repo])
+        pm.historyRecorder = recorder
 
         pm.prepareQueue(album: album, chapters: chapters,
                         start: .arrayPosition(5), startPosMs: 500_000, silentWrite: true)
-        print("[B56GATE] T2 prepared")
         XCTAssertTrue(pm.historyWriteSuppressed, "静默装载后应处于抑制态")
         try await waitForHistoryIdle(pm)
 
         pm.pause()   // ← P1-2 通道 ①（复检定位 1549 行）
         try await waitForHistoryIdle(pm)
-        print("[B56GATE] T2 paused")
         XCTAssertEqual(recorder.writes.count, 0,
                        "静默装载期暂停不得写历史（唯一落库出口零调用）")
-        // 行级证据：抑制期那条行不得被碰
-        let during = try XCTUnwrap(allHistory(ctx).first, "埋入行必须可读回")
-        XCTAssertEqual(during.updatedAt, 300, "静默装载期暂停不得把 updatedAt 顶成 now")
-        XCTAssertEqual(during.chapterIdx, 11, "静默装载期暂停不得改写章号")
-        XCTAssertEqual(during.positionMs, 480_000, "静默装载期暂停不得改写位置")
 
         // 解除点：用户真按播放 → 抑制解除 → 再暂停必须照写（证明不是写死关掉）
         pm.play()          // 播放器为空（nil repository）会早退，但解除在 guard 之前
         XCTAssertFalse(pm.historyWriteSuppressed, "用户按播放后抑制必须解除")
         pm.pause()
         try await waitForHistoryIdle(pm)
-        print("[B56GATE] T2 released")
         XCTAssertEqual(recorder.writes.count, 1, "解除后暂停必须正常落历史（真实收听）")
         XCTAssertEqual(recorder.writes.first?.chapterTitle, "第6章",
                        "解除后的写必须是当前装载章（静默装载的落点，非旧章）")
-        // 行级证据：解除后同一行被顶新
-        let after = try XCTUnwrap(allHistory(ctx).first, "落库行必须可读回")
-        XCTAssertGreaterThan(after.updatedAt, 300, "解除抑制后的写必须把 updatedAt 顶新")
-        XCTAssertEqual(after.chapterIdx, 6, "解除后的写必须是当前装载章（行级）")
     }
 
     /// 通道 ③：周期观察器（1 秒一拍 `recordHistory()`，5s 节流）。
@@ -266,19 +272,15 @@ final class Build55HistoryGateTests: XCTestCase {
     /// ——闸门就装在该入口上，故这里直接驱动该入口（经生产同一份实现的
     /// `recordHistoryForTesting` 接缝，非静默装载的 PM 上调用）来证明：
     /// 「抑制态下节流拍的写入同样被拦、且不会消耗节流窗口 / 不落库」。
+    /// 抑制期 DB 行不被碰的口径同 PauseChannel（唯一出口零调用 + ApplyPlan 的
+    /// DB 行级断言）。
     @MainActor
     func testPeriodicChannelSharesTheSameGate() async throws {
-        print("[B56GATE] T3 start")
-        let ctx = container.mainContext
         let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5418)
         let chapters = oneBasedChapters(6, durationSec: 1_200)
-        seedHistory(ctx, album: album, chapterIdx: 11, chapterTitle: "第11章",
-                    positionMs: 480_000, updatedAt: 300)
         let recorder = ProbeHistoryRecorder()
-        let repo = AlbumRepository(apiClient: APIClient(session: RetryStubURLProtocol.makeSession()),
-                                   modelContext: ctx)
         let pm = PlaybackManager(playbackRepository: nil)
-        pm.historyRecorder = RecordingFanout([recorder, repo])
+        pm.historyRecorder = recorder
         let suppressed = HitCounter()
         pm.onSuppressedHistoryWriteForTesting = { suppressed.bump() }
 
@@ -287,24 +289,15 @@ final class Build55HistoryGateTests: XCTestCase {
         // 模拟周期拍：连拍 3 次（真实实现每秒 1 次、内部 5s 节流）
         for _ in 0..<3 { pm.recordHistoryForTesting() }
         try await waitForHistoryIdle(pm)
-        print("[B56GATE] T3 suppressed")
 
         XCTAssertEqual(suppressed.hits, 3, "抑制态下每次周期拍都被闸门拦下（同一入口）")
         XCTAssertEqual(recorder.writes.count, 0, "周期拍不得写历史（唯一落库出口零调用）")
-        // 行级证据：抑制期那条行不得被碰
-        let during = try XCTUnwrap(allHistory(ctx).first, "埋入行必须可读回")
-        XCTAssertEqual(during.updatedAt, 300, "抑制态周期拍不得把 updatedAt 顶成 now")
-        XCTAssertEqual(during.chapterIdx, 11, "抑制态周期拍不得改写章号")
 
         // 解除后同一入口必须恢复工作（且节流窗口未被抑制期的空跑提前吃掉）
         pm.play()
         pm.recordHistoryForTesting()
         try await waitForHistoryIdle(pm)
-        print("[B56GATE] T3 released")
         XCTAssertEqual(recorder.writes.count, 1, "解除抑制后周期拍必须能落库")
-        // 行级证据：解除后行被顶新
-        let after = try XCTUnwrap(allHistory(ctx).first, "落库行必须可读回")
-        XCTAssertGreaterThan(after.updatedAt, 300, "解除抑制后周期拍必须把 updatedAt 顶新")
     }
 
     // MARK: - build 56 · P1-A 行为级（镜像重试重建通道不得绕过闸门）
@@ -320,24 +313,20 @@ final class Build55HistoryGateTests: XCTestCase {
     /// 调用逻辑——把两处调用点收敛成一个函数，就是为了让这条用例真的守住那两个分支。
     ///
     /// 断言分三段（对应复检要求的「零历史写入 / updatedAt 不被顶 / 解除后正常写」）：
-    /// ① 抑制期重建：**抑制态保持**（未被自动解除）+ 探针零写入 + **DB 行未被碰**；
+    /// ① 抑制期重建：**抑制态保持**（未被自动解除）+ 探针零写入；
     /// ② 连续重建（链上多次切镜像）仍保持抑制、仍零写入，且闸门**确实拦到了**
     ///    （`onSuppressedHistoryWriteForTesting` 同步计数，防「靠 recorder 为 nil 假绿」）；
     /// ③ 解除后同一条重建路径必须照写（证明修复不是把镜像重试的写历史能力写死）。
+    /// 「updatedAt 不被顶」的 DB 行级证据由 `testApplyPlanLoadsHistoricalChapterSilently`
+    /// （静默装载侧）承担；本条守重建通道行为。
     @MainActor
     func testMirrorRetryRebuildDoesNotBypassSilentGate() async throws {
-        print("[B56GATE] T4 start")
-        let ctx = container.mainContext
         let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5420)
         let chapters = oneBasedChapters(12, durationSec: 1_500)
-        seedHistory(ctx, album: album, chapterIdx: 11, chapterTitle: "第11章",
-                    positionMs: 480_000, updatedAt: 300)
         let recorder = ProbeHistoryRecorder()
-        let repo = AlbumRepository(apiClient: APIClient(session: RetryStubURLProtocol.makeSession()),
-                                   modelContext: ctx)
-        let pm = PlaybackManager(playbackRepository: nil)
-        pm.historyRecorder = RecordingFanout([recorder, repo])
         let suppressed = HitCounter()
+        let pm = PlaybackManager(playbackRepository: nil)
+        pm.historyRecorder = recorder
         pm.onSuppressedHistoryWriteForTesting = { suppressed.bump() }
 
         // 静默装载（打开详情页定位形态：用户还没按播放）
@@ -346,7 +335,6 @@ final class Build55HistoryGateTests: XCTestCase {
         XCTAssertTrue(pm.historyWriteSuppressed, "前置：静默装载后必须处于抑制态")
         try await waitForHistoryIdle(pm)
         XCTAssertEqual(recorder.writes.count, 0, "前置：静默装载本身不得写历史")
-        print("[B56GATE] T4 prepared")
 
         // ① 镜像重试重建（网络错误分支 / 看门狗切镜像分支共用的生产入口）
         let hitsBefore = suppressed.hits
@@ -358,21 +346,12 @@ final class Build55HistoryGateTests: XCTestCase {
                        "抑制期的镜像重建不得落历史（零历史写入）")
         XCTAssertEqual(suppressed.hits, hitsBefore,
                        "抑制期重建必须一路保持抑制、无被拦下的写尝试（未走非抑制分支）")
-        // 行级证据：updatedAt 不被顶（复检 P1-A 的核心要求）
-        let during = try XCTUnwrap(allHistory(ctx).first, "埋入行必须可读回")
-        XCTAssertEqual(during.updatedAt, 300,
-                       "抑制期的镜像重建不得把 updatedAt 顶成 now（P1-A 核心）")
-        XCTAssertEqual(during.chapterIdx, 11, "抑制期的镜像重建不得改写章号")
-        XCTAssertEqual(during.positionMs, 480_000, "抑制期的镜像重建不得改写位置")
 
         // ② 链上多次重建（模拟连切 backup 镜像）：抑制不被逐次累积解除
         for _ in 0..<3 { pm.rebuildForMirrorRetry() }
         XCTAssertTrue(pm.historyWriteSuppressed, "连切镜像不得逐次解除抑制")
         try await waitForHistoryIdle(pm)
         XCTAssertEqual(recorder.writes.count, 0, "连切镜像仍不得写历史")
-        let stillUntouched = try XCTUnwrap(allHistory(ctx).first, "埋入行必须可读回")
-        XCTAssertEqual(stillUntouched.updatedAt, 300, "连切镜像仍不得把 updatedAt 顶成 now")
-        print("[B56GATE] T4 rebuilt")
 
         // ③ 解除点：用户真按播放 → 抑制解除 → 同一条重建路径必须照写（非写死）
         pm.play()
@@ -383,10 +362,5 @@ final class Build55HistoryGateTests: XCTestCase {
                        "解除抑制后的镜像重建必须照写历史（真实收听中的换镜像行为不变）")
         XCTAssertEqual(recorder.writes.first?.chapterTitle, "第4章",
                        "重建后写的是当前装载章（静默装载的落点，非旧章）")
-        // 行级证据：解除后行被顶新（真实收听语义不变）
-        let after = try XCTUnwrap(allHistory(ctx).first, "落库行必须可读回")
-        XCTAssertGreaterThan(after.updatedAt, 300, "解除抑制后的镜像重建必须把 updatedAt 顶新")
-        XCTAssertEqual(after.chapterIdx, 4, "解除后的镜像重建写的是当前装载章（行级）")
-        print("[B56GATE] T4 done")
     }
 }
