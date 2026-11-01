@@ -894,13 +894,22 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         // **用户动作触发的非静默装载** → 退出抑制态（点章 / 继续收听 / 切章 / 重试 /
         // 章末连播本身就是收听行为）。
         // 例外：镜像重试（keepMirrorChain）是**同一装载过程的内部重建**（取流失败后
-        // 换 backup 镜像重建条目），在**未起播**时不改变本次装载的静默/非静默性质——
-        // 不得借它解除抑制（否则静默装载 + 20s 看门狗换镜像即可绕过闸门写历史）；
-        // 若该次重建确实以 autoPlay 起播，则确属真实收听，按 autoPlay 解除。
+        // 换 backup 镜像重建条目），**不改变本次装载的静默/非静默性质**——不得借它
+        // 解除抑制（否则静默装载 + 20s 看门狗换镜像即可绕过闸门写历史）。
+        //
+        // build 56 · P1-A（复检：实现与上述意图不自洽）：b55 此分支写成
+        // `else if autoPlay || !keepMirrorChain`，而两处镜像重建调用点
+        //（statusObserver `.failed` 的 `.retry` 分支 / 流式看门狗切镜像）都传的是
+        // `loadCurrentChapter(autoPlay: true, keepMirrorChain: true)` —— 抑制态被
+        // autoPlay 直接解除，落历史 + 顶 updatedAt，闸门可被「静默装载后切镜像」绕过
+        //（与 b54 P1-2 同一失败模式，LWW 翻转 + outbox 反向污染云端）。
+        // 现改为：**镜像重建（keepMirrorChain）一律由调用方透传当前抑制态**
+        //（silentWrite 语义 = 本次装载是否静默），抑制期重建既不解除抑制、也不落历史；
+        // 非镜像装载维持原状（autoPlay 或用户动作 ⇒ 解除并照写）。
         // 标志在函数**入口**置位，早退分支同样生效。
         if silentWrite {
             suppressHistoryWrites()
-        } else if autoPlay || !keepMirrorChain {
+        } else if !keepMirrorChain {
             releaseHistorySuppression()
         }
         // v1.4.3 · P0（取证 D）：新章加载即清上次播放失败提示（切章/重试共用）
@@ -1025,9 +1034,10 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                         let host = URL(string: next)?.host ?? "?"
                         self?.recordLoaderMeta("网络错误 \(ns.domain) \(ns.code) → 自动切换镜像第 \(attempt) 次 → \(host)")
                         self?.storeResolved(key: uri, url: next)
-                        Task { @MainActor [weak self] in
-                            self?.loadCurrentChapter(autoPlay: true, keepMirrorChain: true)
-                        }
+                        // build 56 · P1-A：**不再在此直接重建**——统一走
+                        // `rebuildForMirrorRetry(uri:next:)`（生产唯一实现，抑制态
+                        // 由产品内部事实源透传，调用方无从绕过）。
+                        self?.rebuildForMirrorRetry()
                         return
                     case .exhausted(let attempts):
                         networkMirrorNote = Self.networkMirrorNote(forAttempts: attempts)
@@ -1152,9 +1162,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             let host = URL(string: next)?.host ?? "?"
             recordLoaderMeta("watchdog · \(extended ? "延长观察后" : "")\(shapeText)，自动切换镜像第 \(currentMirrorAttempts()) 次 → \(host)")
             storeResolved(key: uri, url: next)
-            Task { @MainActor [weak self] in
-                self?.loadCurrentChapter(autoPlay: true, keepMirrorChain: true)
-            }
+            // build 56 · P1-A：与 statusObserver 网络错误分支**同一份实现**
+            //（抑制态由产品内部事实源透传，不在此重复判断）。
+            rebuildForMirrorRetry()
             return
         }
         let attempts = currentMirrorAttempts()
@@ -1189,6 +1199,38 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         }
         mirrorAttempts += 1
         return mirrorCandidates.removeFirst()
+    }
+
+    /// build 56 · P1-A（复检）：**镜像重试的唯一重建入口**——网络错误分支
+    /// （statusObserver `.failed` → `.retry`）与流式看门狗切镜像分支共用这一份实现，
+    /// 行为级用例也驱动同一份实现（而不是用例里复制一份调用逻辑）。
+    ///
+    /// 为什么要收口成一个函数：b55 的两个调用点各自写
+    /// `loadCurrentChapter(autoPlay: true, keepMirrorChain: true)`（**不传 silentWrite**），
+    /// 于是走 `else if autoPlay || !keepMirrorChain` 直接 `releaseHistorySuppression()` +
+    /// 末尾落历史 → 静默装载后只要触发一次换镜像，闸门就被绕过（LWW 翻转 + outbox
+    /// 反向污染云端，与 b54 P1-2 同一失败模式）。抑制态改由**产品内部唯一事实源**
+    /// `historyWriteSuppressed` 在此处透传：调用方**无从**传入错误值，也就不存在
+    /// 「某个调用点漏传」的通道——修的是缺陷的**可复发形态**，不只是当下两处。
+    ///
+    /// 语义：抑制期（静默装载、用户尚未真正收听）的重建 = 同一装载过程的内部换源，
+    /// **不解除抑制、不落历史**；非抑制态（真实收听中的换镜像）照非静默装载写历史，
+    /// 用户可观察行为不变。
+    ///
+    /// 线程：statusObserver 是 KVO 回调（线程不定），看门狗跑在主队列。`loadCurrentChapter`
+    /// 触达 `@Observable` 状态与 AVPlayer，必须主线程执行；已在主线程则同步执行
+    /// （保持原「分支后立即 return、看门狗不再走链路耗尽文案」的时序），否则切主队列。
+    func rebuildForMirrorRetry() {
+        let rebuild = { [weak self] in
+            guard let self else { return }
+            self.loadCurrentChapter(autoPlay: true, keepMirrorChain: true,
+                                    silentWrite: self.historyWriteSuppressed)
+        }
+        if Thread.isMainThread {
+            rebuild()
+        } else {
+            DispatchQueue.main.async(execute: rebuild)
+        }
     }
 
     // MARK: - build 53 · A3：网络错误 → 镜像重试的**单一决策点**（生产与用例共用）
