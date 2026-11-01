@@ -161,8 +161,18 @@ final class Build49FeatureTests: XCTestCase {
                       ".failed 分支必须经单一决策点 mirrorRetryDecision（与行为级用例同一份实现）")
         XCTAssertTrue(pm.contains("storeResolved(key: uri, url: next)"),
                       "网络错误切镜像必须重定向占位 URI 缓存（与 watchdog 同机制）")
-        XCTAssertTrue(pm.contains("loadCurrentChapter(autoPlay: true, keepMirrorChain: true)"),
-                      "网络错误切镜像必须保留镜像链重建条目（与 watchdog 同机制）")
+        XCTAssertTrue(pm.contains("self?.rebuildForMirrorRetry()"),
+                      "网络错误切镜像必须走生产唯一重建入口 rebuildForMirrorRetry()（与 watchdog 同机制）")
+        // build 56 · P1-A（断言改锚 + 加强）：b56 重构把重建收敛为无参
+        // rebuildForMirrorRetry()，旧锚 loadCurrentChapter(autoPlay: true,
+        // keepMirrorChain: true) 三参形态已不存在（首条轮 CI 0.434s 断言失败
+        // 即此失配）。新锚同时守住「调用点走唯一入口」与「入口内部透传
+        // 当前历史抑制态」——后者是复检 P1-A 的核心（镜像重试不得绕过
+        // 静默闸门）。
+        let rebuildBody = Self.functionBody(of: pm, needle: "func rebuildForMirrorRetry")
+        XCTAssertFalse(rebuildBody.isEmpty, "必须截到 rebuildForMirrorRetry 函数体（否则透传断言失去意义）")
+        XCTAssertTrue(rebuildBody.contains("silentWrite: self.historyWriteSuppressed"),
+                      "镜像重建必须透传当前抑制态（静默装载中换镜像不得写历史/顶新 updatedAt）")
         XCTAssertTrue(pm.contains(#"自动切换镜像第 \(attempt) 次"#),
                       "网络错误切镜像必须落到诊断文案（build 49 问题 1）")
         XCTAssertTrue(pm.contains("diagnostic.append(networkMirrorNote)"),

@@ -4,36 +4,31 @@ import XCTest
 /// build 55 · P1-1 反证（写发生半边）+ P1-2 三通道闸门（pause / periodic）的
 /// **行为级**用例——无 SwiftData 形态（与 SkipSettingsTests 同构）。
 ///
-/// ## build 56 · P1-B（复检 NO-GO）：崩溃根因更正与修法
+/// ## build 56 · P1-B（崩溃根因更正 · 二轮）
 ///
-/// b55 在类头把 CI 0.000s 进程崩溃定性成「测试形态 / 测试缺口」，并据此把用例
-/// 从有容器的 Build54FeatureTests 搬到本类。该定性被复检三条独立证据证伪：
-/// ① 搬进本类（无容器）后三条仍全崩；② `testNonSilentLoadEnqueuesHistoryWrite`
-/// **不进入抑制态、也不调 play/pause**同样 0.000s 崩（落在被划定的组合之外）；
-/// ③ `testPausedForeignQueueIsNotTornDown` 第 3 轮崩、第 4 轮过（漂移分布，
-/// 不是稳定命中）。故「容器组合」与「抑制态+pause/play 组合」都不是根因。
-///
-/// 本版按「先查用例触达的**产品代码路径**」复验，同一份 b55 test.log 给了
-/// **同进程（Clone 1 / pid 11132）对照**：
-/// * 通过的：`Build54FeatureTests.testApplyPlanLoadsHistoricalChapterSilently`
-///   （@MainActor，0.037s；真构造 PM + 静默装载 + 读 `historyWriteSuppressed`
-///   + 读 `isHistoryWriteIdle`）与 `testDeinitChannelIsGatedBySilentPending`
-///   （@MainActor，0.009s；同样静默装载、读抑制标志、并触发 deinit→pause→闸门）。
-/// * 崩溃的：本类三条**非隔离 async** 用例（随后同进程 0.000s 崩，pid 三次更替
-///   11132 → 13418 → 13920）。
-/// 即：同一批产品代码路径在**主 actor** 上执行时反复稳定通过，只有**非隔离**
-/// 形态崩——差异面被收敛到「隔离域」这一项，而与「是否有容器 / 是否写得成历史」
-/// 无关（复检结论与此一致）。
-///
-/// 机制：`PlaybackManager` 是 `@Observable`（`historyWriteSuppressed` 是它的被追踪
-/// 存储属性），实例内还持有 `AVPlayer` 与主队列周期观察器；测试方法不带 `@MainActor`
-/// 时，`prepareQueue` / `play` / `pause` / 属性读写全部发生在 Swift 并发协作池的
-/// 任意线程上，与主队列观察器、AVFoundation 全局单例交叉 → 进程级事故（0.000s、
-/// 无断言文本），而不是一条能被 XCTest 记成 "failed assertion" 的失败。
-///
-/// 修法（**不改断言强度**）：三条用例方法标 `@MainActor`，与同进程通过的
-/// Build54FeatureTests 两条同形；断言条数、断言内容、`waitForHistoryIdle` 轮询、
-/// 探针语义全部保持原样（禁 @skip / 禁删用例 / 禁弱化断言）。
+/// b56 首轮把 CI 0.000s 崩溃定性为「用例缺 @MainActor 隔离域」并给四条用例
+/// 加了标注——**该假设被同轮 CI 证伪**：加标注后四条仍 0.000s 崩，且 test.log
+/// 里四条**全部缺失 "Test case … started" 行**（对照通过的用例均有 started +
+/// 耗时），说明崩溃发生在用例体执行之前，与隔离域无关。
+/// 二轮取证把证据重新对齐为三层：
+/// * **不锁定本类**：b55 复检轮 Build54 的 `testPausedForeignQueueIsNotTornDown`
+///   也出现第 3 轮崩 / 第 4 轮过的漂移分布——崩溃是进程级地雷，落点随机；
+/// * **用例体无 trap**：与同进程通过的
+///   `Build54FeatureTests.testApplyPlanLoadsHistoricalChapterSilently`（同为
+///   静默装载 + 探针 + waitForHistoryIdle）几乎同构；`recordHistory`/
+///   `enqueueHistory`/`drainHistoryQueue` 全链静态审计无 fatalError/
+///   precondition/try!/as!；
+/// * **「重启即崩」是确定性部分**：首崩后每个新 pid 都只活一条用例即死。
+/// 收敛出的机制：长寿单测宿主（App 本体）进程撞随机地雷首崩 → 磁盘 SwiftData
+/// store 半写 → 每次冷启动 `try! ModelContainer` 读损坏库直接 fatalError
+/// （正是「0.000s / 无 started / pid 逐条更替」的死循环形态）。本版三处对症
+/// 修复（守卫用例在 Build29RegressionTests）：
+/// ① `AppContainer`：`try!` → 删库重建 / 内存降级（消除「重启即崩」）；
+/// ② `Build29RegressionTests` 签名用例：拆除全测试目标唯一「真 repo +
+///    prepareQueue」武装点（消除长寿进程随机地雷主嫌，b36 事故类）；
+/// ③ `ContentView`：单测宿主跳过启动恢复（防磁盘历史在测试进程武装
+///    AV 播放机器）。
+/// 本类四条用例断言保持 build 55 原样（禁 @skip / 禁删用例 / 禁弱化断言）。
 ///
 /// DB 行侧证据（updatedAt 顶新 / 静默不顶新）仍由 Build54FeatureTests 里
 /// **无 PM** 的直调用例承担（`testNonSilentRepoWriteBumpsUpdatedAt` /

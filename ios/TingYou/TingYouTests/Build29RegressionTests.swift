@@ -30,18 +30,49 @@ final class Build29RegressionTests: XCTestCase {
 
     // MARK: - R5 · PlaybackManager prepareQueue 接口未变（结构存在性）
 
-    func testPlaybackManagerPrepareQueueSignatureUnchanged() {
-        // 通过构造验证：若接口签名变化，此行编译失败
-        let manager = PlaybackManager(playbackRepository: makeDummyRepo())
-        let album = Album(albumId: 1, title: "测试", author: nil, teller: nil,
-                          coverUrl: nil, intro: nil, category: nil, categoryId: nil,
-                          type: nil, typeId: nil, status: nil, chapterCount: nil,
-                          updatedAt: nil, playCount: nil, available: true,
-                          source: SourceRegistry.TINGYOU, detailPath: nil)
-        let chapter = Chapter(chapterId: 1, index: 0, title: "第一回", durationSec: nil)
-        // 编译通过即证明接口未变；不实际播放
-        manager.prepareQueue(album: album, chapters: [chapter], startIdx: 0, startPosMs: 0)
-        XCTAssertNotNil(manager)
+    func testPlaybackManagerPrepareQueueSignatureUnchanged() throws {
+        // build 56 · P1-B：原形态构造全测试目标唯一「非 nil repo」的
+        // PlaybackManager（真 APIClient + 真 BiliAdapter 网络栈）并调
+        // prepareQueue，在单测宿主里武装整套 AV 播放机器（占位 URI +
+        // resourceLoader + watchdog + 网络解析），用例结束即析构——悬垂
+        // delegate / 迟到回调竞态属 b36 定性过的 EXC 级事故类（b36 修复只
+        // 挡 nil repo）。b55/b56 CI 长寿单测宿主随机 0.000s 崩溃 + 重启即崩
+        // 的漂移分布与该武装点吻合，本版拆除之。守卫意图本来就是「接口
+        // 签名未变」（原注释自述「编译通过即证明接口未变；不实际播放」），
+        // 改为锚定源码签名形态，断言强度不降反升（两条签名都被锚定）。
+        let pm = Self.codeOnly(try Self.source("TingYou/Playback/PlaybackManager.swift"))
+        XCTAssertTrue(pm.contains("func prepareQueue(album: Album, chapters: [Chapter], startIdx: Int, startPosMs: Int64"),
+                      "prepareQueue 兼容重载（startIdx 形态）签名不得变化（存量调用方按位依赖）")
+        XCTAssertTrue(pm.contains("func prepareQueue(album: Album, chapters: [Chapter], start: ChapterStart"),
+                      "prepareQueue 主形态（ChapterStart + silentWrite）签名不得变化")
+    }
+
+    // MARK: - build 56 · P1-B · 启动路径守卫（崩溃死循环对症修复）
+
+    /// AppContainer 启动关键路径不得因磁盘 store 损坏而 `try!` 崩溃。
+    /// CI 取证（b55/b56 test.log）：长寿单测宿主随机崩溃后磁盘 store 半写
+    /// → 每次冷启动 `try! ModelContainer` 读损坏库直接 fatalError →
+    /// 「重启即崩」死循环（用例 0.000s failed、缺失 "Test case started" 行、
+    /// pid 逐条更替）。修复 = 删库重建 / 内存降级，本条锚定该路径不被回退。
+    func testAppContainerRecoversFromCorruptStoreInsteadOfTrapping() throws {
+        let src = Self.codeOnly(try Self.source("TingYou/App/AppContainer.swift"))
+        XCTAssertFalse(src.contains("modelContainer = try! ModelContainer"),
+                       "启动关键路径不得裸 try! ModelContainer（损坏库 → 冷启动必崩 → 重启即崩死循环）")
+        XCTAssertTrue(src.contains("try? ModelContainer(for: schema, configurations: [config])"),
+                      "必须先尝试磁盘库（正常路径零行为变化）")
+        XCTAssertTrue(src.contains("removeItem"),
+                      "磁盘库打不开时必须删库（含 -shm/-wal sidecar）重建，而非启动即死")
+        XCTAssertTrue(src.contains("isStoredInMemoryOnly: true"),
+                      "删库重建仍失败时必须降级内存库保 App 可用（云端可同步拉回）")
+    }
+
+    /// 启动恢复必须在测试宿主环境跳过：单测宿主（App 本体）冷启动若有磁盘
+    /// 播放历史（UITest 阶段真实播放写入），每次启动都会真网络拉章节 +
+    /// prepareQueue 在测试进程武装 AV 播放机器（长寿竞态雷，b36 事故类）。
+    func testStartupRestoreSkipsTestHostEnvironment() throws {
+        let content = Self.codeOnly(try Self.source("TingYou/UI/ContentView.swift"))
+        XCTAssertTrue(content.contains("XCTestConfigurationFilePath"),
+                      "启动恢复必须跳过测试宿主环境（XCTestConfigurationFilePath 判据不得回退）")
     }
 
     // MARK: - R6-R7 · 旧白名单未丢
@@ -332,11 +363,32 @@ final class Build29RegressionTests: XCTestCase {
 
     // MARK: - 辅助
 
-    private func makeDummyRepo() -> PlaybackRepository {
-        // build 45 · 反馈 3：悦听下架，PlaybackRepository init 3 → 2 参数。
-        PlaybackRepository(
-            apiClient: APIClient(),
-            biliAdapter: BiliAdapter()
-        )
+    /// build 56 · P1-B：源码形态守卫用（与 Build49FeatureTests 同构实现）。
+    /// 不 `fatalError`——`fatalError` 直接杀进程，CI 上表现为「0.000s 失败 +
+    /// 无断言消息 + pid 变更」；XCTFail + throw 让失败带明确消息。
+    private static func source(_ rel: String) throws -> String {
+        let testDir = (#filePath as NSString).deletingLastPathComponent
+        let projectDir = (testDir as NSString).deletingLastPathComponent
+        let path = projectDir + "/" + rel
+        guard FileManager.default.fileExists(atPath: path) else {
+            XCTFail("\(rel) 不存在：\(path)——路径布局变化时请同步修正本测试")
+            throw NSError(domain: "Build29RegressionTests", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "missing source \(rel)"])
+        }
+        guard let src = try? String(contentsOfFile: path, encoding: .utf8) else {
+            XCTFail("\(rel) 不可读：\(path)")
+            throw NSError(domain: "Build29RegressionTests", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "unreadable source \(rel)"])
+        }
+        return src
+    }
+
+    /// 剔除整行注释（trim 后以 // 开头）——删除说明注释里含被断言的标识符名，
+    /// 参与判定前必须剔除。
+    private static func codeOnly(_ src: String) -> String {
+        src.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.hasPrefix("//") }
+            .joined(separator: "\n")
     }
 }

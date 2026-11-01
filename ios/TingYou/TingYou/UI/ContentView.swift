@@ -56,6 +56,16 @@ struct ContentView: View {
         .task {
             guard !didRestoreOnLaunch else { return }
             didRestoreOnLaunch = true
+            // build 56 · P1-B：单测宿主（test host）就是 App 本体，冷启动同样
+            // 会走到这段恢复逻辑——若磁盘 store 里有播放历史（如 UITest 阶段
+            // 真实播放写入），单测宿主每次启动都会真网络拉章节 +
+            // prepareQueue(silentWrite:) 在测试进程里武装整套 AV 播放机器
+            // （占位 URI + resourceLoader + watchdog + 网络解析），随进程长寿
+            // 运行形成竞态雷（b36 定性过的 EXC 级事故类）。测试环境跳过启动
+            // 恢复：XCTest 宿主进程必然设置该环境变量；生产不受影响。
+            // 守卫：Build29RegressionTests.testStartupRestoreSkipsTestHostEnvironment。
+            guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+                else { return }
             await restoreLastSession()
         }
     }

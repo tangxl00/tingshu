@@ -1035,8 +1035,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                         self?.recordLoaderMeta("网络错误 \(ns.domain) \(ns.code) → 自动切换镜像第 \(attempt) 次 → \(host)")
                         self?.storeResolved(key: uri, url: next)
                         // build 56 · P1-A：**不再在此直接重建**——统一走
-                        // `rebuildForMirrorRetry(uri:next:)`（生产唯一实现，抑制态
-                        // 由产品内部事实源透传，调用方无从绕过）。
+                        // `rebuildForMirrorRetry()`（无参，生产唯一实现；抑制态
+                        // 由产品内部事实源 historyWriteSuppressed 透传，调用方
+                        // 无从绕过）。
                         self?.rebuildForMirrorRetry()
                         return
                     case .exhausted(let attempts):
