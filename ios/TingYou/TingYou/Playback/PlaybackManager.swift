@@ -1904,6 +1904,32 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
 
     deinit {
         if let obs = timeObserver { player.removeTimeObserver(obs) }
-        pause()
+        // build 56 · P1-B（四轮 CI 0.000s 进程崩溃根因修复）：deinit 不再调 pause()。
+        // pause() 末行无条件 recordHistory(force: true)，PM 处于「已装载专辑 + 非抑制态」
+        // 且无在途排水任务时，会经 enqueueHistory 在**析构栈内** spawn 捕获 [weak self]
+        // 的排水 Task——对象内存随即回收，Task 执行即悬垂访问，进程级崩溃。
+        // 取证（b56-r4 阶梯哨兵，run 41316648209）：A0-A2 绿（未装载专辑，deinit 经
+        // pause()→recordHistory 在 album guard 处 return，不 spawn），A3 起全崩（首条
+        // 「装载后释放」的用例）；历轮通过用例（SkipSettingsTests / Build54 反向对照段）
+        // 的幸存机制 = 用例体内最近一次 enqueue 的排水 Task 尚在执行器队列未退场
+        //（historyDrainTask != nil → needDrain=false），属竞态侥幸而非免疫——凡
+        // waitForHistoryIdle 等排水退场后再释放 PM 的用例必崩（四条闸门用例全部如此）。
+        // deinit 收尾职责拆解（pause() 的非写历史部分保留；isPlaying 不再置位——
+        // @Observable 属性在 deinit 中 mutation 会触发 observation registrar，
+        // 对象已在析构，无观察者可通知，置位无意义且有风险）：
+        player.pause()
+        if listenStartMs > 0 {
+            let elapsed = Int64(Date().timeIntervalSince1970 * 1000) - listenStartMs
+            if elapsed > 0 { listeningTimeStore.addSession(elapsed) }
+            listenStartMs = 0
+        }
+        // b55 P1-2 三通道闸门的 deinit 通道取证语义保留：静默装载未收听就退页的写
+        // 尝试仍触发同步探针（与 recordHistory 入口同一判定口径）。非抑制态的 deinit
+        // 不再 enqueue——旧实现里该写入要么崩进程、要么对已析构对象空转，从未真正
+        // 落库，丢弃无功能损失；退页前的最后进度由用户操作触发的 pause() 与周期拍
+        //（1s 拍 / 5s 节流）保障，二者不变。
+        if historyWriteSuppressed {
+            onSuppressedHistoryWriteForTesting?()
+        }
     }
 }
