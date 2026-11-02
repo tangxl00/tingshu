@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import AVFoundation
 import MediaPlayer
 import Combine
@@ -429,7 +430,13 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private var sleepTimer: Timer?
     /// build 20 必修 4：定点睡眠接线单测断言用（对外只读）。
     private(set) var sleepConfig = SleepTimerConfig()
-    private var listenStartMs: Int64 = 0
+    /// build 57 · 复检 P2-1（deinit 注释与代码自相矛盾）：**收听计时起点**是纯内部
+    /// 记账属性（UI 从不读它，需要「已听时长」一律读 `ListeningTimeStore`），
+    /// 故显式 `@ObservationIgnored`——与 deinit 注释「@Observable 属性在 deinit 中
+    /// mutation 会触发 observation registrar，对象已在析构、无观察者可通知」自洽：
+    /// 该属性不再登记 observation，deinit 里清零也就不会触碰 registrar。
+    /// 结算（`listeningTimeStore.addSession`）仍在清零**之前**完成，时长口径不变。
+    @ObservationIgnored private var listenStartMs: Int64 = 0
     private let listeningTimeStore = ListeningTimeStore()
     private let skipStore: SkipSettingsStore
     private var cancellables = Set<AnyCancellable>()
@@ -592,6 +599,12 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
 
     var isPlaying: Bool = false
     var currentPositionMs: Int64 = 0
+    /// build 57 · 复检 P2-2：本次装载传入的**目标起播位置**（毫秒，`chapterStartMs`
+    /// 的原始入参：历史进度 / 0）。镜像重建按抑制态决定是否沿用它——见
+    /// `mirrorRebuildStartMs(suppressed:livePositionMs:launchStartPosMs:)`。
+    /// 为什么必须记下来：静默装载 `autoPlay: false` 不会产生时钟拍，
+    /// `currentPositionMs` 在抑制态下没有意义，不能当「历史位置」用。
+    private(set) var launchStartPosMs: Int64 = 0
     var durationMs: Int64 = 0
     var speed: Float {
         get { _speed }
@@ -648,6 +661,26 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     static func chapterStartMs(startPosMs: Int64, introSec: Int) -> Int64 {
         if startPosMs > 0 { return startPosMs }
         return Int64(max(0, introSec)) * 1000
+    }
+
+    /// build 57 · 复检 P2-2：镜像重建的起播位置决策（纯函数供单测）。
+    ///
+    /// 背景：`rebuildForMirrorRetry()` 此前不传 `startPosMs`，取缺省 0——真实收听中
+    /// （第 8 分钟）网络失败切镜像，位置被 seek 回章首，是明确的体验退化。
+    ///
+    /// 但两个场景的位置来源**必须分开**，否则会打坏静默闸门的既定语义：
+    /// * **抑制态**（静默装载、用户尚未真正收听）：重建只是同一装载过程的内部换源，
+    ///   必须仍定位到 `applyPlan` 给出的目标历史位置（`launchStartPosMs`）。
+    ///   此时 `currentPositionMs` 不可用（`autoPlay: false` 无时钟拍），
+    ///   若拿它当位置源等于把定位打回章首。
+    /// * **非抑制态**（真实收听中换镜像）：保留实时播放位置 `currentPositionMs` 续播。
+    ///   若该值为 0（刚装载、尚未产生时钟拍，位置未知），退回本次装载的目标位置，
+    ///   避免「已知历史进度」被一次换镜像抹成 0。
+    static func mirrorRebuildStartMs(suppressed: Bool, livePositionMs: Int64,
+                                     launchStartPosMs: Int64) -> Int64 {
+        if suppressed { return launchStartPosMs }
+        if livePositionMs > 0 { return livePositionMs }
+        return launchStartPosMs
     }
 
     /// 片尾跳过判定（纯函数供单测）：剩余时长 ≤ 指定秒（且确实在播放中）时触发。
@@ -733,7 +766,15 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         setupNowPlaying()
         addPeriodicTimeObserver()
         NotificationCenter.default.publisher(for: .AVPlayerItemDidPlayToEndTime)
-            .sink { [weak self] _ in self?.onChapterFinished() }
+            .sink { [weak self] note in
+                // build 57 · 复检 P2-3（防误触发误写）：章末动作只对**当前条目**成立。
+                // 切章 / 镜像重建会拆掉旧条目，旧条目迟到的「播完」通知不得触发章末
+                // 动作（否则会按旧章序号写一条历史）——与 statusObserver `.failed`
+                // 分支的 `item === player.currentItem` 同口径。
+                guard let finished = note.object as? AVPlayerItem,
+                      finished === self?.player.currentItem else { return }
+                self?.onChapterFinished()
+            }
             .store(in: &cancellables)
         // build 27（倍速加固）：音频会话中断结束（来电/耳机拔插）后，
         // AVPlayer 可能不恢复或恢复到默认速率——统一 applyRate 重放当前 speed。
@@ -890,6 +931,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private func loadCurrentChapter(startPosMs: Int64 = 0, autoPlay: Bool = true,
                                     keepMirrorChain: Bool = false, silentWrite: Bool = false) {
         guard currentChapterIdx < currentChapters.count else { return }
+        // build 57 · 复检 P2-2：记下本次装载的目标起播位置（早退分支同样生效），
+        // 供镜像重建在抑制态下沿用——保住 applyPlan 的「定位到历史进度」语义。
+        launchStartPosMs = startPosMs
         // build 55 · P1-2（状态机）：静默装载 → 进入抑制态；**真正进入播放态**或
         // **用户动作触发的非静默装载** → 退出抑制态（点章 / 继续收听 / 切章 / 重试 /
         // 章末连播本身就是收听行为）。
@@ -960,6 +1004,10 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             let albumId = currentAlbum?.albumId ?? 0
             let startMs = Self.chapterStartMs(startPosMs: startPosMs,
                                                introSec: skipStore.intro(for: albumSource, albumId: albumId))
+            // build 57 · 复检 P2-2：装载即把「当前位置」对齐到本次装载落点——
+            // 否则切章后到首个时钟拍之前，`currentPositionMs` 仍是**上一章**的位置，
+            // 镜像重建会拿它当续播点（跨章错位 seek）。
+            currentPositionMs = startMs
             if !silentWrite { recordHistory(force: true, positionMs: startMs) }
             scheduleNextChapterPrefetch()
             return
@@ -1090,6 +1138,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         if startMs > 0 {
             player.seek(to: CMTime(seconds: Double(startMs) / 1000.0, preferredTimescale: 1000))
         }
+        // build 57 · 复检 P2-2：同上——当前位置对齐本次装载落点（含 0），
+        // 使镜像重建的「实时位置」只可能是本章位置。进度条也从落点起显示。
+        currentPositionMs = startMs
         if autoPlay {
             isPlaying = true
             // build 27：isPlaying 先置位，applyRate 内 guard 通过（条目尚在加载时
@@ -1224,7 +1275,15 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     func rebuildForMirrorRetry() {
         let rebuild = { [weak self] in
             guard let self else { return }
-            self.loadCurrentChapter(autoPlay: true, keepMirrorChain: true,
+            // build 57 · 复检 P2-2：重建保留播放位置，但位置来源按抑制态分——
+            // 抑制态沿用本次装载的目标历史位置（applyPlan 语义不变），
+            // 非抑制态用实时位置续播（不再退回章首）。判定收在纯函数里，
+            // 生产与用例共用同一份实现。
+            let resumeMs = Self.mirrorRebuildStartMs(
+                suppressed: self.historyWriteSuppressed,
+                livePositionMs: self.currentPositionMs,
+                launchStartPosMs: self.launchStartPosMs)
+            self.loadCurrentChapter(startPosMs: resumeMs, autoPlay: true, keepMirrorChain: true,
                                     silentWrite: self.historyWriteSuppressed)
         }
         if Thread.isMainThread {
@@ -1637,16 +1696,25 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     func pause() {
         player.pause()
         isPlaying = false
-        if listenStartMs > 0 {
-            let elapsed = Int64(Date().timeIntervalSince1970 * 1000) - listenStartMs
-            if elapsed > 0 { listeningTimeStore.addSession(elapsed) }
-            listenStartMs = 0
-        }
+        settleListeningSession()
         // Bug 2：暂停立即落一次历史（保住最后进度）
         // build 55 · P1-2：不再在此处判 silentWrite——统一由 recordHistory 入口的
         // `historyWriteSuppressed` 闸门收口（静默装载后未真正收听 → 拦住；已收听 → 照写）。
         // 本通道正是 b54 漏掉的三通道之一（复检 3b 第 1549 行）。
         recordHistory(force: true)
+    }
+
+    /// build 57 · 复检 P2-1：收听时长结算的**唯一实现**（`pause()` 与 `deinit`
+    /// 共用）。顺序不变、口径不变：先 `addSession(elapsed)` 结算，再清零起点；
+    /// 起点已置 0（未在收听）时直接返回，不产生 0 时长会话。
+    ///
+    /// 与 `@ObservationIgnored listenStartMs` 配套：清零不再触碰 observation
+    /// registrar，deinit 中的调用因此既保留结算职责、又消除原先注释所指的风险。
+    private func settleListeningSession() {
+        guard listenStartMs > 0 else { return }
+        let elapsed = Int64(Date().timeIntervalSince1970 * 1000) - listenStartMs
+        if elapsed > 0 { listeningTimeStore.addSession(elapsed) }
+        listenStartMs = 0
     }
 
     func togglePlayPause() {
@@ -1694,7 +1762,21 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         case .advance:
             nextChapter()
         case .stop:
-            isPlaying = false // 到尾即停（保持章节不动，用户可手动续播）
+            // 到尾即停（保持章节不动，用户可手动续播）
+            isPlaying = false
+            // 位置与落库值保持单一来源：章已播完 → 当前位置就是章尾（进度条 100%）。
+            if durationMs > 0 { currentPositionMs = durationMs }
+            // 播放确实已停止（不是暂停），收听会话在此结算，避免「章末到退出」这段
+            // 静默时间继续计入收听时长。
+            settleListeningSession()
+            // build 57 · 复检 P2-3：章末必须落一次历史。此前只有 `isPlaying = false`，
+            // 听完一章就退出时该章末位置不入库，只能靠 1s 周期拍 + 5s 节流兜底
+            //（最坏丢约 5 秒），与「主动暂停必落库」语义不一致。
+            // 落点 = 章尾 `durationMs`（时长未知时退回实时位置，即上面刚对齐的值）。
+            // **必须过 `recordHistory` 入口的静默闸门**：静默装载不会真播放、
+            // 理论上不触发 `.stop`；镜像链拆条目、迟到通知等异常路径若误触发，
+            // 闸门在这里拦住——不写历史、不顶 `updatedAt`。
+            recordHistory(force: true, positionMs: currentPositionMs)
         case .replayCurrent:
             pause()
             loadCurrentChapter(startPosMs: 0, autoPlay: true)
@@ -1855,6 +1937,42 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         recordHistory(force: false)
     }
 
+    /// build 57 · 复检 P2-1：收听计时起点的**可独立驱动**接缝。
+    ///
+    /// 为什么需要：`play()` 在 `guard player.currentItem != nil` 处早退（nil repository
+    /// 的单测沙箱里条目恒为 nil），`listenStartMs` 因此无法自然置位——deinit 的结算
+    /// 分支（`addSession` + 清零）也就无从取证。start / 结算都是纯记账，与播放机器
+    /// 无关，故在此直接驱动起点，让 deinit 走**生产同一份**结算代码。
+    /// 生产路径不使用它。
+    func startListeningSessionForTesting(at ms: Int64) {
+        listenStartMs = ms
+    }
+
+    /// build 57 · 复检 P2-1：收听时长累计的只读接缝（`settleListeningSession`
+    /// 的结算结果可被断言；`listeningTimeStore` 为私有且落 UserDefaults）。
+    /// 生产路径不使用它。
+    var listeningTotalMsForTesting: Int64 { listeningTimeStore.totalMs }
+
+    /// build 57 · 复检 P2-1：`listenStartMs` 的只读接缝，供 `withObservationTracking`
+    /// 取证「该属性的变更是否会进入 observation registrar」。生产路径不使用。
+    ///
+    /// 为什么必须由生产侧提供读取口：属性本身是 `private`，用例若在自己的副本里读
+    /// 同名变量，取证就落在副本上、与生产实现无关（正是复检批评的「文本扫描式断言」）。
+    /// 本属性读的是**同一个**存储属性——已标 `@ObservationIgnored` 时读取不注册、
+    /// 变更不通知；未标时读取即注册、变更即通知。
+    var readListenStartMsForTesting: Int64 { listenStartMs }
+
+    /// build 57 · 复检 P2-3：章末动作的**可独立驱动**接缝（生产由
+    /// `.AVPlayerItemDidPlayToEndTime` 通知触发，且已加当前条目身份守卫）。
+    ///
+    /// 为什么需要：真实「播完」要求条目 readyToPlay 且时钟推进到末尾，单测沙箱
+    /// 不建播放机器（nil repository）无法自然到达。`.stop` 分支要验的是
+    /// 「落库走哪一个入口、落点取什么位置、静默闸门是否仍然生效」——直接驱动
+    /// 该入口即可等价取证。生产路径不使用它。
+    func simulateChapterFinishedForTesting() {
+        onChapterFinished()
+    }
+
     private func resolvedPlayUrl(forKey key: String) -> String? {
         resolveLock.lock()
         defer { resolveLock.unlock() }
@@ -1918,11 +2036,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         // @Observable 属性在 deinit 中 mutation 会触发 observation registrar，
         // 对象已在析构，无观察者可通知，置位无意义且有风险）：
         player.pause()
-        if listenStartMs > 0 {
-            let elapsed = Int64(Date().timeIntervalSince1970 * 1000) - listenStartMs
-            if elapsed > 0 { listeningTimeStore.addSession(elapsed) }
-            listenStartMs = 0
-        }
+        settleListeningSession()
         // b55 P1-2 三通道闸门的 deinit 通道取证语义保留：静默装载未收听就退页的写
         // 尝试仍触发同步探针（与 recordHistory 入口同一判定口径）。非抑制态的 deinit
         // 不再 enqueue——旧实现里该写入要么崩进程、要么对已析构对象空转，从未真正
