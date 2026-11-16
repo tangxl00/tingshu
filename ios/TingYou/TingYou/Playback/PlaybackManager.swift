@@ -72,20 +72,34 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
     /// 是「video/mp4 @ cn-sh-cc-xx.bilivideo.com」还是别的（真机 -12847 取证
     /// 的关键盲区：proxy 2xx 有内容但 AVPlayer 拒收，此前无法知道内容是什么）。
     private let metaRecorder: (@Sendable (String) -> Void)?
+    /// build 58 · 修复 2/4（失败清缓存 + 403 过期自愈）：取流被拒（HTTP 非 2xx）
+    /// 的**结构化**回传——(状态码, 实际服务域名, 所属章节占位 URI key)。
+    /// 与 failureRecorder 的分工：failureRecorder 回传人话诊断原文（给用户截图看），
+    /// 本 recorder 回传机器可判的判据（交给 PlaybackManager 决定「清缓存 / 自愈」）。
+    /// 带 ownerKey 是为**不串章**：切章后旧条目的迟到 403 不得清掉新章的缓存。
+    private let denialRecorder: (@Sendable (Int, String?, String) -> Void)?
+    /// build 58：taskIdentifier → 该请求所属的章节占位 URI（attach 时记录）。
+    private var taskOwners: [Int: String] = [:]
 
     init(failureRecorder: (@Sendable (String) -> Void)? = nil,
-         metaRecorder: (@Sendable (String) -> Void)? = nil) {
+         metaRecorder: (@Sendable (String) -> Void)? = nil,
+         denialRecorder: (@Sendable (Int, String?, String) -> Void)? = nil) {
         self.failureRecorder = failureRecorder
         self.metaRecorder = metaRecorder
+        self.denialRecorder = denialRecorder
         super.init()
     }
 
     // MARK: 生命周期（PlaybackManager.proxyMedia 驱动）
 
-    func attach(_ loadingRequest: AVAssetResourceLoadingRequest, to task: URLSessionTask) {
+    func attach(_ loadingRequest: AVAssetResourceLoadingRequest, to task: URLSessionTask,
+                ownerKey: String) {
         lock.lock()
         defer { lock.unlock() }
         loadingRequests[task.taskIdentifier] = loadingRequest
+        // build 58 · 修复 2/4：记下该请求属于哪一章的占位 URI——取流被拒时按此
+        // 定位要清掉的缓存条目 / 要不要走 403 自愈（切章后旧请求的迟到拒绝不串章）。
+        taskOwners[task.taskIdentifier] = ownerKey
         // build 46 · B站真机 -12847 根因修复：attach 时保存本 loadingRequest 的
         // Range 头——重定向后 URLSession 构造的新请求不保证保留自定义头；
         // Range 丢失时 CDN 返回 200 全量数据，respond 给期望偏移的 dataRequest
@@ -193,6 +207,13 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         return loadingRequests[task.taskIdentifier]
     }
 
+    /// build 58 · 修复 2/4：该请求所属的章节占位 URI（未登记时为空串）。
+    private func ownerKey(for task: URLSessionTask) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return taskOwners[task.taskIdentifier] ?? ""
+    }
+
     private func finish(task: URLSessionTask) {
         lock.lock()
         loadingRequests.removeValue(forKey: task.taskIdentifier)
@@ -200,6 +221,8 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
         // build 47 · 防御层：偏移与对齐诊断记账同步清理（防串任务）
         taskOffsets.removeValue(forKey: task.taskIdentifier)
         taskSkipLogged.remove(task.taskIdentifier)
+        // build 58：所属章节 key 与其它按任务记账同道清理（防串任务）
+        taskOwners.removeValue(forKey: task.taskIdentifier)
         // build 47 · 嗅探兜底：任务结束未嗅探到也不再挂起（防串任务）
         taskSniffPending.remove(task.taskIdentifier)
         let cont = continuations.removeValue(forKey: task.taskIdentifier)
@@ -227,6 +250,11 @@ private final class ProxyStreamSessionDelegate: NSObject, URLSessionDataDelegate
             // 「Cannot Open」的头号嫌疑层（直链被 CDN 拒绝），必须让用户截图
             // 能看到状态码而不是黑盒。
             failureRecorder?("play · 取流被拒 HTTP \(http.statusCode)（\(http.url?.host ?? "?")），请求域: \(dataTask.originalRequest?.url?.host ?? "?")")
+            // build 58 · 修复 2/4：结构化拒绝信号——上层据此清掉该章缓存
+            //（修复 2）并在 B站 403 时只自愈一次（修复 4）。必须在 finishLoading
+            // **之前**发出：finishLoading 会触发 AVFoundation 的 .failed 回调，
+            // 若届时缓存还在，.failed 分支拿到的仍是同一条过期直链的上下文。
+            denialRecorder?(http.statusCode, http.url?.host, ownerKey(for: dataTask))
             request.finishLoading(with: URLError(.badServerResponse, userInfo: [
                 NSLocalizedDescriptionKey: "音频服务器拒绝访问（HTTP \(http.statusCode)），请稍后重试",
             ]))
@@ -452,6 +480,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private var loaderFailureRecord: String?
     /// build 46 · 反馈 1 增强：loader 元信息（成功路径也记，见 recordLoaderMeta）
     private var loaderMetaRecord: String?
+    /// build 58 · 修复 4：403 自愈留痕——**独立槽**，不被 `clearLoaderFailureRecord()`
+    /// 清掉（自愈会经 `loadCurrentChapter` 触发该清理；若共用 loaderMetaRecord，
+    /// 自愈说明会在下一次 `.failed` 诊断组装前被抹掉，用户截图就看不到
+    /// 「这是过期直链自愈，不是网络故障」）。
+    private var selfHealNote: String?
 
     /// build 45 · 反馈 1a（错误透传）：loader 层失败原文写入（NSLock 保护）。
     /// 供 ProxyStreamSessionDelegate 的 recorder 闭包调用（loader 队列）。
@@ -492,6 +525,19 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         failureRecordLock.lock()
         defer { failureRecordLock.unlock() }
         return loaderMetaRecord
+    }
+
+    /// build 58 · 修复 4：自愈留痕写入 / 读取（同一把锁，独立槽）。
+    private func recordSelfHealNote(_ message: String) {
+        failureRecordLock.lock()
+        selfHealNote = message
+        failureRecordLock.unlock()
+    }
+
+    private func takeSelfHealNote() -> String? {
+        failureRecordLock.lock()
+        defer { failureRecordLock.unlock() }
+        return selfHealNote
     }
 
     /// build 45 · CI 第一轮（反馈 2a）：章节加载中间态——点章到 readyToPlay
@@ -592,10 +638,71 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
 
     /// 下一章直链预取任务（每次换章重建）
     private var prefetchTask: Task<Void, Never>?
-    /// 已解析直链缓存：占位 URI → 真实直链；resourceLoader 命中即秒回，切章零等待
-    private var resolvedPlayUrls: [String: String] = [:]
+    /// 已解析直链缓存条目（build 58 · 修复 1）：直链 + **解析时刻**（毫秒）。
+    ///
+    /// 为什么必须带时刻：v1.4.4 之前的缓存只有「占位 URI → 直链」一对值，没有
+    /// 任何时效概念，也没有失败淘汰。锁屏长听（后台放几十分钟）之后切下一章，
+    /// resourceLoader 命中的是**几十分钟前预取下来的 B站签名直链**——签名/CDN
+    /// 侧已失效，代理取流 403（非 2xx 守卫）→ 非可重试错误 → 终局报错。
+    struct ResolvedPlayUrlEntry {
+        let url: String
+        /// 该直链**由解析接口返回**的时刻（毫秒）。镜像重定向重写同一条目时取
+        /// 重写时刻（镜像取自本次装载窗口内的同批解析结果，语义上是「本窗口内
+        /// 仍在用」，见 storeResolved 注释）。
+        let resolvedAtMs: Int64
+    }
+
+    /// 已解析直链缓存：占位 URI → 直链条目；resourceLoader 命中即秒回，切章零等待
+    private var resolvedPlayUrls: [String: ResolvedPlayUrlEntry] = [:]
+    /// 占位 URI → 该次解析得到的**剩余候选镜像** + **同批解析时刻**（build 58 · 修复 3）：
+    /// 缓存命中时据此补镜像链（原先命中即服务、不补链，切章失败无镜像可换）。
+    /// 带时刻的理由：镜像与主选同批解析、同批过期——若把过期镜像当新鲜链装回去，
+    /// 切章失败时换到的是另一条同样 403 的地址，白白消耗一次切换额度。
+    struct MirrorChainEntry {
+        let candidates: [String]
+        let resolvedAtMs: Int64
+    }
+    private var resolvedMirrorChains: [String: MirrorChainEntry] = [:]
     private let resolveLock = NSLock()
     private static let resolvedCacheLimit = 12
+
+    /// build 58 · 修复 1：**B站签名直链缓存时效**（10 分钟）。
+    ///
+    /// 阈值依据：
+    /// 1. B站 playurl 直链的 deadline 签名窗口是**小时级**（服务端给 2 小时量级），
+    ///    10 分钟远小于签名有效期——不会把「还完全有效」的直链误判过期而白白重解析；
+    /// 2. 但签名的理论窗口不是可用性保证：CDN 侧会按节点调度/资源迁移提前淘汰
+    ///    （b48/b49 真机取证里主选 upos-sz-* 节点出现过 TLS 失败、镜像切换），
+    ///    本层对「已失效」的唯一观测点就是取流被拒（HTTP 403）——所以只要留出
+    ///    足够短的重解析周期，让**换章那一刻**尽可能拿到新签名即可；
+    /// 3. 锁屏长听的真实间隔是「几分钟到几十分钟」，10 分钟覆盖「后台放置一段
+    ///    时间后再切章」这一典型失效窗口（预取条目在下一次切章时必然已超阈值）；
+    /// 4. 不取更短（如 60 秒）的理由：每章一次 playurl 已是既有成本（wbi 签名 +
+    ///    playurl 请求，且服务端有 412 风控），缓存命中主要用于**同章 seek/重开**
+    ///    这类秒级重复请求；阈值过短会把这类请求也推回解析接口，放大风控暴露面；
+    /// 5. 与代理层约束无冲突：proxySession 的单请求超时 30s、资源级 6h，均远
+    ///    大于本阈值，不存在「缓存未过期但代理层已放弃」的错配。
+    ///
+    /// **非 B站源不设 TTL**（判断与理由）：redirect 直链域（tingyou API / xmcdn
+    /// 等）的播放地址不带 deadline 签名，天然没有「过期」语义；而且这些源走
+    /// `serveResolved` 的 redirect 分支，取流由 AVPlayer 自行发起，我们**没有**
+    /// 「取流被拒」的观测点来判定失效。给它们套一个时间阈值只会把完全可用的
+    /// 直链判过期；它们真失效时的兜底是修复 2（item `.failed` 清掉该章缓存，
+    /// 手动重试即现解析）。
+    static let biliSignedUrlCacheTTLMs: Int64 = 10 * 60 * 1000
+
+    /// build 58 · 修复 1：缓存时刻来源（毫秒）。生产读系统时间；用例注入可推进
+    /// 的时钟，从而对「过期」这条纯时间判据做行为级取证（不必真等 10 分钟）。
+    @ObservationIgnored var resolveClockMsProvider: () -> Int64 = {
+        Int64(Date().timeIntervalSince1970 * 1000)
+    }
+
+    /// build 58 · 修复 4：**本轮装载内已自愈过的章节**（防 403 风暴）。
+    /// 用户主动装载（非 keepMirrorChain）时清空——所以「手动重试」仍可获得一次
+    /// 新的自愈机会，而一次自愈链内部的二级 403 直接终局。
+    private var forbiddenSelfHealKeys: Set<String> = []
+    /// build 58 · 修复 4：自愈累计次数（诊断与用例只读）。
+    private var forbiddenSelfHealCountStorage = 0
 
     var isPlaying: Bool = false
     var currentPositionMs: Int64 = 0
@@ -755,6 +862,14 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             },
             metaRecorder: { [weak self] message in
                 self?.recordLoaderMeta(message)
+            },
+            denialRecorder: { [weak self] status, host, ownerKey in
+                // build 58 · 修复 2/4：取流被拒（非 2xx）→ 清该章缓存；B站 403
+                // 另走一次性自愈。闭包跑在代理 session 的 delegate 队列（后台线程），
+                // handleChapterLoadFailure 内部只碰锁与状态 + 自愈经
+                // rebuildForMirrorRetry() 自带「非主线程切主队列」的线程适配。
+                self?.handleChapterLoadFailure(ownerKey: ownerKey,
+                                               statusCode: status, sourceHost: host)
             })
         self.proxyStreamDelegate = proxyDelegate
         self.proxySession = URLSession(configuration: proxyConfig,
@@ -976,6 +1091,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             mirrorCandidates = []
             mirrorAttempts = 0
             mirrorLock.unlock()
+            // build 58 · 修复 4：用户主动装载（点章 / 切章 / 重试）开启新的一轮，
+            // 上一轮的自愈记账随之作废——手动重试仍能拿到一次自愈机会。
+            resolveLock.lock()
+            forbiddenSelfHealKeys.removeAll()
+            resolveLock.unlock()
         }
         isChapterLoading = true
         let ch = currentChapters[currentChapterIdx]
@@ -1068,6 +1188,15 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 // 现行为不盲换。item === player.currentItem：仅当前条目的失败
                 // 才触发重试（切章拆旧条目的迟到 .failed 不重试；-999 取消
                 // 态在分类函数里排除）。
+                // build 58 · 修复 2：**失败即淘汰缓存**——本条目失败说明这条直链
+                // 已不可用（锁屏长听后过期 403 / CDN 拒绝 / 网络层失败都可能）。
+                // 不清缓存的话，用户点「重试」→ resourceLoader 命中同一条坏地址
+                // → 再失败，形成「重试永远不过」的死锁（用户只能杀进程重进）。
+                // 只在**当前条目**失败时清（切章拆旧条目的迟到 .failed 不清，
+                // 与镜像重试同口径）。
+                if item === self?.player.currentItem {
+                    self?.handleChapterLoadFailure(ownerKey: uri, statusCode: nil, sourceHost: nil)
+                }
                 var networkMirrorNote: String? = nil
                 // build 53 · A3（复检：条件④用例全是文本扫描、非行为级）：
                 // 把「这条错误能不能/要不要换镜像」抽成 `mirrorRetryDecision(for:)`，
@@ -1081,7 +1210,10 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                         let ns = error as NSError
                         let host = URL(string: next)?.host ?? "?"
                         self?.recordLoaderMeta("网络错误 \(ns.domain) \(ns.code) → 自动切换镜像第 \(attempt) 次 → \(host)")
-                        self?.storeResolved(key: uri, url: next)
+                        // build 58：镜像与主选同批解析——重写条目沿用**同批时刻**，
+                        // 不为它伪造「刚解析」的新鲜度（过期镜像照旧会被 TTL 判掉）。
+                        self?.storeResolved(key: uri, url: next,
+                                            resolvedAtMs: self?.resolvedWindowMs(forKey: uri))
                         // build 56 · P1-A：**不再在此直接重建**——统一走
                         // `rebuildForMirrorRetry()`（无参，生产唯一实现；抑制态
                         // 由产品内部事实源 historyWriteSuppressed 透传，调用方
@@ -1116,6 +1248,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 //「喂给 AVPlayer 的是什么、从哪个域拿的」。
                 if let meta = self?.takeLoaderMetaRecord() {
                     diagnostic.append(meta)
+                }
+                // build 58 · 修复 4：403 自愈留痕（独立槽，不被装载清槽抹掉）——
+                // 让用户/复检一眼分清「过期直链自愈」与「真网络故障」。
+                if let heal = self?.takeSelfHealNote() {
+                    diagnostic.append(heal)
                 }
                 // build 49 · 问题 1：可重试网络错误且镜像链耗尽——诊断标注
                 // 已换镜像次数（TLS/网络错误 → 已换镜像 N 次仍失败）。
@@ -1213,7 +1350,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         if let next = takeNextMirrorCandidate() {
             let host = URL(string: next)?.host ?? "?"
             recordLoaderMeta("watchdog · \(extended ? "延长观察后" : "")\(shapeText)，自动切换镜像第 \(currentMirrorAttempts()) 次 → \(host)")
-            storeResolved(key: uri, url: next)
+            storeResolved(key: uri, url: next, resolvedAtMs: resolvedWindowMs(forKey: uri))
             // build 56 · P1-A：与 statusObserver 网络错误分支**同一份实现**
             //（抑制态由产品内部事实源透传，不在此重复判断）。
             rebuildForMirrorRetry()
@@ -1330,6 +1467,22 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// 测试接缝：本轮已切换次数。
     var mirrorAttemptsForTesting: Int { currentMirrorAttempts() }
 
+    /// build 58 · 修复 3 测试接缝：当前镜像链剩余候选条数（缓存命中补链的判据）。
+    var mirrorCandidatesCountForTesting: Int {
+        mirrorLock.lock()
+        defer { mirrorLock.unlock() }
+        return mirrorCandidates.count
+    }
+
+    /// build 58 测试接缝：直接写入一条解析缓存（含解析时刻与剩余候选镜像），
+    /// 使「过期判定 / 补链 / 失败淘汰」三条用例能驱动**生产同一份**读取实现
+    ///（`prepareCachedServe`），而不是用例里复制一份缓存语义。
+    func seedResolvedCacheForTesting(key: String, url: String,
+                                     mirrors: [String]? = nil,
+                                     resolvedAtMs: Int64? = nil) {
+        storeResolved(key: key, url: url, mirrors: mirrors, resolvedAtMs: resolvedAtMs)
+    }
+
     /// build 48 · 需求 4：当前已自动切换的镜像次数（诊断文案用）。
     private func currentMirrorAttempts() -> Int {
         mirrorLock.lock()
@@ -1360,8 +1513,13 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         // 增强 5.3：预取命中 → 直接服务，省一次网络解析（切章零等待）。
         // v1.4.3 · P0：命中后不总是 redirect——按直链域名分流（代理 / redirect），
         // B站 CDN 必须代理（裸请求 403，见 ProxiedCdnHosts 注释）。
-        if let cached = resolvedPlayUrl(forKey: url.absoluteString) {
-            return serveResolved(LoadingRequestBox(request: loadingRequest), playUrl: cached)
+        // build 58 · 修复 1：命中前先判时效——B站签名直链超阈值即视为过期，
+        // `resolvedPlayUrl` 返回 nil 并清除条目，落到下面的现解析分支。
+        // build 58 · 修复 3：命中时补装镜像链（原先命中即服务、跳过
+        // storeMirrorChain，切章失败无镜像可换）。
+        if let cached = prepareCachedServe(forKey: url.absoluteString) {
+            return serveResolved(LoadingRequestBox(request: loadingRequest), playUrl: cached,
+                                 ownerKey: url.absoluteString)
         }
         loaderLock.lock()
         let seq = loaderTaskSeq
@@ -1387,7 +1545,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                     throw URLError(.badServerResponse)
                 }
                 // 解析结果顺手入缓存（同一章 seek/重开不再重复解析）
-                self?.storeResolved(key: cacheKey, url: playUrl)
+                // build 58 · 修复 3：剩余候选镜像**随条目一起入缓存**——缓存命中
+                // 时（`restoreMirrorChainFromCache`）才装得出镜像链。此前只存直链，
+                // 命中路径无链可补。
+                self?.storeResolved(key: cacheKey, url: playUrl,
+                                    mirrors: Array(playUrls.dropFirst()))
                 self?.storeMirrorChain(Array(playUrls.dropFirst()))
                 // build 46 · 反馈 1 增强：resolve 出的直链域名入元信息槽——
                 // 失败诊断可见「resolve 到了哪个域」（cn-sh-cc-*/upos-*/akamaized）。
@@ -1396,7 +1558,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                 }
                 guard let resolvedSelf = self else { return }
                 // v1.4.3 · P0：解析完成同样按域名分流服务
-                if !resolvedSelf.serveResolved(box, playUrl: playUrl) {
+                if !resolvedSelf.serveResolved(box, playUrl: playUrl, ownerKey: cacheKey) {
                     box.request.finishLoading(with: URLError(.badURL))
                 }
             } catch {
@@ -1421,7 +1583,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// - 其余源：维持既有 redirect 语义（build 29 起线上验证可行，不动）。
     /// 返回 false 仅当直链 URL 不合法（调用方兜底 finishLoading）。
     @discardableResult
-    private func serveResolved(_ box: LoadingRequestBox, playUrl: String) -> Bool {
+    private func serveResolved(_ box: LoadingRequestBox, playUrl: String, ownerKey: String) -> Bool {
         guard let redirectURL = URL(string: playUrl) else { return false }
         guard let host = redirectURL.host, ProxiedCdnHosts.needsProxy(host) else {
             // 非代理域：原 redirect 语义（AVPlayer 自行取流）
@@ -1437,7 +1599,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         loaderTaskSeq += 1
         loaderLock.unlock()
         let task = Task { [weak self] in
-            await self?.proxyMedia(box: box, url: redirectURL)
+            await self?.proxyMedia(box: box, url: redirectURL, ownerKey: ownerKey)
             self?.removeLoaderTask(seq)
         }
         loaderLock.lock()
@@ -1582,7 +1744,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         }
     }
 
-    private func proxyMedia(box: LoadingRequestBox, url: URL) async {
+    private func proxyMedia(box: LoadingRequestBox, url: URL, ownerKey: String) async {
         let request = box.request
         var req = URLRequest(url: url)
         // 按本 loadingRequest 的数据区间组装 Range（requestsAllDataToEndOfResource = 开区间）
@@ -1597,7 +1759,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         }
         Self.applyBiliCdnHeaders(to: &req, url: url)
         let task = proxySession.dataTask(with: req)
-        proxyStreamDelegate.attach(request, to: task)
+        proxyStreamDelegate.attach(request, to: task, ownerKey: ownerKey)
         // 挂起至网络任务完成；外层 loader Task 被取消（切章/停止播放）时连带取消网络任务。
         // resume 放进 operation 块：确保取消 handler 先于网络启动装好（resume 在 handler
         // 挂载前调用会有取消竞态），且 dataTask 不 resume 不发请求。
@@ -1973,20 +2135,190 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         onChapterFinished()
     }
 
-    private func resolvedPlayUrl(forKey key: String) -> String? {
-        resolveLock.lock()
-        defer { resolveLock.unlock() }
-        return resolvedPlayUrls[key]
+    /// build 58 · 修复 1 + 修复 3：缓存命中的**唯一生产入口**（`resourceLoader`
+    /// 首行调用；用例也驱动同一份实现，不在用例里复制调用逻辑）。
+    ///
+    /// 职责三件：
+    /// 1. 判时效（修复 1）：`resolvedPlayUrl` 内含 B站签名直链 TTL 判定，过期即
+    ///    清条目并返回 nil → 调用方落到现解析；
+    /// 2. 补镜像链（修复 3）：命中后从缓存里的剩余候选装回 `mirrorCandidates`；
+    /// 3. 返回可服务直链（nil = 未命中/已过期，需现解析）。
+    ///
+    /// 语义保护：只读缓存 + 只动镜像链状态，不改 `historyWriteSuppressed`、不写历史。
+    func prepareCachedServe(forKey key: String) -> String? {
+        guard let cached = resolvedPlayUrl(forKey: key) else { return nil }
+        restoreMirrorChainFromCache(forKey: key)
+        return cached
     }
 
-    private func storeResolved(key: String, url: String) {
+    /// build 58 · 修复 2：**失败即淘汰**——item `.failed` 与取流被拒两条路径共用。
+    ///
+    /// 为什么必须清：用户锁屏长听后切章失败，界面上有「重试」；若缓存不清，
+    /// `retryCurrentChapter()` → `loadCurrentChapter()` → resourceLoader 命中同一条
+    /// 已失效直链 → 再 403 → 永远重试不过去（用户唯一能做的只有杀进程重进）。
+    func handleChapterLoadFailure(ownerKey: String, statusCode: Int?, sourceHost: String?) {
+        guard !ownerKey.isEmpty else { return }
+        invalidateResolvedUrl(forKey: ownerKey)
+        // 修复 4：B站 403 = 过期信号 → 一次性自愈（清缓存已在上面完成）。
+        if let statusCode, statusCode == 403, isBiliOwnerKey(ownerKey) {
+            requestForbiddenSelfHeal(ownerKey: ownerKey, sourceHost: sourceHost)
+        }
+    }
+
+    /// build 58 · 修复 4：该占位 URI 是否属于 B站源（自愈只在 B站开启）。
+    /// build 58 · 修复 4：自愈累计次数的只读接缝（用例据此断言「只自愈一次」）。
+    var forbiddenSelfHealCountForTesting: Int {
         resolveLock.lock()
         defer { resolveLock.unlock() }
-        resolvedPlayUrls[key] = url
-        // 大小控制：超过上限淘汰最早写入的条目
+        return forbiddenSelfHealCountStorage
+    }
+
+    private func isBiliOwnerKey(_ key: String) -> Bool {
+        (PlayUri.parse(key)?.src ?? "") == SourceRegistry.BILI
+    }
+
+    /// build 58 · 修复 4：**403 过期自愈**（B站源，仅一次）。
+    ///
+    /// 路径：清缓存（由 `handleChapterLoadFailure` 完成，必先于本函数）→ 现解析
+    /// （走 `rebuildForMirrorRetry()` 同一份重建实现 → `loadCurrentChapter` →
+    /// resourceLoader 未命中缓存 → playurl 现解析拿新签名）→ 重装载。
+    ///
+    /// 为什么复用 `rebuildForMirrorRetry()` 而不自己写一套：它是镜像/重载的**唯一
+    /// 生产入口**，内部透传 `silentWrite: self.historyWriteSuppressed`——静默装载态
+    /// 下自愈不会解除抑制、不会误写历史（硬约束）。另写一套就有「漏传 silentWrite」
+    /// 的可复发形态（正是 b55/b56 复检反复踩的坑）。
+    ///
+    /// 只自愈一次：`forbiddenSelfHealKeys` 记录已自愈过的 key，同一章第二次 403
+    /// 直接走终局报错（防 403 风暴：签名若整体失效，无限自愈会打出 playurl 请求风暴，
+    /// 且触发 B站 412 风控）。
+    func requestForbiddenSelfHeal(ownerKey: String, sourceHost: String?) {
+        resolveLock.lock()
+        let alreadyHealed = forbiddenSelfHealKeys.contains(ownerKey)
+        if !alreadyHealed { forbiddenSelfHealKeys.insert(ownerKey) }
+        let count = forbiddenSelfHealCountStorage
+        if !alreadyHealed { forbiddenSelfHealCountStorage += 1 }
+        resolveLock.unlock()
+        if alreadyHealed {
+            recordSelfHealNote("403 自愈 · 该章此前已自愈 \(count) 次，本次不再自愈（仅自愈一次，防 403 风暴）")
+            return
+        }
+        recordSelfHealNote("403 自愈 · B站签名直链已过期（\(sourceHost ?? "?")）→ 已清缓存并现解析重装载（本章仅自愈一次）")
+        // 旧镜像链与主选同批解析，同样已过期——清掉，等现解析重新装链，
+        // 避免把一次自愈额度浪费在另一条过期镜像上。
+        mirrorLock.lock()
+        mirrorCandidates = []
+        mirrorAttempts = 0
+        mirrorLock.unlock()
+        rebuildForMirrorRetry()
+    }
+
+    /// build 58 · 修复 1：**带时效**的缓存读取——命中前先判该条目是否仍可用。
+    ///
+    /// 判据：直链域名属代理域（B站签名直链，`ProxiedCdnHosts`）且解析时刻距今
+    /// 超过 `biliSignedUrlCacheTTLMs` → 视为失效，**本次不服务缓存**并顺手清除
+    /// 该条目（下次走现解析）。非 B站源一律不限时（见 TTL 注释：无 deadline 语义、
+    /// 且 redirect 分支没有取流拒绝的观测点）。
+    ///
+    /// 注意：这里**只判时间**，不做网络探测——判定成本必须为常数级（本函数在
+    /// AVFoundation loader 回调里同步调用）。
+    private func resolvedPlayUrl(forKey key: String) -> String? {
+        let now = resolveClockMsProvider()
+        var expired = false
+        resolveLock.lock()
+        let entry = resolvedPlayUrls[key]
+        if let entry {
+            expired = Self.isCacheEntryExpired(entry, nowMs: now)
+            if expired {
+                resolvedPlayUrls.removeValue(forKey: key)
+                resolvedMirrorChains.removeValue(forKey: key)
+            }
+        }
+        resolveLock.unlock()
+        guard let entry, !expired else { return nil }
+        return entry.url
+    }
+
+    /// build 58 · 修复 1：缓存条目是否已超出时效（纯静态，生产与用例共用）。
+    static func isCacheEntryExpired(_ entry: ResolvedPlayUrlEntry, nowMs: Int64) -> Bool {
+        guard ProxiedCdnHosts.needsProxy(URL(string: entry.url)?.host ?? "") else { return false }
+        return nowMs - entry.resolvedAtMs > biliSignedUrlCacheTTLMs
+    }
+
+    /// build 58 · 修复 2：**清除某章的解析缓存**（失败即淘汰）。
+    ///
+    /// 调用点两处：① item `.failed`（`statusObserver`）② 取流被拒（代理层非 2xx
+    /// 守卫）。此前缓存无失败淘汰，`retryCurrentChapter()` 会再次命中同一条
+    /// 已失效直链——用户手动重试等于重踩同一个 403。清掉后重试走现解析。
+    func invalidateResolvedUrl(forKey key: String) {
+        resolveLock.lock()
+        resolvedPlayUrls.removeValue(forKey: key)
+        resolvedMirrorChains.removeValue(forKey: key)
+        resolveLock.unlock()
+    }
+
+    /// build 58 · 修复 3：缓存命中路径的**镜像链补装**——从 `resolvedMirrorChains`
+    /// 取出同一次解析得到的剩余候选，装进 `mirrorCandidates`（并清零切换次数）。
+    ///
+    /// 为什么必须补：`serveResolved` 的缓存命中分支（`resourceLoader` 首行命中）
+    /// 直接服务缓存直链，原先**跳过** `storeMirrorChain`——于是「缓存命中的这一章」
+    /// 在取流失败时 `mirrorCandidates` 为空，`mirrorRetryDecision` 只能给
+    /// `.exhausted(attempts: 0)`，用户看到「无可用 backup 镜像」直接终局。
+    /// 缓存链只在**命中且确有候选**时才装：无候选（非 B站源恒单元素链）时保持空，
+    /// 与既有「单元素链 = 无镜像语义」一致，不改变非 B站源的失败语义。
+    ///
+    /// 语义保护：本函数只动 `mirrorCandidates` / `mirrorAttempts`，不触碰
+    /// `historyWriteSuppressed`、不写历史——静默装载下「零历史写入」不受影响。
+    private func restoreMirrorChainFromCache(forKey key: String) {
+        resolveLock.lock()
+        let chain = resolvedMirrorChains[key]
+        resolveLock.unlock()
+        guard let chain, !chain.candidates.isEmpty else { return }
+        guard !Self.isMirrorChainExpired(chain, nowMs: resolveClockMsProvider()) else { return }
+        storeMirrorChain(chain.candidates)
+    }
+
+    /// build 58 · 修复 3：镜像链是否已过期（口径与直链缓存 TTL 一致：只对 B站
+    /// 代理域签名链限时——链里只要有代理域候选，就按同批解析时刻判时效）。
+    static func isMirrorChainExpired(_ chain: MirrorChainEntry, nowMs: Int64) -> Bool {
+        let hasProxied = chain.candidates.contains {
+            ProxiedCdnHosts.needsProxy(URL(string: $0)?.host ?? "")
+        }
+        guard hasProxied else { return false }
+        return nowMs - chain.resolvedAtMs > biliSignedUrlCacheTTLMs
+    }
+
+    /// build 58 · 修复 3：该章本条目的解析窗口时刻（镜像重写条目时沿用，使
+    /// 「重写」不会把一条同批过期的镜像伪装成新鲜地址）。条目不存在时返回 nil
+    /// （调用方退回当前时钟）。
+    private func resolvedWindowMs(forKey key: String) -> Int64? {
+        resolveLock.lock()
+        defer { resolveLock.unlock() }
+        return resolvedPlayUrls[key]?.resolvedAtMs ?? resolvedMirrorChains[key]?.resolvedAtMs
+    }
+
+    /// 写入解析结果（附带解析时刻 + 剩余候选镜像）。
+    /// - Parameter resolvedAtMs: 解析时刻；缺省取当前时钟（镜像重写本条目的场景
+    ///   由调用方传入重写时刻）。
+    private func storeResolved(key: String, url: String,
+                               mirrors: [String]? = nil,
+                               resolvedAtMs: Int64? = nil) {
+        resolveLock.lock()
+        resolvedPlayUrls[key] = ResolvedPlayUrlEntry(
+            url: url, resolvedAtMs: resolvedAtMs ?? resolveClockMsProvider())
+        if let mirrors {
+            if mirrors.isEmpty {
+                resolvedMirrorChains.removeValue(forKey: key)
+            } else {
+                resolvedMirrorChains[key] = MirrorChainEntry(
+                    candidates: mirrors, resolvedAtMs: resolvedAtMs ?? resolveClockMsProvider())
+            }
+        }
+        // 大小控制：超过上限淘汰最早写入的条目（镜像链随条目一起淘汰）
         while resolvedPlayUrls.count > Self.resolvedCacheLimit, let first = resolvedPlayUrls.keys.first {
             resolvedPlayUrls.removeValue(forKey: first)
+            resolvedMirrorChains.removeValue(forKey: first)
         }
+        resolveLock.unlock()
     }
 
     /// 预取下一章直链：提前解析（markPaid:false 付费章静默跳过）+ AVFoundation 预热
@@ -2005,13 +2337,18 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
             // 被静默吞掉（切章预取全失效）、TING59 导入书回退 String(albumId) 解析到
             // 错误书页；与 resourceLoader 主路径（detailPath: currentAlbum?.detailPath）
             // 口径对齐，预取与播放解析到同一章。
-            guard let resolved = try? await repository.getPlayUrl(
+            // build 58 · 修复 3：预取改走**候选链**接口——除主选外把 backup 镜像
+            // 一并写进缓存（`mirrors:`）。这样下一章切章时缓存命中也有镜像链可补
+            //（锁屏长听后切章失败 → 有镜像可换，而不是「无可用 backup 镜像」终局）。
+            // markPaid: false 保持预取口径（静默预取不打付费标、失败不影响播放）。
+            guard let playUrls = try? await repository.getPlayUrlCandidates(
                 src: album.source, albumId: album.albumId, chapterIdx: next.index,
                 detailPath: album.detailPath,
                 markPaid: false), // 静默预取：付费章不弹不打标，失败不影响播放
-                !resolved.isEmpty else { return }
+                let resolved = playUrls.first, !resolved.isEmpty else { return }
             guard !Task.isCancelled else { return }
-            self?.storeResolved(key: key, url: resolved)
+            self?.storeResolved(key: key, url: resolved,
+                                mirrors: Array(playUrls.dropFirst()))
             // AVFoundation 预热（iOS 16+ async load；失败静默忽略）
             if let warmURL = URL(string: resolved) {
                 let asset = AVURLAsset(url: warmURL)

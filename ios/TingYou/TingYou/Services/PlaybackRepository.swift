@@ -34,9 +34,16 @@ final class PlaybackRepository: Sendable {
     ///   upos-sz-estgcos.bilivideo.com 206 video/mp4 但 20s 零字节到达
     ///   （缓冲挂起），watchdog 据此自动换下一镜像重试；
     /// - 其它源：单元素链（无镜像语义，行为与 getPlayUrl 一致）。
-    func getPlayUrlCandidates(src: String, albumId: Int64, chapterIdx: Int, detailPath: String? = nil) async throws -> [String] {
+    /// build 58 · 修复 3（预取补链）：新增 `markPaid`——预取路径要拿到完整候选链
+    /// （缓存命中时才有镜像可补），又不能像正常播放那样打付费标；
+    /// 非 B站源据此把 `markPaid` 透传给 getPlayUrl，与 b57 预取口径一致
+    ///（此前预取走单 URL 的 markPaid:false，若改走本接口而不透传会误打付费标）。
+    func getPlayUrlCandidates(src: String, albumId: Int64, chapterIdx: Int,
+                              detailPath: String? = nil,
+                              markPaid: Bool = true) async throws -> [String] {
         guard src == SourceRegistry.BILI else {
-            return [try await getPlayUrl(src: src, albumId: albumId, chapterIdx: chapterIdx, detailPath: detailPath)]
+            return [try await getPlayUrl(src: src, albumId: albumId, chapterIdx: chapterIdx,
+                                         detailPath: detailPath, markPaid: markPaid)]
         }
         guard let bvid = detailPath, !bvid.isEmpty else {
             throw URLError(.badURL)
