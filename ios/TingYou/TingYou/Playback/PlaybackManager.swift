@@ -700,9 +700,36 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// build 58 · 修复 4：**本轮装载内已自愈过的章节**（防 403 风暴）。
     /// 用户主动装载（非 keepMirrorChain）时清空——所以「手动重试」仍可获得一次
     /// 新的自愈机会，而一次自愈链内部的二级 403 直接终局。
+    ///
+    /// build 59 · P1-1：**记账口径 = 「真的为当前章执行过自愈」才记账**。
+    /// 依据三条：
+    /// 1. 键是**该章的占位 URI**（`src + albumId + chapter_idx`），额度天然按章归属，
+    ///    不存在「A 的额度被 B 消耗」的通道——集合里没有别的章的键，B 的自愈判定
+    ///    只看 B 自己的键是否在内。
+    /// 2. **跨章迟到的 403 不记账**（`isCurrentChapterOwnerKey` 不通过就直接返回）：
+    ///    那一刻并没有执行自愈，若照记，该章等真成为当前章时会发现「自己已经自愈过」
+    ///    而拿不到机会——这正是复检指出的「A 期间到达的 403 让 B 失去机会」的镜像形态
+    ///    （B 与 A 同源同书不同章时，两个键不同，但若在 A 的 403 上笼统「记一次」，
+    ///    就会把额度记到错的地方）。
+    /// 3. **额度按装载轮次重置**（`loadCurrentChapter` 的 `!keepMirrorChain` 分支
+    ///    `removeAll()`）：迟到 403 的那一章再次成为当前章，必然经过一次用户主动装载
+    ///    （点章 / 切章 / 重试 / 章末连播），那一轮额度清空 → 该章重新获得一次自愈机会。
+    ///    这不是「漏网」，而是原设计（手动重试必须能救回该章，否则一次失败即永久终局）。
+    ///    镜像重建（keepMirrorChain）不清账——同一轮内不会靠换镜像反复骗取自愈。
     private var forbiddenSelfHealKeys: Set<String> = []
     /// build 58 · 修复 4：自愈累计次数（诊断与用例只读）。
     private var forbiddenSelfHealCountStorage = 0
+
+    /// build 59 · P1-1 测试接缝：`loadCurrentChapter` 的累计调用次数。
+    ///
+    /// 用途（行为级取证，不是源码文本扫描）：复检指出修复 4 的既有四条用例
+    /// 全部把「失败章」与「当前章」设为同一章，跨章场景零覆盖；而「跨章迟到 403
+    /// 有没有偷偷重载当前章」只能靠**重载次数**确定，不能靠镜像链条数间接推断
+    /// （链被清后又装回、条目被拆又重建都可能让条数看起来一样）。
+    /// 仅一个 Int 自增，不触碰播放机器 / 闸门 / 缓存，生产行为零影响；
+    /// `@ObservationIgnored` 保证自增不触发 SwiftUI 重渲染。
+    @ObservationIgnored private var chapterLoadCountStorage = 0
+    var chapterLoadCountForTesting: Int { chapterLoadCountStorage }
 
     var isPlaying: Bool = false
     var currentPositionMs: Int64 = 0
@@ -1046,6 +1073,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private func loadCurrentChapter(startPosMs: Int64 = 0, autoPlay: Bool = true,
                                     keepMirrorChain: Bool = false, silentWrite: Bool = false) {
         guard currentChapterIdx < currentChapters.count else { return }
+        // build 59 · P1-1：重载次数计数（测试接缝，见 `chapterLoadCountForTesting`）。
+        chapterLoadCountStorage += 1
         // build 57 · 复检 P2-2：记下本次装载的目标起播位置（早退分支同样生效），
         // 供镜像重建在抑制态下沿用——保住 applyPlan 的「定位到历史进度」语义。
         launchStartPosMs = startPosMs
@@ -2191,25 +2220,81 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// 只自愈一次：`forbiddenSelfHealKeys` 记录已自愈过的 key，同一章第二次 403
     /// 直接走终局报错（防 403 风暴：签名若整体失效，无限自愈会打出 playurl 请求风暴，
     /// 且触发 B站 412 风控）。
+    ///
+    /// build 59 · P1-1（复检必修）：**当前章守卫**——403 是**异步迟到**信号（`.failed`
+    /// 的 KVO 回调、代理 session delegate 队列、看门狗都可能晚于一次切章到达），
+    /// 而 `rebuildForMirrorRetry()` 重载的是 **`currentChapterIdx` 那一章**，不是
+    /// `ownerKey` 那一章。b58 只按 `ownerKey` 记账便无条件重建，于是「A 起播 →
+    /// 用户切到 B → A 的 403 迟到」会把**属于 B 的**镜像链清空并重建 B：①B 被拆条
+    /// 重建、播放中断 ②修复 3 刚补好的镜像保护被击穿（B 下次 403 只能 exhausted 0
+    /// 终局）③自愈额度记在 A 名下，B 失去自己的机会。
+    ///
+    /// 因此：**只有 ownerKey 就是当前章时才允许清镜像链并重载**；否则视为「旧章迟到
+    /// 信号」，只保留 `handleChapterLoadFailure` 已做的「清该章过期缓存」，不重载、
+    /// 不动当前章镜像链、不记账（详见 `forbiddenSelfHealKeys` 记账口径注释）。
+    ///
+    /// 线程：状态比对（`currentChapterIdx` / `currentChapters` 是 `@Observable`
+    /// 主线程状态）与「清链 + 重载」必须在**同一主线程时点原子完成**，否则守卫与
+    /// 重载之间仍可被一次切章插队——那正是本缺陷的形态。故判定与执行收在同一个
+    /// 闭包里，整体投递到主线程（与 `rebuildForMirrorRetry()` 同一套主线程适配）。
     func requestForbiddenSelfHeal(ownerKey: String, sourceHost: String?) {
-        resolveLock.lock()
-        let alreadyHealed = forbiddenSelfHealKeys.contains(ownerKey)
-        if !alreadyHealed { forbiddenSelfHealKeys.insert(ownerKey) }
-        let count = forbiddenSelfHealCountStorage
-        if !alreadyHealed { forbiddenSelfHealCountStorage += 1 }
-        resolveLock.unlock()
-        if alreadyHealed {
-            recordSelfHealNote("403 自愈 · 该章此前已自愈 \(count) 次，本次不再自愈（仅自愈一次，防 403 风暴）")
-            return
+        let heal: () -> Void = { [weak self] in
+            guard let self else { return }
+            // ① 防风暴：本轮该 key 已自愈过 → 终局，不再重复请求 playurl。
+            self.resolveLock.lock()
+            let alreadyHealed = self.forbiddenSelfHealKeys.contains(ownerKey)
+            let count = self.forbiddenSelfHealCountStorage
+            self.resolveLock.unlock()
+            if alreadyHealed {
+                self.recordSelfHealNote("403 自愈 · 该章此前已自愈 \(count) 次，本次不再自愈（仅自愈一次，防 403 风暴）")
+                return
+            }
+            // ② build 59 · P1-1 跨章守卫：迟到的旧章 403 不得重载当前章。
+            //    不通过时**不记账**——该章并未用掉自愈机会，只是信号与当前章无关；
+            //    其过期缓存已由 handleChapterLoadFailure 清掉（正确且必要）。
+            guard self.isCurrentChapterOwnerKey(ownerKey) else {
+                self.recordSelfHealNote("403 自愈 · 该章已不是当前章（迟到信号）→ 仅清其过期缓存，不重载、不动当前章镜像链")
+                return
+            }
+            // ③ 当前章 403：记账 + 清本批镜像链 + 现解析重装载。
+            self.resolveLock.lock()
+            self.forbiddenSelfHealKeys.insert(ownerKey)
+            self.forbiddenSelfHealCountStorage += 1
+            self.resolveLock.unlock()
+            self.recordSelfHealNote("403 自愈 · B站签名直链已过期（\(sourceHost ?? "?")）→ 已清缓存并现解析重装载（本章仅自愈一次）")
+            // 旧镜像链与主选同批解析，同样已过期——清掉，等现解析重新装链，
+            // 避免把一次自愈额度浪费在另一条过期镜像上。
+            self.mirrorLock.lock()
+            self.mirrorCandidates = []
+            self.mirrorAttempts = 0
+            self.mirrorLock.unlock()
+            self.rebuildForMirrorRetry()
         }
-        recordSelfHealNote("403 自愈 · B站签名直链已过期（\(sourceHost ?? "?")）→ 已清缓存并现解析重装载（本章仅自愈一次）")
-        // 旧镜像链与主选同批解析，同样已过期——清掉，等现解析重新装链，
-        // 避免把一次自愈额度浪费在另一条过期镜像上。
-        mirrorLock.lock()
-        mirrorCandidates = []
-        mirrorAttempts = 0
-        mirrorLock.unlock()
-        rebuildForMirrorRetry()
+        if Thread.isMainThread {
+            heal()
+        } else {
+            DispatchQueue.main.async(execute: heal)
+        }
+    }
+
+    /// build 59 · P1-1：该占位 URI 是否指向**当前正在播放的那一章**。
+    ///
+    /// 比对口径：占位 URI 的 `chapter_idx` 与当前章 `Chapter.index` 对齐
+    ///（`loadCurrentChapter` 构造 URI 时写的正是 `ch.index`，见 `PlayUri.build`
+    /// 调用点，故两者同一口径、无需换算）；并同时校验 `src` 与 `albumId`，
+    /// 防「同章号不同书 / 不同源」被误判为同一章（B站的 403 判定前置条件 `src`
+    /// 已限定 B站，此处再守一次是纵深防御）。
+    ///
+    /// 为什么不用 `currentChapterIdx` 数组位置比对：`Chapter.index` 是源原生章号
+    ///（乱序 / 重排时与数组位置不等），URI 里存的也是它；用数组位置反而会在乱序
+    /// 源上误判。
+    private func isCurrentChapterOwnerKey(_ key: String) -> Bool {
+        guard let parsed = PlayUri.parse(key),
+              let album = currentAlbum,
+              parsed.src == album.source,
+              parsed.albumId == album.albumId,
+              currentChapters.indices.contains(currentChapterIdx) else { return false }
+        return currentChapters[currentChapterIdx].index == parsed.chapterIdx
     }
 
     /// build 58 · 修复 1：**带时效**的缓存读取——命中前先判该条目是否仍可用。

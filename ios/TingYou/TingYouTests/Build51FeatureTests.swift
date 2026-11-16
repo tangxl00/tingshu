@@ -303,7 +303,7 @@ final class Build51FeatureTests: XCTestCase {
     /// 版本升位：b51 双处一致（project.yml 由 Build29 守卫，此处复核 Info.plist）
     func testBuild51Version() throws {
         let plist = try Self.source("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>58</string>"), "Info.plist CFBundleVersion 必须为 58")
+        XCTAssertTrue(plist.contains("<string>59</string>"), "Info.plist CFBundleVersion 必须为 59")
         XCTAssertTrue(plist.contains("<string>1.4.4</string>"), "CFBundleShortVersionString 维持 1.4.4")
     }
 
