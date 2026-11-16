@@ -159,7 +159,8 @@ final class Build49FeatureTests: XCTestCase {
                       "只有当前条目的失败才触发镜像重试（切章拆旧条目的迟到 .failed 不重试）")
         XCTAssertTrue(pm.contains("switch self?.mirrorRetryDecision(for: error) ?? .notRetryable {"),
                       ".failed 分支必须经单一决策点 mirrorRetryDecision（与行为级用例同一份实现）")
-        XCTAssertTrue(pm.contains("storeResolved(key: uri, url: next)"),
+        // build 58 · 锚点升位：镜像重写调用新增 resolvedAtMs 参数（见 Build48 同款注释）。
+        XCTAssertTrue(pm.contains("storeResolved(key: uri, url: next,"),
                       "网络错误切镜像必须重定向占位 URI 缓存（与 watchdog 同机制）")
         XCTAssertTrue(pm.contains("self?.rebuildForMirrorRetry()"),
                       "网络错误切镜像必须走生产唯一重建入口 rebuildForMirrorRetry()（与 watchdog 同机制）")

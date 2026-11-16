@@ -84,7 +84,9 @@ final class Build48FeatureTests: XCTestCase {
                       "切镜像必须落到诊断文案（build 48 需求 4）")
         XCTAssertTrue(pm.contains("keepMirrorChain"),
                       "切镜像后重建条目必须保留镜像链（build 48 需求 4）")
-        XCTAssertTrue(pm.contains("storeResolved(key: uri, url: next)"),
+        // build 58 · 锚点升位：镜像重写调用新增 resolvedAtMs 参数（镜像与主选
+        // 同批解析、同批过期——重写沿用同批时刻，不为过期镜像伪造新鲜度）。
+        XCTAssertTrue(pm.contains("storeResolved(key: uri, url: next,"),
                       "切镜像必须重定向占位 URI 缓存（build 48 需求 4）")
         // ③ 两种停滞形态区分 + 诊断文案标注
         XCTAssertTrue(pm.contains("static let streamProgressFloorBytes: Int64 = 16 * 1024"),
