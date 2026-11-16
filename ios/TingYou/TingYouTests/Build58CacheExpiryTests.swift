@@ -125,7 +125,7 @@ final class Build58CacheExpiryTests: XCTestCase {
 
     /// 纯函数三态（生产与用例共用）：只对代理域直链限时。
     func testIsCacheEntryExpiredOnlyAppliesToProxiedHosts() {
-        let t0 = 1_700_000_000_000
+        let t0: Int64 = 1_700_000_000_000
         let ttl = PlaybackManager.biliSignedUrlCacheTTLMs
         XCTAssertFalse(PlaybackManager.isCacheEntryExpired(
             .init(url: Self.biliUrl, resolvedAtMs: t0), nowMs: t0 + ttl),
