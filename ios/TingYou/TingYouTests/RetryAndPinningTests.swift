@@ -176,11 +176,12 @@ final class RetryAndPinningTests: XCTestCase {
     // MARK: - build 22 r2 · 连接级错误自动重试（真机反馈「The network connection was lost.」）
 
     func testConnectionErrorCodeSetIsExactlyConnectionClass() {
-        // 判别力：集合恰为六类连接级错误——多纳一个（如 cancelled）或漏一个都会被断出来
+        // 判别力：集合恰为七类连接级错误——多纳一个（如 cancelled）或漏一个都会被断出来
         // build 24（P2-1）：补入 DNS 瞬时错误 -1003 / -1006，集合从四类扩为六类
+        // 听友FM 稳定性：补入 TLS 握手失败 -1200（build 44 定性的间歇性握手故障），扩为七类
         XCTAssertEqual(RetryConfig.connectionErrorCodes, [
             .networkConnectionLost, .timedOut, .cannotConnectToHost, .notConnectedToInternet,
-            .cannotFindHost, .dnsLookupFailed,
+            .cannotFindHost, .dnsLookupFailed, .secureConnectionFailed,
         ])
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.networkConnectionLost)))
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.timedOut)))
@@ -188,6 +189,8 @@ final class RetryAndPinningTests: XCTestCase {
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.notConnectedToInternet)))
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.cannotFindHost)), "build 24：DNS 解析失败应纳入连接重试")
         XCTAssertTrue(RetryConfig.isConnectionError(URLError(.dnsLookupFailed)), "build 24：DNS 查找失败应纳入连接重试")
+        XCTAssertTrue(RetryConfig.isConnectionError(URLError(.secureConnectionFailed)),
+                      "听友FM：间歇性 TLS 握手失败应纳入连接重试（与 proxy 取流层口径一致）")
         // 非连接级 URLError 与非 URLError 一律不重试
         XCTAssertFalse(RetryConfig.isConnectionError(URLError(.cancelled)))
         XCTAssertFalse(RetryConfig.isConnectionError(URLError(.badURL)))
@@ -213,6 +216,45 @@ final class RetryAndPinningTests: XCTestCase {
         XCTAssertEqual(calls, 2, "连接被断后应新建连接重试一次后成功（共 2 次请求）")
         RetryStubURLProtocol.callCounter = nil
         RetryStubURLProtocol.handler = nil
+    }
+
+    func testTLSHandshakeFailureRetriesThenSucceeds() async throws {
+        // 听友FM 稳定性：build 44 定性的间歇性 TLS 握手失败（-1200）应重建连接重试一次后成功。
+        // 请求 URL 用听友FM 真实 API 域，确保这条修复的语义绑定在该源上。
+        var calls = 0
+        RetryStubURLProtocol.callCounter = { calls += 1 }
+        RetryStubURLProtocol.handler = { _ in (200, Data("ok".utf8)) }
+        RetryStubURLProtocol.errorOnce = URLError(.secureConnectionFailed)
+        let client = APIClient(session: RetryStubURLProtocol.makeSession())
+        let cfg = RetryConfig(maxRetries: 1, backoffSecs: [1.5], transportBackoffSecs: [0.05])
+        let req = URLRequest(url: URL(string: "https://tingyou.fm/listening-api/rank")!)
+        let (data, resp) = try await client.execute(req, retry: cfg)
+        XCTAssertEqual(resp.statusCode, 200)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "ok")
+        XCTAssertEqual(calls, 2, "TLS 握手失败后应重试一次成功（共 2 次请求，含注入失败的首发）")
+        RetryStubURLProtocol.callCounter = nil
+        RetryStubURLProtocol.errorOnce = nil
+        RetryStubURLProtocol.handler = nil
+    }
+
+    func testTLSHandshakeFailureExhaustedSurfacesUpgradedMessage() async throws {
+        // TLS 握手持续失败到预算耗尽 → 同样升级为可诊断文案，而不是裸抛英文 TLS 原文。
+        RetryStubURLProtocol.errorAlways = URLError(.secureConnectionFailed)
+        var calls = 0
+        RetryStubURLProtocol.callCounter = { calls += 1 }
+        let client = APIClient(session: RetryStubURLProtocol.makeSession())
+        let cfg = RetryConfig(maxRetries: 1, backoffSecs: [1.5], transportBackoffSecs: [0.05, 0.05])
+        let req = URLRequest(url: URL(string: "https://tingyou.fm/listening-api/rank")!)
+        do {
+            _ = try await client.execute(req, retry: cfg)
+            XCTFail("TLS 握手连续失败 3 次后应抛错")
+        } catch let err as ConnectionRetryExhaustedError {
+            XCTAssertEqual(calls, 3, "共 3 次尝试（首发 + 2 次重试）")
+            XCTAssertEqual(err.localizedDescription,
+                           "网络连接中断（已自动重试仍失败），请检查网络后重试")
+        }
+        RetryStubURLProtocol.errorAlways = nil
+        RetryStubURLProtocol.callCounter = nil
     }
 
     func testConnectionRetryExhaustedSurfacesUpgradedMessage() async throws {

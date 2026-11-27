@@ -38,6 +38,13 @@ struct RetryConfig: Sendable {
     /// - build 24（build 22 质检 P2-1）：DNS 瞬时错误补入——
     ///   cannotFindHost(-1003)：域名解析失败（DNS 抖动时瞬时出现，重试可能命中新解析）
     ///   dnsLookupFailed(-1006)：DNS 查找失败（同上，移动网络切换/LocalDNS 抖动典型）
+    /// - 听友FM 稳定性：secureConnectionFailed(-1200) 补入——
+    ///   build 44 真机反馈「听友FM 安全连接失败」已定性为**外部间歇性 TLS 握手故障**
+    ///   （证书链有效、在 27 锚点集合内且 additive 模式），当次仅做了错误文案映射，
+    ///   没有重试。重发请求即重建 TCP/TLS 连接，可覆盖握手抖动；该错误在 proxy 取流层
+    ///   （PlaybackManager 网络恢复错误族）早已按可恢复处理，本层补齐口径一致。
+    ///   注：证书/信任链校验失败由 PinningURLSessionDelegate 前置拦截并单独记录，
+    ///   不会以 -1200 走到这里，因此不会把「证书不可信」误当瞬时故障重试。
     /// 其余 URLError（用户取消、badServerResponse 等）一律不重试、直接抛出。
     static let connectionErrorCodes: Set<URLError.Code> = [
         .networkConnectionLost,
@@ -46,6 +53,7 @@ struct RetryConfig: Sendable {
         .notConnectedToInternet,
         .cannotFindHost,
         .dnsLookupFailed,
+        .secureConnectionFailed,
     ]
 
     /// 该错误是否属于连接级（可自动重试）错误。
@@ -111,8 +119,10 @@ actor APIClient {
     /// - 状态码重试：可重试状态码（502/503/504）且还在 config 预算内 → 退避后重试；
     ///   其余非 200 直接失败。状态码判定必须在 do-catch 之外：非 200 抛出的 URLError 若
     ///   落在 catch 里会被当成传输错误重试 → 404 也被重发（testExecuteDoesNotRetryOn404 回归）。
-    /// - build 22 r2 · 连接级错误自动重试：仅 URLError 的 -1005/-1001/-1004/-1009 四类
-    ///   连接级错误重试，固定最多 2 次（共 3 次尝试），退避 0.5s / 1s；其余错误直接抛出。
+    /// - build 22 r2 · 连接级错误自动重试：仅 URLError 的连接级错误集合（见
+    ///   RetryConfig.connectionErrorCodes：-1005/-1001/-1004/-1009/-1003/-1006
+    ///   及听友FM 稳定性补入的 -1200 TLS 握手失败）重试，固定最多 2 次（共 3 次尝试），
+    ///   退避 0.5s / 1s；其余错误直接抛出。
     ///   重试即「新建连接」：连接被断开后 URLSession 连接池中的失效连接不会复用，
     ///   重发请求即建立全新 TCP/TLS 连接（无需换 session）。
     func execute(_ request: URLRequest, retry: RetryConfig = .standard) async throws -> (Data, HTTPURLResponse) {
