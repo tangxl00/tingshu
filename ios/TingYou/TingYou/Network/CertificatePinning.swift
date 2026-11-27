@@ -44,9 +44,19 @@ enum PinnedDomainAllowlist {
     }
 }
 
-/// iOS 27张锚点证书体系：URLSession delegate 实现证书校验/pinning。
-/// 无 trust-all；ATS 全禁明文；system ∪ 锚点加法配置；
-/// 域名白名单 fail-closed（不认识的出站域直接取消，与安卓 domain-config 边界对齐）。
+/// iOS 出站 TLS 校验：URLSession delegate + 内置锚点证书 + 域名白名单。
+///
+/// 信任模型（请按实际代码理解，勿表述为"严格证书 pinning"）：
+/// - 调用 SecTrustSetAnchorCertificates(t, anchors) 注入内置锚点，但随后
+///   SecTrustSetAnchorCertificatesOnly(t, false)，即"系统信任库 ∪ 内置锚点"
+///   均为可信根。这不是证书固定（pinning）：任何系统信任的 CA 签发的证书，
+///   只要域名在白名单内且链校验通过，同样会被放行。
+/// - 真正限制出站面的是 PinnedDomainAllowlist 的 fail-closed 白名单：
+///   不在清单中的 host 一律 cancelAuthenticationChallenge。
+/// - 内置 27 张锚点的作用是补齐部分站点证书链在系统信任库中缺失的信任路径，
+///   而非把对端证书锁定到固定公钥/证书。
+///
+/// 无 trust-all；ATS 全禁明文；域名白名单 fail-closed（与安卓 domain-config 边界对齐）。
 final class PinningURLSessionDelegate: NSObject, URLSessionDelegate {
 
     private let anchors: [SecCertificate]
@@ -119,6 +129,8 @@ final class PinningURLSessionDelegate: NSObject, URLSessionDelegate {
             return
         }
         SecTrustSetAnchorCertificates(t, anchors as CFArray)
+        // false = 系统信任库与内置锚点取并集；改为 true 才是"仅内置锚点"的严格 pinning。
+        // 当前保持 false：部分音源/CDN 依赖系统信任链，收紧会中断播放（见类注释）。
         SecTrustSetAnchorCertificatesOnly(t, false)
 
         var error: CFError?
@@ -132,7 +144,7 @@ final class PinningURLSessionDelegate: NSObject, URLSessionDelegate {
                 let subj = SecCertificateCopySubjectSummary(cert) as String? ?? "?"
                 return "[\(i)] \(subj)"
             }.joined(separator: "; ")
-            print("TLS pinning failed for \(host): \(chainInfo)")
+            print("TLS trust evaluation failed for \(host): \(chainInfo)")
             completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }

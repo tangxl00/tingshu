@@ -1,17 +1,23 @@
-# 听书 iOS（v1.3.3 · com.tingyou.app.ios）
+# 听书 iOS（v1.4.4 · com.tingyou.app.ios）
 
 iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐。沙箱内仅完成源码编写，编译与测试由 GitHub Actions macOS runner 执行。
+
+> **版本状态（以本节为准）**：当前版本 **1.4.4 (build 59)**。本文件下方 §1–§10 写于 v1.3.3/build 27 时期，其中版本号、测试数量、音源清单等历史口径已过时；§11 及之后各 build 章节按时间追加，记录了后续变更。**凡与本节冲突之处，以本节及 `ios/TingYou/project.yml`、`Info.plist` 为准。**
+>
+> - 真实版本号：`project.yml` 的 `MARKETING_VERSION: 1.4.4` / `CURRENT_PROJECT_VERSION: 59`，CI 打包产物名由归档 Info.plist 动态生成（`TingYou-unsigned-1.4.4-59.ipa`），不再硬编码。
+> - 在役音源：听友 FM（tingyou）、B 站（bili）、易听书（yitingshu）。ting15 / ting08 / ting59 / mekui / aikeu / 悦听（ytysxs）已陆续下架，§7 中的相关描述为历史状态。
+> - 测试规模：39 个单测文件 / 47 个 XCTestCase 类 / 380 个 `func test`，另有 2 个 UI 测试文件 / 10 个 UI 用例（以源码 grep 实数为准，§8 的计数已过时）。
 
 ## 1. 关键信息
 
 - **Bundle ID**：`com.tingyou.app.ios`
-- **CFBundleShortVersionString**：`1.3.3`
-- **CFBundleVersion**：`27`（与安卓 versionCode 对齐）
+- **CFBundleShortVersionString**：`1.4.4`（历史文档中的 1.3.3 已过时）
+- **CFBundleVersion**：`59`（历史文档中的 27 已过时）
 - **最低系统**：iOS 17.0（SwiftData 依赖）
 - **签名状态**：**未签名**——本仓库与 CI 产物均不签名，需用户自行用爱思助手 / AltStore / Sideloadly 免费自签安装（7 天需重签）
 - **ATS**：全禁明文 HTTP（`NSAllowsArbitraryLoads = false`）
 - **后台播放**：`UIBackgroundModes = audio`
-- **证书 pinning**：27 张锚点证书通过 URLSession delegate 强制校验（不依赖系统信任库）+ 域名后缀白名单 fail-closed（见 §6）
+- **出站 TLS 校验**：URLSession delegate 注入 27 张内置锚点 + 域名白名单 fail-closed。信任模型为"系统信任库 ∪ 内置锚点"，**并非严格证书 pinning**（见 §6）
 
 ## 2. 目录结构
 
@@ -32,7 +38,7 @@ ios/TingYou/
 │   ├── UI/                         # SwiftUI 视图（含 YtysxsVerifyWebView 反爬人工验证容器）
 │   ├── Utils/                      # 工具（分页 / 诊断日志 / 扩展）
 │   └── Resources/Certs/            # 27 张 .pem 锚点证书
-└── TingYouTests/                   # XCTest（212 条测试函数（23 个测试文件、31 个测试类），见 §8）
+└── TingYouTests/                   # XCTest（截至 build 59：39 文件 / 47 类 / 380 个 func test，见 §8）
 ```
 
 ## 3. 本地构建
@@ -74,13 +80,13 @@ xcodebuild -project TingYou.xcodeproj \
 - 手动 `workflow_dispatch`
 
 CI 步骤：
-1. macOS-14 runner + Xcode 15.4
+1. `macos-15` runner + 自动选择最新的 Xcode（以 `.github/workflows/ios.yml` 为准）
 2. `xcodegen generate` 生成 `.xcodeproj`
 3. `xcodebuild build` 编译
-4. `xcodebuild test` 跑 XCTest（212 条）
+4. `xcodebuild test` 跑 XCTest（截至 build 59 共 380 个单测函数 + 10 个 UI 用例；测试失败将阻断出包）
 5. `xcodebuild archive` 产出未签名 `.xcarchive`
-6. **`plutil` 验证 archive 产物 Info.plist**：`UIBackgroundModes` 必含 `audio`、`NSAppTransportSecurity.NSAllowsArbitraryLoads` 必须为 `false`，缺失即 CI 失败（防 plist 漂移回归）
-7. 把 `TingYou.app` 打包为 zip，作为 artifact 上传
+6. **`plutil` 验证 archive 产物 Info.plist**：`UIBackgroundModes` 必含 `audio`、`NSAppTransportSecurity.NSAllowsArbitraryLoads` 必须为 `false`、`CFBundleIconName`/`UILaunchScreen`/`Assets.car` 存在，并校验产物版本与 `project.yml` 一致，缺失或漂移即 CI 失败
+7. 把 `TingYou.app` 按 `Payload/` 结构打包为未签名 `.ipa`（文件名由产物 Info.plist 动态生成，如 `TingYou-unsigned-1.4.4-59.ipa`），作为 artifact 上传
 
 ## 5. 自签安装（iPhone 用户）
 
@@ -124,24 +130,22 @@ CI 步骤：
 2. AltStore → "我的应用" → 右下角 "+" → 选中 .ipa
 3. AltStore 会在签名过期前自动续签（需保持 iPhone 与电脑在同一 WiFi）
 
-## 6. 证书 pinning 与域名白名单
+## 6. 出站 TLS 校验与域名白名单
 
-iOS 没有 Android network-security-config 等价物，本项目通过 `URLSession` 的 `urlSession(_:didReceive:completionHandler:)` 实现证书 pinning。锚点证书打包在 `TingYou/Resources/Certs/*.pem`，运行时由 `PinningURLSessionDelegate` 加载到 `[SecCertificate]` 数组，并对所有出站请求调用 `SecTrustEvaluateWithError`。
+iOS 没有 Android network-security-config 等价物，本项目通过 `URLSession` 的 `urlSession(_:didReceive:completionHandler:)` 做出站校验：锚点证书打包在 `TingYou/Resources/Certs/*.pem`，运行时由 `PinningURLSessionDelegate` 加载到 `[SecCertificate]` 数组，对所有出站请求调用 `SecTrustEvaluateWithError`。
 
-在此之上叠加**域名白名单 fail-closed**（对等安卓 `includeSubdomains` 语义，`PinnedDomainAllowlist`）：
+**信任模型（易被误解，务必按代码理解）**：代码调用 `SecTrustSetAnchorCertificates(t, anchors)` 注入内置锚点，但随后 `SecTrustSetAnchorCertificatesOnly(t, false)`——即信任根为"**系统信任库 ∪ 内置锚点**"。因此这**不是严格证书 pinning**：任何系统信任的 CA 签发的证书，只要域名在白名单内且链校验通过，同样放行。内置 27 张锚点的实际作用是补齐部分站点在系统信任库中缺失的信任路径，而非把对端证书锁定到固定公钥。此前文档称"强制校验、不依赖系统信任库"的描述与代码不符，已更正。
 
-- **后缀域**（匹配自身与任意子域）：`tingyou.fm`、`tingyou8.vip`、`guoguo.org.cn`、`kuwo.cn`、`ctyun.cn`
-- **精确域**（仅匹配自身）：`file.hgeuz.cn`、`m.ting15.com`、`www.ting08.com`、`www.ytysxs.com`、`mp3.ytysxs.top`、`m.mekui.com`、`api.mekui.com`、`api.aikeu.com`、`mp3.aikeu.com`、`shuyinfm.oss-cn-hangzhou.aliyuncs.com`、`imge.kugou.com`
+真正限制出站面的是**域名白名单 fail-closed**（对等安卓 `includeSubdomains` 语义，定义于 `PinnedDomainAllowlist`，与代码一致）：
 
-白名单之外的 host 直接取消连接（`cancelAuthenticationChallenge`），大小写不敏感；后缀匹配要求域名边界（`eviltingyou.fm` 不匹配 `.tingyou.fm`）。清单与安卓 `network_security_config.xml` 一一对齐，并由 `RetryAndPinningTests` 中 5 条白名单测试锁定。
+- **后缀域**（匹配自身与任意子域）：`tingyou.fm`、`tingyou8.vip`、`guoguo.org.cn`、`kuwo.cn`、`ctyun.cn`、`bilibili.com`、`b23.tv`、`bilivideo.com`、`biliapi.net`、`akamaized.net`、`hdslb.com`
+- **精确域**（仅匹配自身）：`file.hgeuz.cn`、`imge.kugou.com`、`www.yitingshu.com`、`imagev2.xmcdn.com`、`aod.cos.tx.xmcdn.com`、`tingshu-d2gjera4688800c8e.service.tcloudbase.com`
 
-锚点对应所有已知出站域的完整链（中间级 + 根级），覆盖：
-- tingyou.fm / tingyou8.vip（听友FM）
-- m.ting15.com / www.ting08.com（听十五 / 听吧）
-- 悦听有声书（ytysxs.com / mp3.ytysxs.top）
-- 书音FM（mekui.com / aikeu.com / ctyun.cn / kuwo.cn 等）
-- guoguo.org.cn 音频直链后缀
-- aliyuncs.com（OSS 封面）
+白名单之外的 host 直接取消连接（`cancelAuthenticationChallenge`），大小写不敏感；后缀匹配要求域名边界（`eviltingyou.fm` 不匹配 `.tingyou.fm`）。清单由 build 51 清理了已下架源（ting15 / ting08 / mekui / aikeu / 悦听 / shuyinfm OSS），并由 `RetryAndPinningTests` 锁定。
+
+锚点覆盖当前在役出站域：听友 FM（tingyou.fm / tingyou8.vip / guoguo.org.cn）、B 站（bilibili.com / bilivideo.com / hdslb.com 等）、易听书（yitingshu.com / xmcdn.com）、云同步网关（tcloudbase.com）、封面与音频 CDN（kugou / kuwo / ctyun 等）。
+
+> **已知安全边界**：当前为非严格 pinning，无法防御"系统信任 CA 被滥用签发白名单域名证书"的场景。若需升级为严格 pinning（`SecTrustSetAnchorCertificatesOnly(t, true)` 或 SPKI 指纹校验），须先审计全部在役音源 / CDN / 云函数的证书链根 CA 是否都在内置锚点内，否则会造成大范围播放失败。该项作为独立评估，未纳入本次改动。
 
 ## 7. 功能对照（与安卓 v1.3.3）
 
@@ -161,7 +165,7 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 ## 8. 测试对账
 
 - **安卓基线**：276 条 `@Test`（43 个测试类）
-- **iOS 现有**：**208 条测试函数（22 个测试文件、30 个 XCTestCase 类）**（三口径可 grep 实数核对：文件数 `ls TingYouTests/*.swift | wc -l`、类数 grep `final class.*XCTestCase`、函数数 grep `func test`；136 条为 build 20 基线，build 21 新增 42，build 22 新增 16，build 23 新增 3，build 24 新增 4，build 25 新增 7，build 27 新增 4；build 26 为弹窗写入路径运行时隔离改造，无新增测试函数——SpeedSheet 写入语义仍由既有 `SpeedSheetBindingTests` 2 条锁定）：
+- **iOS 现有（截至 build 59，以源码 grep 实数为准）**：**39 个单测文件 / 47 个 XCTestCase 类 / 380 个 `func test`**，另有 `TingYouUITests` 下 2 个文件 / 10 个 UI 用例。核对命令：`ls TingYouTests/*.swift | wc -l`、`grep -rhE 'final class .*XCTestCase' TingYouTests/*.swift | wc -l`、`grep -rhE 'func test' TingYouTests/*.swift | wc -l`。下方各 build 的分项计数是当时的历史快照，累加不等于当前总数，仅供追溯；新增测试以各 build 章节的 `BuildNN*Tests.swift` 为准。原"208 条 / 22 文件 / 30 类"口径已过时。以下为历史分项清单：
   - `Build21FeedbackTests`：20 条（build 21 · 反馈 1：播放模式决策纯函数 6 + 持久化 1 + 展示名唯一 1；反馈 2：HTML 实体解码 6 含 parseSearch 出口黄金样本 + charset 解码 6 含 GBK 黄金字节流）
   - `Build22AlignmentTests`：13 条（build 22 · 倍速：SpeedSheet select 写 Binding 后 speed 实际变化 2；聚合搜索：启用集过滤+固定序 1 / 关一个源少一个源结果 1 / 失败源名透出 1 / 悦听 antibot 关键词透传 1 / 仅剩单源全败 allFailed 1 / searchSources 不含导入 1；音源开关守卫：最后一个源不可关 1 / 重开后可关 1 / 导入不受保护 1 / toggleSource 翻转 1；build 24 并行化：并行执行下结果仍固定序且总耗时 < 0.55s·串行需 1.0s 1）
   - `CoverImageCacheTests`：9 条（build 19：封面会话挂 PinningURLSessionDelegate 断言 / 封面图源域名白名单互检 / 非白名单 host fail-closed·取图拒 nil / 防盗链 Referer 设置与省略 / 请求 URL 保全；build 20 必修 1：同一 guoguo URL 按 ting15/ting08 源各带准确 referer）
@@ -193,14 +197,14 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
   - Android `network_security_config` 的 DOM/锚点对账测试（`CertAnchorTest`、`MsrcCertAnchorTest`）—— iOS 走 `URLSession` delegate + `SecTrust`，验证模型不同；本项目以 `PinningURLSessionDelegate` 加载 27 张 PEM 实现等价功能，域名清单由 `RetryAndPinningTests` 锁定，证书清单与 `network_security_config.xml` 的一致性由人工复核；
   - NetDiag / TlsDiag 端到端测试（`NetDiagTest`、`TlsDiagTest`）——依赖 Android TLS 栈与设备 API，iOS 无对应；运行时仍保留诊断日志（`DiagLog.swift`）。
 
-- **测试执行口径**：以上 91 条测试全部在 CI（macOS runner）的 `xcodebuild test` 步骤执行；**不包含**对真实音源站点的网络调用（全部为离线纯函数 / stub 注入），真实站点连通性与反爬时效属运行时人工验收范围，不在自动化测试承诺内。
+- **测试执行口径**：全部测试在 CI（macOS runner）的 `xcodebuild test` 步骤执行，且自本次改动起**测试失败会阻断出包**（移除了此前的 `continue-on-error: true`）；**不包含**对真实音源站点的网络调用（全部为离线纯函数 / stub 注入），真实站点连通性与反爬时效属运行时人工验收范围，不在自动化测试承诺内。原"91 条"口径已过时。
 
 ## 9. 已知缺口与风险
 
 1. **未签名**：所有产物无 Apple Developer 签名，每 7 天需用户自签重装。
-2. **音频缓存**：安卓版用 ExoPlayer `CacheDataSource` 实现磁盘预缓存，iOS 暂未实现磁盘缓存（`AVPlayerItem` 每次重新下载）。
+2. **音频缓存**：安卓版用 ExoPlayer `CacheDataSource` 实现音频数据磁盘预缓存；iOS 至今**仍未实现音频数据磁盘缓存**（`AVPlayerItem` 每次重新下载）。build 58 新增的是"直链解析结果缓存"（带解析时刻，B 站签名直链 10 分钟 TTL），属元数据层，不要与音频数据缓存混淆。
 3. **听书时长统计**：已实现基础累加，缺少与安卓一致的"日活/周活"维度。
-4. **重试范围**：仅 502/503/504 状态码重试（Msrc/Mekui 各自基线），连接超时等传输层错误不重试（与安卓一致）。
+4. **重试范围**：HTTP 502/503/504 按源基线重试（Msrc 1 次、Mekui 2 次）；另覆盖六类连接级 `URLError`（`APIClient.connectionErrorCodes`：-1005 连接丢失 / -1001 超时 / -1004 无法连接 / -1009 无网络 / -1003 找不到主机 / -1006 DNS 失败），最多 2 次退避重试。原描述"连接超时等传输层错误不重试"已过时。B 站另有镜像链重试（watchdog 停滞 + TLS/network 失败，预算 3 次），详见 §11、§12。
 5. **悦听反爬依赖人工验证**：验证码由用户在 WKWebView 内人工完成（设计如此，不自动破解）；站点验证页结构变化时需更新 `YtysxsVerifyWebView` 的捕获逻辑。
 6. **SwiftData 迁移**：当前未声明版本化 `VersionedSchema`，后续需要按安卓 v1→v4 的迁移路径补全。
 7. **多源付费内容**：ting15/ting08/-1、mekui ispass/积分等付费章节一律拦截并打标（`PaidChapterRegistry`），不做任何绕过。
