@@ -62,9 +62,10 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee build.log
 
+      # 测试是发布门禁：失败必须阻断 archive / package / artifact。
+      # 此前 continue-on-error: true 会让红灯构建照样产出未签名包，测试形同虚设。
       - name: Test (ad-hoc signed simulator)
         if: success()
-        continue-on-error: true
         working-directory: ios/TingYou
         run: |
           set -o pipefail
@@ -109,19 +110,26 @@ jobs:
         if: success()
         working-directory: ios/TingYou
         run: |
-          set -o pipefail
+          set -euo pipefail
           APP_PATH="$DERIVED_DATA/archive/TingYou.xcarchive/Products/Applications/TingYou.app"
           if [ ! -d "$APP_PATH" ]; then
             echo "::error::App bundle not found at $APP_PATH"
             ls -la "$DERIVED_DATA/archive/TingYou.xcarchive/Products/" || true
             exit 1
           fi
+          # 版本号从归档产物的 Info.plist 读取，唯一真源为 project.yml。
+          # 避免产物名硬编码（此前写死 1.3.3-17，实际已是 1.4.4/59）导致用户下载到错标版本。
+          MARKETING_VERSION=$(plutil -extract CFBundleShortVersionString raw -o - "$APP_PATH/Info.plist")
+          BUILD_VERSION=$(plutil -extract CFBundleVersion raw -o - "$APP_PATH/Info.plist")
+          IPA_NAME="TingYou-unsigned-${MARKETING_VERSION}-${BUILD_VERSION}.ipa"
+          echo "IPA_NAME=$IPA_NAME" >> "$GITHUB_ENV"
+          echo "Packaging as $IPA_NAME"
           mkdir -p artifact/Payload
           cp -R "$APP_PATH" artifact/Payload/TingYou.app
           cd artifact
-          zip -qr TingYou-unsigned-1.3.3-17.ipa Payload
+          zip -qr "$IPA_NAME" Payload
           ls -la
-          du -h TingYou-unsigned-1.3.3-17.ipa
+          du -h "$IPA_NAME"
 
       - name: Verify Info.plist keys in archive (anti-drift assertions)
         if: success()
@@ -163,14 +171,26 @@ jobs:
             find "$APP" -maxdepth 2 -name "*.car" -o -name "*.xcassets" || true
             exit 1
           fi
-          echo "Info.plist keys verified: UIBackgroundModes=audio, ATS=false, CFBundleIconName=AppIcon, UILaunchScreen present, Assets.car present."
+          # 断言4：版本一致性——归档产物的版本必须与 project.yml 的单一真源一致。
+          # 防止 project.yml 升了版本、Info.plist 或产物命名却停留在旧值（历史遗留 1.3.3-17）。
+          YML_MARKETING=$(sed -n 's/.*MARKETING_VERSION:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' project.yml | head -1)
+          YML_BUILD=$(sed -n 's/.*CFBundleVersion:[[:space:]]*"\{0,1\}\([^"]*\)"\{0,1\}[[:space:]]*$/\1/p' project.yml | head -1)
+          PLIST_MARKETING=$(plutil -extract CFBundleShortVersionString raw -o - "$PLIST")
+          PLIST_BUILD=$(plutil -extract CFBundleVersion raw -o - "$PLIST")
+          echo "Version check: project.yml=$YML_MARKETING/$YML_BUILD, Info.plist=$PLIST_MARKETING/$PLIST_BUILD"
+          if [[ "$PLIST_MARKETING" != "$YML_MARKETING" || "$PLIST_BUILD" != "$YML_BUILD" ]]; then
+            echo "::error::Version drift between project.yml and archived Info.plist"
+            exit 1
+          fi
+          echo "Info.plist keys verified: UIBackgroundModes=audio, ATS=false, CFBundleIconName=AppIcon, UILaunchScreen present, Assets.car present, version=$PLIST_MARKETING($PLIST_BUILD)."
 
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TingYou-unsigned-${{ github.sha }}
-          path: ios/TingYou/artifact/TingYou-unsigned-1.3.3-17.ipa
+          # IPA_NAME 由打包步骤依据归档 Info.plist 动态写入 $GITHUB_ENV。
+          path: ios/TingYou/artifact/${{ env.IPA_NAME }}
           if-no-files-found: error
           retention-days: 14
 
