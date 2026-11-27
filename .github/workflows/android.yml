@@ -33,7 +33,6 @@ jobs:
         with:
           channel: stable
           cache: true
-          cache-path: android_app/.dart_tool
 
       - name: Flutter version
         run: flutter --version
