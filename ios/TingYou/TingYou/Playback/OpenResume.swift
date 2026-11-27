@@ -3,13 +3,10 @@ import Foundation
 /// build 54 · 需求 a/b/c/d/e：打开书（书架收藏 / 历史）时的历史进度定位——纯逻辑层。
 ///
 /// 三条硬约束（全部来自验收口径）：
-/// 1. **数据源 = 合并后的本地真相**。云端较新的进度由 `SyncEngine.merge` 按
-///    `updated_at` LWW 写入 SwiftData（云端较新才覆盖本地），本层只消费
-///    `HistoryModel` 映射出的 `HistorySnapshot`，**不直连云**——不绕过 SyncEngine
-///    自行拉云。
+/// 1. **数据源 = 本地真相**。本层只消费 `HistoryModel` 映射出的 `HistorySnapshot`，
+///    不改写历史。
 /// 2. **章号口径 = 源原生章号**（`Chapter.index`：tingyou 1 基，bili / 易听书 0 基）。
-///    云端 0 基 ↔ 本地源基底的换算已在同步出入口经 `ChapterIdxNormalization`
-///    完成（build 51 P0-1），本层不再二次换算，避免双重偏移。
+///    本层直接按源原生章号定位，不做二次换算，避免双重偏移。
 /// 3. **通道位置语义必须显式**：恢复 / 定位链路一律走
 ///    `PlaybackManager.ChapterStart.arrayPosition`。b36 的「先按 index 值猜一次」
 ///    在 1 基源（听友FM）上会早一章（见 PlaybackManager.ChapterStart 注释）。
@@ -76,8 +73,8 @@ struct OpenResumePlan: Equatable, Sendable {
 enum OpenResumePlanner {
 
     /// 同一本书理论上只有一条历史（`AlbumRepository.recordHistory` 按 (src, albumId)
-    /// upsert），但跨端合并 / 历史遗留可能留多条——取 `updatedAt` 最新者，
-    /// 与同步 LWW 口径一致。无记录返回 nil（需求 d：新书 / 清过数据的书行为不变）。
+    /// upsert），但历史遗留可能留多条——取 `updatedAt` 最新者。
+    /// 无记录返回 nil（需求 d：新书 / 清过数据的书行为不变）。
     static func target(src: String, albumId: Int64,
                        in snapshots: [HistorySnapshot]) -> ResumeTarget? {
         let candidates = snapshots.filter { $0.src == src && $0.albumId == albumId }

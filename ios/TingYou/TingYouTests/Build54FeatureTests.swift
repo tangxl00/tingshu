@@ -7,9 +7,8 @@ import SwiftData
 /// 覆盖口径（对应任务验收清单）：
 /// - a/b 打开书（书架 / 收藏 / 历史）定位到上次章节 + 位置：`OpenResumePlanner.plan`
 ///   产出的 arrayPosition / startPosMs，以及播放器按该位置装载的实际落点。
-/// - c 数据源 = **合并后的本地真相**（SyncEngine 按 `updated_at` LWW 落库），
-///   云端较新取云、本地较新取本地；`chapter_idx` 0 基 ↔ 源原生章号换算后
-///   章号不漂移（跨端构造：云端 0 基 29 → tingyou 第 30 章 → 数组位置 29）。
+/// - c 数据源 = **本地真相**（`HistoryModel` 按 `updated_at` 取最新），
+///   `chapter_idx` 按源原生章号定位不漂移（tingyou 第 30 章 → 数组位置 29）。
 /// - d 无历史 → plan 为 nil，不定位（行为不变）。
 /// - e 打开即到位：`shouldPrepare` 静默装载决策 + 起播位置夹取（含 1 秒余量，
 ///   避免夹到章尾立刻自动跳章）。
@@ -44,17 +43,11 @@ import SwiftData
 /// `testPausedForeignQueueIsNotTornDown` 二轮已改决策级纯函数 + 接线守卫并通过。
 final class Build54FeatureTests: XCTestCase {
 
-    private var suiteName = ""
-    private var defaults: UserDefaults!
-    private var store: SyncLocalStore!
     private var container: ModelContainer!
 
     override func setUp() async throws {
         try await super.setUp()
         RetryStubURLProtocol.reset()
-        suiteName = "b54-resume-\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
-        store = SyncLocalStore(defaults: defaults)
         container = try ModelContainer(
             for: FavoriteModel.self, HistoryModel.self,
             ImportedBookModel.self, ImportedChapterModel.self,
@@ -64,9 +57,6 @@ final class Build54FeatureTests: XCTestCase {
     override func tearDown() async throws {
         RetryStubURLProtocol.reset()
         container = nil
-        defaults?.removePersistentDomain(forName: suiteName)
-        defaults = nil
-        store = nil
         try await super.tearDown()
     }
 
@@ -105,7 +95,7 @@ final class Build54FeatureTests: XCTestCase {
         (try? ctx.fetch(FetchDescriptor<HistoryModel>())) ?? []
     }
 
-    /// 埋一条「云端合并后的较新进度」，用于验证静默装载**不得**把它顶成 now。
+    /// 埋一条历史进度，用于验证静默装载**不得**把它顶成 now。
     @MainActor
     private func seedHistory(_ ctx: ModelContext, album: Album,
                             chapterIdx: Int, chapterTitle: String,
@@ -223,107 +213,7 @@ final class Build54FeatureTests: XCTestCase {
         XCTAssertEqual(rows[0].positionMs, 500_000)
     }
 
-    // MARK: - 需求 c · 云端较新取云
-
-    /// 跨端续播正向：PC 已推到第 30 章（云端 `chapter_idx = 29`，0 基）且云端
-    /// `updated_at` 较新 → 合并后本地取云，打开书直接定位到第 30 章的第 29 个
-    /// 数组位置 + 云端的播放位置（**不得回退到本地旧的第 25 章**）。
-    @MainActor
-    func testCloudNewerProgressWinsOverLocal() async throws {
-        let ctx = container.mainContext
-        let src = SourceRegistry.TINGYOU
-        let albumId: Int64 = 5403
-        // 本地旧进度：第 25 章，updated_at = 1000
-        ctx.insert(HistoryModel(src: src, albumId: albumId, albumTitle: "跨端书",
-                                coverUrl: nil, chapterIdx: 25, chapterTitle: "第25章",
-                                positionMs: 100_000, durationMs: 0, detailPath: nil,
-                                updatedAt: 1_000))
-        try ctx.save()
-
-        login(accessExpiresInMs: 10 * 60_000)
-        // 云端新进度：0 基 chapter_idx = 29（= 第 30 章），updated_at = 2000
-        let cloudRow: [String: Any] = [
-            "book_key": "\(src):\(albumId)", "source": src, "title": "跨端书",
-            "chapter_idx": 29, "position_ms": 612_000, "duration_ms": 0,
-            "updated_at": 2_000, "last_client_at": 2_000,
-        ]
-        RetryStubURLProtocol.handler = { req in
-            switch Self.path(req) {
-            case "sync/v1/push":
-                return Self.ok(#"{"server_seq":21,"results":[],"processed":0,"submitted":0}"#)
-            case "sync/v1/pull":
-                return Self.ok(Self.pullJSON(serverSeq: 21, favorites: [], progress: [cloudRow]))
-            default:
-                return Self.err(50001, "unexpected \(Self.path(req))")
-            }
-        }
-        let engine = makeEngine(modelContext: ctx)
-        engine.retryBackoffOverride = [.seconds(600)]
-        await engine.syncNow()
-        engine.stopRetry()
-
-        let stored = try XCTUnwrap(allHistory(ctx).first, "合并后必须仍有一条本书记录")
-        XCTAssertEqual(stored.chapterIdx, 30,
-                       "云端 0 基 29 → tingyou 1 基第 30 章（跨端不漂移）")
-        XCTAssertEqual(stored.positionMs, 612_000, "云端较新 → 位置取云")
-
-        let chapters = oneBasedChapters(60, durationSec: nil)
-        let plan = try XCTUnwrap(OpenResumePlanner.plan(album: makeAlbum(src: src, albumId: albumId),
-                                                        chapters: chapters,
-                                                        snapshots: [HistorySnapshot(stored)],
-                                                        anchor: nil, isPlaying: false))
-        XCTAssertEqual(plan.arrayPosition, 29, "第 30 章 → 数组位置 29（0 基口径）")
-        XCTAssertEqual(plan.chapter.title, "第30章")
-        XCTAssertEqual(plan.startPosMs, 612_000, "定位起播位置 = 云端进度（不回到第 25 章）")
-    }
-
-    /// 需求 c 禁止的回退形态：云端记录**更旧**（updated_at 小于本地）时不得覆盖本地。
-    @MainActor
-    func testOlderCloudProgressDoesNotRegressLocal() async throws {
-        let ctx = container.mainContext
-        let src = SourceRegistry.TINGYOU
-        let albumId: Int64 = 5404
-        ctx.insert(HistoryModel(src: src, albumId: albumId, albumTitle: "本地较新",
-                                coverUrl: nil, chapterIdx: 41, chapterTitle: "第41章",
-                                positionMs: 300_000, durationMs: 0, detailPath: nil,
-                                updatedAt: 5_000))
-        try ctx.save()
-
-        login(accessExpiresInMs: 10 * 60_000)
-        let staleRow: [String: Any] = [
-            "book_key": "\(src):\(albumId)", "source": src, "title": "云端旧进度",
-            "chapter_idx": 24, "position_ms": 90_000, "duration_ms": 0,
-            "updated_at": 1_000, "last_client_at": 1_000,
-        ]
-        RetryStubURLProtocol.handler = { req in
-            switch Self.path(req) {
-            case "sync/v1/push":
-                return Self.ok(#"{"server_seq":22,"results":[],"processed":0,"submitted":0}"#)
-            case "sync/v1/pull":
-                return Self.ok(Self.pullJSON(serverSeq: 22, favorites: [], progress: [staleRow]))
-            default:
-                return Self.err(50001, "unexpected \(Self.path(req))")
-            }
-        }
-        let engine = makeEngine(modelContext: ctx)
-        engine.retryBackoffOverride = [.seconds(600)]
-        await engine.syncNow()
-        engine.stopRetry()
-
-        let stored = try XCTUnwrap(allHistory(ctx).first)
-        XCTAssertEqual(stored.chapterIdx, 41, "本地较新 → 不被云端旧进度覆盖（禁止跨端回退）")
-        XCTAssertEqual(stored.positionMs, 300_000)
-
-        let chapters = oneBasedChapters(60)
-        let plan = try XCTUnwrap(OpenResumePlanner.plan(album: makeAlbum(src: src, albumId: albumId),
-                                                        chapters: chapters,
-                                                        snapshots: [HistorySnapshot(stored)],
-                                                        anchor: nil, isPlaying: false))
-        XCTAssertEqual(plan.arrayPosition, 40, "定位在第 41 章（数组位置 40），不回退")
-    }
-
-    /// 同一本书存在多条历史（历史遗留 / 合并残留）时取 `updated_at` 最新者
-    /// ——与同步 LWW 口径一致。
+    /// 同一本书存在多条历史（历史遗留）时取 `updated_at` 最新者。
     @MainActor
     func testPlannerPicksNewestSnapshotAmongDuplicates() {
         let album = makeAlbum(src: SourceRegistry.TINGYOU, albumId: 5405)
@@ -342,7 +232,7 @@ final class Build54FeatureTests: XCTestCase {
 
     // MARK: - 需求 c · 0 基不漂移（0 基源 / 1 基源各一条）
 
-    /// 0 基源（bili）：云端 0 基章号与本地源原生章号口径相同，不得被二次换算。
+    /// 0 基源（bili）：章号为 0 基、与数组位置口径相同，不得被二次换算。
     @MainActor
     func testZeroBasedSourceChapterIdxNotShifted() {
         let album = makeAlbum(src: SourceRegistry.BILI, albumId: 5406)
@@ -531,7 +421,7 @@ final class Build54FeatureTests: XCTestCase {
     ///   `updatedAt` 都是真实产物，不是探针自报）；
     /// - 显式传 `silentWrite: true`；
     /// - 断言 ① recorder 零调用、② `HistoryModel.updatedAt` **未被顶成现在**
-    ///   （该行是预先埋入的「云端较新」进度，updatedAt=300）。
+    ///   （该行是预先埋入的历史进度，updatedAt=300）。
     @MainActor
     func testApplyPlanLoadsHistoricalChapterSilently() async throws {
         let ctx = container.mainContext
@@ -544,7 +434,7 @@ final class Build54FeatureTests: XCTestCase {
             anchor: nil, isPlaying: false))
         XCTAssertTrue(plan.shouldPrepare)
 
-        // 埋一条「云端合并后的较新进度」：第 11 章 / 480s / updatedAt=300。
+        // 埋一条历史进度：第 11 章 / 480s / updatedAt=300。
         seedHistory(ctx, album: album, chapterIdx: 11, chapterTitle: "第11章",
                     positionMs: 480_000, updatedAt: 300)
         let before = try XCTUnwrap(allHistory(ctx).first, "埋入行必须可读回")
@@ -574,7 +464,7 @@ final class Build54FeatureTests: XCTestCase {
         XCTAssertEqual(recorder.writes.count, 0, "silentWrite 装载不得写历史（recorder 零调用）")
         let after = try XCTUnwrap(allHistory(ctx).first)
         XCTAssertEqual(after.updatedAt, 300,
-                       "静默装载不得把 updatedAt 顶成 now（否则 LWW 翻成本地较新，跨端续播回退）")
+                       "静默装载不得把 updatedAt 顶成 now（否则覆盖用户真实续播位置）")
         XCTAssertEqual(after.positionMs, 480_000, "进度不得被装载位置覆盖")
         XCTAssertEqual(after.chapterIdx, 11, "章号不得被改写")
     }
@@ -608,7 +498,7 @@ final class Build54FeatureTests: XCTestCase {
         XCTAssertEqual(after.chapterIdx, 4, "历史章号应更新为用户点的那章（章号值语义）")
         XCTAssertEqual(after.positionMs, 0, "历史位置应更新为本章起点")
         XCTAssertGreaterThan(after.updatedAt, 300,
-                             "非静默写入必须把 updatedAt 顶新（LWW 判据才会翻成本地较新）")
+                             "非静默写入必须把 updatedAt 顶新（真实收听才改写续播位置）")
     }
 
     // MARK: - build 55 · P1-2 通道 ②（deinit；通道 ① pause / ③ periodic
@@ -667,7 +557,7 @@ final class Build54FeatureTests: XCTestCase {
         XCTAssertTrue(src.contains("didScrollToCurrent"), "定位只做一次（切章不抢滚动）")
         XCTAssertTrue(src.contains("silentWrite: true"),
                       "定位装载不得写历史（否则打开详情页即把 updatedAt 顶成现在，"
-                      + "LWW 判定翻成本地较新 → 跨端续播回退）")
+                      + "覆盖用户真实续播位置）")
     }
 
     /// 书架 / 启动恢复链路必须同样走 `.arrayPosition`（1 基源早一章缺陷的修复点）。
@@ -679,55 +569,7 @@ final class Build54FeatureTests: XCTestCase {
         XCTAssertTrue(content.contains("start: .arrayPosition(startIdx)"),
                       "启动恢复必须按 planner 输出的数组位置装载")
         XCTAssertTrue(content.contains("silentWrite: true"),
-                      "启动恢复不得写历史（否则 updatedAt 被顶成现在，云端较新进度被拒合并）")
-    }
-
-    // MARK: - 云端桩（与 b53 同构）
-
-    @MainActor
-    private func makeEngine(modelContext: ModelContext?) -> SyncEngine {
-        let client = SyncCloudClient(session: RetryStubURLProtocol.makeSession())
-        return SyncEngine(client: client, store: store, modelContext: modelContext)
-    }
-
-    private func login(accessExpiresInMs: Int64) {
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
-        store.saveCredentials(SyncLocalStore.Credentials(
-            accessToken: "atk-b54", refreshToken: "rtk-b54", userId: "u1",
-            email: "b54@test.mail", deviceId: "d1",
-            accessExpireAtMs: now + accessExpiresInMs,
-            refreshExpireAtMs: now + 30 * 24 * 3600 * 1000))
-    }
-
-    private static func path(_ req: URLRequest) -> String {
-        guard let url = req.url else { return "" }
-        return url.path.hasPrefix("/") ? String(url.path.dropFirst()) : url.path
-    }
-
-    private static func ok(_ dataJSON: String) -> (Int, Data) {
-        (200, Data(#"{"code":0,"message":"ok","data":\#(dataJSON)}"#.utf8))
-    }
-
-    private static func err(_ code: Int, _ message: String) -> (Int, Data) {
-        (200, Data(#"{"code":\#(code),"message":"\#(message)","data":null}"#.utf8))
-    }
-
-    private static func pullJSON(serverSeq: Int64, favorites: [[String: Any]],
-                                 progress: [[String: Any]]) -> String {
-        #"{"server_seq":\#(serverSeq),"since_seq":0,"snapshot_required":false,"favorites":\#(jsonArray(favorites)),"progress":\#(jsonArray(progress))}"#
-    }
-
-    private static func jsonArray(_ rows: [[String: Any]]) -> String {
-        guard !rows.isEmpty else { return "[]" }
-        let parts = rows.map { row -> String in
-            let body = row.keys.sorted().map { key -> String in
-                let v = row[key]!
-                if let s = v as? String { return #""\#(key)":"\#(s)""# }
-                return #""\#(key)":\#(v)"#
-            }.joined(separator: ",")
-            return "{\(body)}"
-        }
-        return "[\(parts.joined(separator: ","))]"
+                      "启动恢复不得写历史（否则 updatedAt 被顶成现在，覆盖用户真实续播位置）")
     }
 
     // MARK: - 源码读取（崩溃安全：XCTFail + throw，不用 fatalError）

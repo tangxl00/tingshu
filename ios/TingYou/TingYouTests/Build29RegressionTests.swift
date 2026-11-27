@@ -63,7 +63,7 @@ final class Build29RegressionTests: XCTestCase {
         XCTAssertTrue(src.contains("removeItem"),
                       "磁盘库打不开时必须删库（含 -shm/-wal sidecar）重建，而非启动即死")
         XCTAssertTrue(src.contains("isStoredInMemoryOnly: true"),
-                      "删库重建仍失败时必须降级内存库保 App 可用（云端可同步拉回）")
+                      "删库重建仍失败时必须降级内存库保 App 可用")
     }
 
     /// 启动恢复必须在测试宿主环境跳过：单测宿主（App 本体）冷启动若有磁盘
@@ -79,7 +79,7 @@ final class Build29RegressionTests: XCTestCase {
 
     /// build 51（质检必修 · 音源残留）：本用例此前断言「已下架源的旧白名单不得丢失」，
     /// 与「收敛白名单」直接冲突——已下架站点没有任何在役请求，留着精确域等于给它们
-    /// 保留出站许可。现反转为「必须已摘除」，并补在役三源 + 云同步的放行断言（防收敛过头）。
+    /// 保留出站许可。现反转为「必须已摘除」，并补在役三源的放行断言（防收敛过头）。
     func testDelistedSourcePinningDomainsRejected() {
         // 已下架源（听十五 / 听吧 / 书音FM 及其图床音频域 / 书音FM OSS）——7 条精确域必须摘除
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("m.ting15.com"), "听十五已下架，pin 白名单必须摘除")
@@ -93,15 +93,13 @@ final class Build29RegressionTests: XCTestCase {
         // build 45 · 反馈 3：悦听下架——pin 白名单域名同步摘除（不再需要证书锁定）
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.ytysxs.com"), "悦听已下架，域名应已从 pin 白名单摘除")
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("mp3.ytysxs.top"), "悦听音频域名应已从 pin 白名单摘除")
-        // 在役三源 + 云同步仍须放行（收敛不能过头）
+        // 在役三源仍须放行（收敛不能过头）
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"), "听友FM 文件域仍在役")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("tingyou.fm"), "听友FM 旧白名单不得丢失")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("guoguo.org.cn"), "guoguo 旧白名单不得丢失")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"), "易听书站必须放行")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"), "易听书音频 CDN 必须放行")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("imagev2.xmcdn.com"), "易听书封面域必须放行")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("tingshu-d2gjera4688800c8e.service.tcloudbase.com"),
-                      "云同步域必须放行")
     }
 
     // MARK: - R8 · 导入书数据模型对既有源仍正常读写（meta 字段 lightweight migration）

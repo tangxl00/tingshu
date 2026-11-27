@@ -263,9 +263,8 @@ struct ShelfScreen: View {
     }
 
     /// build 51 · P0-2（质检 NO-GO 必修）：三条删除路径原为直写 SwiftData，
-    /// 绕过 outbox → 云端无墓碑 → 重新登录 / 新设备全量拉取后 merge 走 insert
-    /// 把条目原样复活（「清空历史」在云端永不生效）。现统一经 AlbumRepository
-    /// 出口：本地删库 + 墓碑 op 入队（favorite delete / progress delete）。
+    /// 现统一经 AlbumRepository 出口做本地删库（统一出口便于落库失败统一打印、
+    /// 避免 UI 各自直写散落）。
     private func deleteFavorites(at offsets: IndexSet) {
         let targets = offsets.compactMap { favorites.indices.contains($0) ? favorites[$0] : nil }
         guard let repo = container?.albumRepository else {
@@ -302,7 +301,7 @@ struct ShelfScreen: View {
             return
         }
         Task {
-            // 清空 = 逐条删库 + 逐条 progress delete 入队（云端逐条落墓碑）
+            // 清空 = 经统一仓储出口逐条删库
             _ = await repo.clearAllHistories()
         }
     }

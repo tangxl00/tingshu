@@ -104,8 +104,8 @@ struct ContentView: View {
         // 现显式走 `start:` 的 `.arrayPosition`，不做二次猜测。
         switch outcome {
         // build 54 · 需求 c：启动恢复同样 silentWrite——恢复是「读取历史」而非「产生进度」，
-        // 若照写会把本书 updatedAt 顶成「现在」，令 SyncEngine LWW 把云端真正较新的
-        // 进度判成「旧」而拒绝合并（跨端续播回退）。用户真点播放才落历史。
+        // 若照写会把本书 updatedAt 顶成「现在」，覆盖用户上次真实收听的位置，
+        // 下次打开书就会定位到本次装载点而非上次收听点。用户真点播放才落历史。
         case .fullQueue(let chapters, let startIdx):
             container.playbackManager.prepareQueue(
                 album: album, chapters: chapters,

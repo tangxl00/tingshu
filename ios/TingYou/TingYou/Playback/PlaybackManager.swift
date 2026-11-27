@@ -607,12 +607,9 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// 章末自动落库——它们此前都不看 silentWrite（b54 复检 3b：三通道漏守卫）。
     ///
     /// 后果不可接受的原因（复检反向推演，比研发自述更重一层）：落一条旧位置历史
-    /// 会走 `AlbumRepository.recordHistory` 把 `updatedAt` 顶成 now，随后
-    /// `syncStore.enqueueProgress` 入 outbox：
-    /// ① `SyncEngine.merge` 判据是 `rec.updatedAt > local.updatedAt`（严格大于，
-    ///    相等本地胜出）→ 云端**真正较新**的进度时间戳小于本地 now → 被拒收，
-    ///    跨端续播回退；
-    /// ② 那条陈旧本地进度还会经 outbox 反向推上云，在服务端盖掉正确值（污染云端）。
+    /// 会走 `AlbumRepository.recordHistory` 把 `updatedAt` 顶成 now，覆盖用户上次
+    /// 真实收听的位置——静默装载只是「看一眼」，不该改写续播进度；下次打开书
+    /// 就会定位到本次装载点而非用户上次听到的位置。
     ///
     /// 状态机（唯一事实源 = 本标志，读写都在主线程/装载入口）：
     /// * 置真：`loadCurrentChapter(silentWrite: true)`（`prepareQueue` 静默分支透传）
@@ -1030,8 +1027,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
 
     /// `silentWrite`（build 54 · 需求 c）：静默装载（打开详情页定位）**不得写历史**。
     /// 装载内部会 `recordHistory(force: true)` 落一条起播记录——若照写，打开一次详情页
-    /// 就会把本书 `updatedAt` 顶成「现在」并把 cloud/LWW 判定翻转为「本地较新」，
-    /// 云端真正较新的进度反而被本地旧位置压住（跨端续播回退）。故定位装载走 silent。
+    /// 就会把本书 `updatedAt` 顶成「现在」，覆盖用户上次真实收听的位置，
+    /// 下次打开会定位到本次装载点而非上次收听点。故定位装载走 silent。
     func prepareQueue(album: Album, chapters: [Chapter], start: ChapterStart,
                       startPosMs: Int64 = 0, silentWrite: Bool = false) {
         currentAlbum = album
@@ -1090,7 +1087,7 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         //（statusObserver `.failed` 的 `.retry` 分支 / 流式看门狗切镜像）都传的是
         // `loadCurrentChapter(autoPlay: true, keepMirrorChain: true)` —— 抑制态被
         // autoPlay 直接解除，落历史 + 顶 updatedAt，闸门可被「静默装载后切镜像」绕过
-        //（与 b54 P1-2 同一失败模式，LWW 翻转 + outbox 反向污染云端）。
+        //（与 b54 P1-2 同一失败模式：静默装载后换镜像绕过闸门，写历史污染真实续播位置）。
         // 现改为：**镜像重建（keepMirrorChain）一律由调用方透传当前抑制态**
         //（silentWrite 语义 = 本次装载是否静默），抑制期重建既不解除抑制、也不落历史；
         // 非镜像装载维持原状（autoPlay 或用户动作 ⇒ 解除并照写）。
@@ -1426,8 +1423,8 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     /// 为什么要收口成一个函数：b55 的两个调用点各自写
     /// `loadCurrentChapter(autoPlay: true, keepMirrorChain: true)`（**不传 silentWrite**），
     /// 于是走 `else if autoPlay || !keepMirrorChain` 直接 `releaseHistorySuppression()` +
-    /// 末尾落历史 → 静默装载后只要触发一次换镜像，闸门就被绕过（LWW 翻转 + outbox
-    /// 反向污染云端，与 b54 P1-2 同一失败模式）。抑制态改由**产品内部唯一事实源**
+    /// 末尾落历史 → 静默装载后只要触发一次换镜像，闸门就被绕过（写历史覆盖用户
+    /// 真实续播位置，与 b54 P1-2 同一失败模式）。抑制态改由**产品内部唯一事实源**
     /// `historyWriteSuppressed` 在此处透传：调用方**无从**传入错误值，也就不存在
     /// 「某个调用点漏传」的通道——修的是缺陷的**可复发形态**，不只是当下两处。
     ///

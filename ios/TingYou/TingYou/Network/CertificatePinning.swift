@@ -24,7 +24,7 @@ enum PinnedDomainAllowlist {
     /// build 51（质检必修 · 音源残留）：已下架源的主机全部删除——原来 ting15（听十五）/
     /// ting08 / mekui（书音FM）/ aikeu（书音FM 图床与音频域）/ shuyinfm OSS 五源，
     /// 共 7 条精确域仍留在白名单里，等于给已下架站点保留出站许可。
-    /// 保留的只有当前在役三源（听友FM / B站 / 易听书）与云同步所需的精确域。
+    /// 保留的只有当前在役三源（听友FM / B站 / 易听书）所需的精确域。
     static let exactDomains: Set<String> = [
         "file.hgeuz.cn",
         "imge.kugou.com",
@@ -32,8 +32,6 @@ enum PinnedDomainAllowlist {
         "www.yitingshu.com",
         "imagev2.xmcdn.com",
         "aod.cos.tx.xmcdn.com",
-        // build 50 · 云同步（tingshu-sync 云函数，对齐 PC 端同一服务）
-        "tingshu-d2gjera4688800c8e.service.tcloudbase.com",
     ]
 
     /// host 是否在白名单内（对等安卓 includeSubdomains 匹配）

@@ -9,7 +9,7 @@ import XCTest
 /// * b55 基线（fb1c0031）：无 setUp、非 @MainActor、纯探针、三条用例——崩；
 /// * r1：+ T4 镜像用例——崩；
 /// * r2（f9bf9316）：@MainActor——崩；
-/// * r3（d738fbdf）：补 Build54 同款 setUp（内存 ModelContainer + SyncLocalStore）
+/// * r3（d738fbdf）：补 Build54 同款 setUp（内存 ModelContainer）
 ///   + 真实 AlbumRepository fanout + DB 行级断言——仍崩，且崩溃后会话整体中止
 ///   （exit 65，r1/r2 则逐条重启复崩）。
 ///
@@ -227,7 +227,7 @@ final class Build55HistoryGateTests: XCTestCase {
     /// 通道 ①：`pause()`。静默装载后用户在别处按暂停（`nextChapter`/
     /// `previousChapter` 内部先调 pause()，控制中心暂停键同样直达 pause()）——
     /// b54 这里无条件 `recordHistory(force: true)`（第 1549 行），会落一条
-    /// **旧位置**历史并掀翻云端。
+    /// **旧位置**历史，覆盖用户真实续播位置。
     ///
     /// 抑制期「DB 行不被碰」的口径（如实标注）：`historyRecorder` 是
     /// `recordHistory` 唯一落库出口，探针零调用 ⇒ 不存在任何落库路径可碰那行；
@@ -306,7 +306,7 @@ final class Build55HistoryGateTests: XCTestCase {
     /// `loadCurrentChapter(autoPlay: true, keepMirrorChain: true)`（**不传 silentWrite**）
     /// → 走 `else if autoPlay || !keepMirrorChain` → `releaseHistorySuppression()` +
     /// 末尾落历史 → 「静默装载 + 20 秒看门狗换镜像」即可绕过闸门，把旧位置写进历史
-    /// 并顶新 `updatedAt`（LWW 翻成本地较新 + outbox 反向污染云端，与 b54 P1-2 同模式）。
+    /// 并顶新 `updatedAt`（覆盖用户真实续播位置，与 b54 P1-2 同模式）。
     ///
     /// 本用例驱动的是**生产同一份实现** `rebuildForMirrorRetry()`（statusObserver
     /// `.retry` 分支与流式看门狗切镜像分支共用的唯一重建入口），不是用例里复制的
