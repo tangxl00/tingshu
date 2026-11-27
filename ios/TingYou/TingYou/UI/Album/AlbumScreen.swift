@@ -21,8 +21,30 @@ struct AlbumScreen: View {
     @State private var didScrollToCurrent = false
     /// build 54：打开本书的历史定位结论（nil = 无历史，需求 d 行为不变）
     @State private var resumePlan: OpenResumePlan?
+    /// UI 增强：章节目录正序/倒序（仅展示顺序，不改变播放队列与 chapterIdx 口径）
+    @State private var chaptersReversed = false
     @Environment(\.appContainer) private var container
     @Environment(\.modelContext) private var modelContext
+
+    /// UI 增强：章节展示顺序。倒序仅作用于本页 ForEach，playChapter 仍传原 chapters，
+    /// 保证播放队列下标与 chapterIdx 口径不变（abts 同为纯展示层顺序切换）。
+    private var displayedChapters: [Chapter] {
+        chaptersReversed ? chapters.reversed() : chapters
+    }
+
+    /// UI 增强：已听章节的位置上界（数组 0 基，不含当前章）。
+    /// 数据源为本书历史的最新一条（每书单条 upsert），语义为「当前进度之前的章节视为已听」。
+    /// 局限：无法识别跳听（先听第 9 章再回听第 2 章时，第 2~8 章会被误标已听）——
+    /// 这是单条历史模型的固有限制，与 abts 逐章 done 记录不等价，需逐章记录落地后升级。
+    private var listenedBeforePosition: Int? {
+        if let pm = container?.playbackManager,
+           pm.currentAlbum?.albumId == album.albumId,
+           pm.currentAlbum?.source == album.source,
+           pm.currentChapters.indices.contains(pm.currentChapterIdx) {
+            return pm.currentChapterIdx
+        }
+        return resumePlan?.arrayPosition
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -70,18 +92,46 @@ struct AlbumScreen: View {
                 }
             }
 
-            Section("章节") {
+            Section {
                 if isLoading {
                     ProgressView().frame(maxWidth: .infinity, alignment: .center)
                 } else if let loadError {
                     Text(loadError).font(.footnote).foregroundStyle(.secondary)
                 } else {
-                    ForEach(chapters) { ch in
+                    // UI 增强：目录头「已听 N / 共 M 章」+ 正序/倒序切换（abts 同款交互）
+                    HStack(spacing: 8) {
+                        Text("目录（\(chapters.count) 章）")
+                            .font(.subheadline.weight(.semibold))
+                        if (listenedBeforePosition ?? 0) > 0 {
+                            Text("已听 \(min(max(0, listenedBeforePosition ?? 0), chapters.count))")
+                                .font(.caption)
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        Spacer()
+                        Button {
+                            chaptersReversed.toggle()
+                        } label: {
+                            Label(chaptersReversed ? "倒序" : "正序",
+                                  systemImage: chaptersReversed ? "arrow.down" : "arrow.up")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("album_chapter_order_toggle")
+                    }
+                    ForEach(displayedChapters) { ch in
                         Button {
                             playChapter(ch)
                         } label: {
                             HStack {
-                                Text("\(ch.index).").font(.caption).foregroundStyle(.secondary).frame(width: 28, alignment: .trailing)
+                                // UI 增强：标题自带序号时不重复编号（avoid "0. P1 绪论"）
+                                if chapterTitleHasOwnIndex(ch.title) {
+                                    Circle().fill(Color.secondary.opacity(isChapterListened(ch) ? 0.25 : 0.5))
+                                        .frame(width: 5, height: 5)
+                                        .frame(width: 28, alignment: .trailing)
+                                } else {
+                                    Text("\(ch.index).").font(.caption).foregroundStyle(.secondary)
+                                        .frame(width: 28, alignment: .trailing)
+                                }
                                 Text(ch.title).lineLimit(1)
                                 if isActivelyPlaying(ch) {
                                     // build 36 · 反馈 6：当前正在播放的章节高亮标识
@@ -90,18 +140,27 @@ struct AlbumScreen: View {
                                         .foregroundStyle(Color.accentColor)
                                 }
                                 Spacer()
+                                // UI 增强：已听章节 ✓（当前章不显示，避免与高亮冲突）
+                                if isChapterListened(ch) && !isCurrentChapter(ch) {
+                                    Image(systemName: "checkmark")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .accessibilityIdentifier("album_chapter_done_\(ch.index)")
+                                }
                                 if let dur = ch.durationSec {
                                     Text(formatDuration(dur)).font(.caption2).foregroundStyle(.tertiary)
                                 }
                             }
                         }
-                        .foregroundStyle(isCurrentChapter(ch) ? Color.accentColor : .primary)
+                        .foregroundStyle(isCurrentChapter(ch) ? Color.accentColor : (isChapterListened(ch) ? Color.secondary : Color.primary))
                         .id(ch.id)
                         // build 45.2：章节行稳定锚（用例 H 点第一集；B站分P标题是
                         // UP 自定义名，BEGINSWITH 'P1' 匹配不可靠——CI 第二轮实证）
                         .accessibilityIdentifier("album_chapter_row_\(ch.index)")
                     }
                 }
+            } header: {
+                Text("章节")
             }
         }
         .navigationTitle(album.title)
@@ -213,6 +272,20 @@ struct AlbumScreen: View {
         }
         if let plan = resumePlan { return plan.chapter.chapterId == ch.chapterId }
         return false
+    }
+
+    /// UI 增强：该章是否已听（数组位置上早于当前进度章）。
+    /// 当前章不算已听（避免与高亮/喇叭冲突）；无历史时全部未听。
+    private func isChapterListened(_ ch: Chapter) -> Bool {
+        guard let position = listenedBeforePosition else { return false }
+        guard let idx = chapters.firstIndex(where: { $0.chapterId == ch.chapterId }) else { return false }
+        return idx < position
+    }
+
+    /// UI 增强：章节标题是否自带序号——纯函数见 `ChapterTitleFormatting.hasOwnIndex`，
+    /// 与 abts `_ownIndex` 正则等价，单测见 AlbumChapterUITests。
+    private func chapterTitleHasOwnIndex(_ title: String) -> Bool {
+        ChapterTitleFormatting.hasOwnIndex(title)
     }
 
     /// 只有确实在出声播放时显示喇叭图标（历史高亮不冒播放态）。
