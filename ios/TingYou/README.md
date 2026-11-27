@@ -6,7 +6,7 @@ iOS 原生 SwiftUI 移植版，与安卓 v1.3.3（com.tingyou.app）功能对齐
 >
 > - 真实版本号：`project.yml` 的 `MARKETING_VERSION: 1.4.4` / `CURRENT_PROJECT_VERSION: 59`，CI 打包产物名由归档 Info.plist 动态生成（`TingYou-unsigned-1.4.4-59.ipa`），不再硬编码。
 > - 在役音源：听友 FM（tingyou）、B 站（bili）、易听书（yitingshu）。ting15 / ting08 / ting59 / mekui / aikeu / 悦听（ytysxs）已陆续下架，§7 中的相关描述为历史状态。
-> - 测试规模：39 个单测文件 / 47 个 XCTestCase 类 / 387 个 `func test`，另有 2 个 UI 测试文件 / 10 个 UI 用例（以源码 grep 实数为准，§8 的计数已过时）。
+> - 测试规模：38 个单测文件 / 46 个 XCTestCase 类 / 356 个 `func test`，另有 2 个 UI 测试文件 / 10 个 UI 用例（以源码 grep 实数为准，§8 的计数已过时；云同步功能移除后同步删除 31 个相关用例）。
 
 ## 1. 关键信息
 
@@ -38,7 +38,7 @@ ios/TingYou/
 │   ├── UI/                         # SwiftUI 视图（含 YtysxsVerifyWebView 反爬人工验证容器）
 │   ├── Utils/                      # 工具（分页 / 诊断日志 / 扩展）
 │   └── Resources/Certs/            # 27 张 .pem 锚点证书
-└── TingYouTests/                   # XCTest（截至 build 59：39 文件 / 47 类 / 387 个 func test，见 §8）
+└── TingYouTests/                   # XCTest（当前：38 文件 / 46 类 / 356 个 func test，见 §8）
 ```
 
 ## 3. 本地构建
@@ -83,7 +83,7 @@ CI 步骤：
 1. `macos-15` runner + 自动选择最新的 Xcode（以 `.github/workflows/ios.yml` 为准）
 2. `xcodegen generate` 生成 `.xcodeproj`
 3. `xcodebuild build` 编译
-4. `xcodebuild test` 跑 XCTest（截至 build 59 共 387 个单测函数 + 10 个 UI 用例；测试失败将阻断出包）
+4. `xcodebuild test` 跑 XCTest（当前共 356 个单测函数 + 10 个 UI 用例；测试失败将阻断出包）
 5. `xcodebuild archive` 产出未签名 `.xcarchive`
 6. **`plutil` 验证 archive 产物 Info.plist**：`UIBackgroundModes` 必含 `audio`、`NSAppTransportSecurity.NSAllowsArbitraryLoads` 必须为 `false`、`CFBundleIconName`/`UILaunchScreen`/`Assets.car` 存在，并校验产物版本与 `project.yml` 一致，缺失或漂移即 CI 失败
 7. 把 `TingYou.app` 按 `Payload/` 结构打包为未签名 `.ipa`（文件名由产物 Info.plist 动态生成，如 `TingYou-unsigned-1.4.4-59.ipa`），作为 artifact 上传
@@ -139,11 +139,11 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 真正限制出站面的是**域名白名单 fail-closed**（对等安卓 `includeSubdomains` 语义，定义于 `PinnedDomainAllowlist`，与代码一致）：
 
 - **后缀域**（匹配自身与任意子域）：`tingyou.fm`、`tingyou8.vip`、`guoguo.org.cn`、`kuwo.cn`、`ctyun.cn`、`bilibili.com`、`b23.tv`、`bilivideo.com`、`biliapi.net`、`akamaized.net`、`hdslb.com`
-- **精确域**（仅匹配自身）：`file.hgeuz.cn`、`imge.kugou.com`、`www.yitingshu.com`、`imagev2.xmcdn.com`、`aod.cos.tx.xmcdn.com`、`tingshu-d2gjera4688800c8e.service.tcloudbase.com`
+- **精确域**（仅匹配自身）：`file.hgeuz.cn`、`imge.kugou.com`、`www.yitingshu.com`、`imagev2.xmcdn.com`、`aod.cos.tx.xmcdn.com`（云同步网关域随同步功能移除，已同步清理）
 
 白名单之外的 host 直接取消连接（`cancelAuthenticationChallenge`），大小写不敏感；后缀匹配要求域名边界（`eviltingyou.fm` 不匹配 `.tingyou.fm`）。清单由 build 51 清理了已下架源（ting15 / ting08 / mekui / aikeu / 悦听 / shuyinfm OSS），并由 `RetryAndPinningTests` 锁定。
 
-锚点覆盖当前在役出站域：听友 FM（tingyou.fm / tingyou8.vip / guoguo.org.cn）、B 站（bilibili.com / bilivideo.com / hdslb.com 等）、易听书（yitingshu.com / xmcdn.com）、云同步网关（tcloudbase.com）、封面与音频 CDN（kugou / kuwo / ctyun 等）。
+锚点覆盖当前在役出站域：听友 FM（tingyou.fm / tingyou8.vip / guoguo.org.cn）、B 站（bilibili.com / bilivideo.com / hdslb.com 等）、易听书（yitingshu.com / xmcdn.com）、封面与音频 CDN（kugou / kuwo / ctyun 等）。云同步网关已随该功能一并移除。
 
 > **已知安全边界**：当前为非严格 pinning，无法防御"系统信任 CA 被滥用签发白名单域名证书"的场景。若需升级为严格 pinning（`SecTrustSetAnchorCertificatesOnly(t, true)` 或 SPKI 指纹校验），须先审计全部在役音源 / CDN / 云函数的证书链根 CA 是否都在内置锚点内，否则会造成大范围播放失败。该项作为独立评估，未纳入本次改动。
 
@@ -165,7 +165,7 @@ iOS 没有 Android network-security-config 等价物，本项目通过 `URLSessi
 ## 8. 测试对账
 
 - **安卓基线**：276 条 `@Test`（43 个测试类）
-- **iOS 现有（截至 build 59，以源码 grep 实数为准）**：**39 个单测文件 / 47 个 XCTestCase 类 / 387 个 `func test`**，另有 `TingYouUITests` 下 2 个文件 / 10 个 UI 用例。核对命令：`ls TingYouTests/*.swift | wc -l`、`grep -rhE 'final class .*XCTestCase' TingYouTests/*.swift | wc -l`、`grep -rhE 'func test' TingYouTests/*.swift | wc -l`。下方各 build 的分项计数是当时的历史快照，累加不等于当前总数，仅供追溯；新增测试以各 build 章节的 `BuildNN*Tests.swift` 为准。原"208 条 / 22 文件 / 30 类"口径已过时。以下为历史分项清单：
+- **iOS 现有（云同步移除后，以源码 grep 实数为准）**：**38 个单测文件 / 46 个 XCTestCase 类 / 356 个 `func test`**，另有 `TingYouUITests` 下 2 个文件 / 10 个 UI 用例。核对命令：`ls TingYouTests/*.swift | wc -l`、`grep -rhE 'final class .*XCTestCase' TingYouTests/*.swift | wc -l`、`grep -rhE 'func test' TingYouTests/*.swift | wc -l`。下方各 build 的分项计数是当时的历史快照，累加不等于当前总数，仅供追溯；新增测试以各 build 章节的 `BuildNN*Tests.swift` 为准。原"208 条 / 22 文件 / 30 类"口径已过时。以下为历史分项清单：
   - `Build21FeedbackTests`：20 条（build 21 · 反馈 1：播放模式决策纯函数 6 + 持久化 1 + 展示名唯一 1；反馈 2：HTML 实体解码 6 含 parseSearch 出口黄金样本 + charset 解码 6 含 GBK 黄金字节流）
   - `Build22AlignmentTests`：13 条（build 22 · 倍速：SpeedSheet select 写 Binding 后 speed 实际变化 2；聚合搜索：启用集过滤+固定序 1 / 关一个源少一个源结果 1 / 失败源名透出 1 / 悦听 antibot 关键词透传 1 / 仅剩单源全败 allFailed 1 / searchSources 不含导入 1；音源开关守卫：最后一个源不可关 1 / 重开后可关 1 / 导入不受保护 1 / toggleSource 翻转 1；build 24 并行化：并行执行下结果仍固定序且总耗时 < 0.55s·串行需 1.0s 1）
   - `CoverImageCacheTests`：9 条（build 19：封面会话挂 PinningURLSessionDelegate 断言 / 封面图源域名白名单互检 / 非白名单 host fail-closed·取图拒 nil / 防盗链 Referer 设置与省略 / 请求 URL 保全；build 20 必修 1：同一 guoguo URL 按 ting15/ting08 源各带准确 referer）

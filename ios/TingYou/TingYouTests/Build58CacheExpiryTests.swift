@@ -248,7 +248,7 @@ final class Build58CacheExpiryTests: XCTestCase {
                       "自愈重装载不得解除抑制（b56 P1-A 闸门零回退：静默态必须仍静默）")
         try await waitForHistoryIdle(pm)
         XCTAssertEqual(recorder.writes.count, 0,
-                       "静默态的自愈重装载不得误写历史（否则顶 updatedAt + outbox 污染云端）")
+                       "静默态的自愈重装载不得误写历史（否则 updatedAt 被顶成现在、覆盖用户真实续播位置）")
         XCTAssertEqual(pm.currentPositionMs, 120_000,
                        "自愈重装载必须沿用装载目标位置（镜像重建的 P2-2 语义不得回退）")
     }

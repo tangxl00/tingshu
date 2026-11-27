@@ -8,8 +8,7 @@ import SwiftData
 ///（存量 ytysxs 书 chapters 走 default 分支报「源已下架」）。
 ///
 /// build 54 · 需求 a/b/c/d/e（历史进度定位）：打开本书即定位到上次收听——
-/// 数据源是**合并后的本地历史**（`HistoryModel`；云端较新者已由 SyncEngine 按
-/// `updated_at` LWW 落库），本页只读本地、不拉云；定位 = 章节列表滚动到该章
+/// 数据源是**本地历史**（`HistoryModel`），本页只读本地；定位 = 章节列表滚动到该章
 /// 并高亮 + 需要时播放器静默装载该章历史位置（不先播第一章再跳）。
 /// 无历史保持原行为（需求 d）。
 struct AlbumScreen: View {
@@ -199,8 +198,8 @@ struct AlbumScreen: View {
         if plan.shouldPrepare, let pm {
             // silentWrite: true —— 定位装载**不得写历史**：装载内部会强制落一条
             // 起播记录，若照写，打开一次详情页就把本书 updatedAt 顶成「现在」，
-            // SyncEngine 的 LWW 判定翻成本地较新，云端真正较新的进度反被压住
-            // （跨端续播回退）。只有用户真点播放（playChapter / 继续收听）才落历史。
+            // 覆盖用户真实续播位置，下次打开会定位到本次装载点而非上次收听点。
+            // 只有用户真点播放（playChapter / 继续收听）才落历史。
             pm.prepareQueue(album: album, chapters: chapters,
                             start: .arrayPosition(plan.arrayPosition),
                             startPosMs: plan.startPosMs,
@@ -214,7 +213,7 @@ struct AlbumScreen: View {
         }
     }
 
-    /// 本书历史快照（SwiftData 本地，已含云端合并结果；不直连云）。
+    /// 本书历史快照（SwiftData 本地）。
     private func localHistorySnapshots() -> [HistorySnapshot] {
         let src = album.source
         let albumId = album.albumId

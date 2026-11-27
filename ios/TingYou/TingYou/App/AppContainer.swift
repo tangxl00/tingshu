@@ -16,8 +16,6 @@ final class AppContainer {
     let skipSettingsStore: SkipSettingsStore
     let sourceEnabledStore: SourceEnabledStore
     let shelfLayoutStore: ShelfLayoutStore
-    /// build 50 · 云同步（邮箱验证码登录 + 收藏/进度云端同步 + 断网补传）
-    let syncEngine: SyncEngine
 
     init() {
         let schema = Schema([
@@ -32,17 +30,14 @@ final class AppContainer {
         // 半写状态；下一次冷启动 `try! ModelContainer` 读到损坏库直接
         // fatalError，形成「重启即崩」死循环（每条用例 0.000s failed、缺失
         // "Test case started" 行、pid 逐条更替）。真实用户强杀/升级后同理。
-        // 本地 store 是云端可同步的缓存（收藏/进度走 SyncEngine），损坏时
-        // 删库重建优于启动即死；删后仍建不起来（如磁盘异常）则降级内存态
-        // 保 App 可用（收藏/历史可经登录后云端同步拉回）。
+        // 本地 store 保存收藏/历史等数据，损坏时删库重建优于启动即死；
+        // 删后仍建不起来（如磁盘异常）则降级内存态保 App 可用。
         modelContainer = Self.loadContainer(schema: schema, config: config)
 
         apiClient = APIClient()
 
         let ctx = modelContainer.mainContext
-        // build 50 · 云同步：outbox 队列（AlbumRepository 入队 / SyncEngine 冲浪共用同一份本地状态）
-        albumRepository = AlbumRepository(apiClient: apiClient, modelContext: ctx,
-                                          syncStore: SyncLocalStore.shared)
+        albumRepository = AlbumRepository(apiClient: apiClient, modelContext: ctx)
         // build 45 · 反馈 3：悦听有声书（ytysxs）全链摘除——
         // ytysxsCookieStore / YtysxsAdapter 装配删除（KeychainTokenStore
         // 专用链随源一并删除，唯一消费方即悦听验证闭环）。
@@ -65,7 +60,6 @@ final class AppContainer {
         skipSettingsStore = SkipSettingsStore()
         sourceEnabledStore = SourceEnabledStore()
         shelfLayoutStore = ShelfLayoutStore()
-        syncEngine = SyncEngine(modelContext: ctx)
     }
 }
 

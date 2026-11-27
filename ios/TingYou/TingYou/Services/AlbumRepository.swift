@@ -14,16 +14,12 @@ protocol PlaybackHistoryRecording: Sendable {
 actor AlbumRepository: PlaybackHistoryRecording {
     private let apiClient: APIClient
     private let modelContext: ModelContext?
-    /// build 50 · 云同步 outbox 入队出口（未登录时入队方法内部直接跳过）
-    private let syncStore: SyncLocalStore?
     private var cache: [String: Album] = [:]
     private let cacheLock = NSLock()
 
-    init(apiClient: APIClient, modelContext: ModelContext? = nil,
-         syncStore: SyncLocalStore? = nil) {
+    init(apiClient: APIClient, modelContext: ModelContext? = nil) {
         self.apiClient = apiClient
         self.modelContext = modelContext
-        self.syncStore = syncStore
     }
 
     // MARK: - 播放历史 / 收藏落库（Bug 2）
@@ -60,15 +56,6 @@ actor AlbumRepository: PlaybackHistoryRecording {
                 print("recordHistory save failed [\(src)|\(albumId)]: \(error)")
             }
         }
-        // build 51 · P0-1：chapter_idx 基底归一化——本地 chapter.index 是源原生章号
-        // （tingyou 1 基、bili/易听书 0 基），云端契约是 0 基，必须经单一出口换算，
-        // 直接透传会让 PC 端按 0 基取到下一章（跨端续播晚一章）。
-        let cloudIdx = ChapterIdxNormalization.toCloud(src: src, localIndex: chapter.index)
-        // build 50 · 云同步：进度入 outbox（未登录跳过；outbox 批内压缩兜底 5s 节流）
-        syncStore?.enqueueProgress(src: src, albumId: albumId, title: album.title,
-                                   coverUrl: album.coverUrl, chapterIdx: cloudIdx,
-                                   positionMs: pos, durationMs: dur,
-                                   detailPath: album.detailPath)
     }
 
     /// 收藏状态查询（书架 @Query 之外的自查入口；PlayerScreen 收藏按钮初始化用）
@@ -99,15 +86,10 @@ actor AlbumRepository: PlaybackHistoryRecording {
                 // build 19 P1-1：收藏写库失败不允许静默
                 print("addFavorite save failed [\(src)|\(albumId)]: \(error)")
             }
-            // build 50 · 云同步：收藏 upsert 入 outbox（未登录跳过）
-            self.syncStore?.enqueueFavoriteUpsert(src: src, albumId: albumId,
-                                                  title: album.title, author: album.author,
-                                                  coverUrl: album.coverUrl,
-                                                  detailPath: album.detailPath)
         }
     }
 
-    /// 删除收藏（detailPath：build 50 云同步 bili 音源的 album_key 需要 bvid）
+    /// 删除收藏（detailPath 为可选，保留以兼容既有调用方）
     func removeFavorite(src: String, albumId: Int64, detailPath: String? = nil) async {
         guard let ctx = modelContext else { return }
         await MainActor.run {
@@ -118,17 +100,12 @@ actor AlbumRepository: PlaybackHistoryRecording {
                 // build 19 P1-1：删收藏失败不允许静默
                 print("removeFavorite save failed [\(src)|\(albumId)]: \(error)")
             }
-            // build 50 · 云同步：收藏删除（墓碑）入 outbox（未登录跳过）
-            self.syncStore?.enqueueFavoriteDelete(src: src, albumId: albumId,
-                                                  detailPath: detailPath)
         }
     }
 
-    // MARK: - build 51 · P0-2：书架删除必须落云墓碑
+    // MARK: - 书架删除统一出口
 
-    /// 删除单条播放历史（书架滑删）= 本地删库 + progress delete 入 outbox。
-    /// 原实现（ShelfScreen.deleteHistories 直写 SwiftData）只删本地：云端无墓碑，
-    /// 重新登录 / 新设备 snapshotRequired 全量拉取后 merge 走 ctx.insert → 条目复活。
+    /// 删除单条播放历史（书架滑删）= 本地删库。
     func deleteHistory(src: String, albumId: Int64, detailPath: String? = nil) async {
         guard let ctx = modelContext else { return }
         await MainActor.run {
@@ -139,14 +116,10 @@ actor AlbumRepository: PlaybackHistoryRecording {
                 // 落库失败不允许静默（同仓库既有约定）
                 print("deleteHistory save failed [\(src)|\(albumId)]: \(error)")
             }
-            // build 51 · 云端墓碑：服务端 progress 分支 op==='delete' 落墓碑
-            //（记录不存在也落墓碑，防删除复活），客户端只需入队。
-            self.syncStore?.enqueueProgressDelete(src: src, albumId: albumId,
-                                                  detailPath: detailPath)
         }
     }
 
-    /// 清空全部播放历史 = 逐条本地删库 + 逐条 progress delete 入 outbox。
+    /// 清空全部播放历史 = 逐条本地删库。
     /// 返回实际处理条数（供 UI 提示与测试断言）。
     @discardableResult
     func clearAllHistories() async -> Int {
@@ -157,15 +130,11 @@ actor AlbumRepository: PlaybackHistoryRecording {
             do { try ctx.save() } catch {
                 print("clearAllHistories save failed: \(error)")
             }
-            for h in all {
-                self.syncStore?.enqueueProgressDelete(src: h.src, albumId: h.albumId,
-                                                      detailPath: h.detailPath)
-            }
             return all.count
         }
     }
 
-    /// 删除单条收藏（书架滑删）= 本地删库 + favorite delete 入 outbox（复用既有出口）。
+    /// 删除单条收藏（书架滑删）= 复用 removeFavorite 本地删库出口。
     func deleteFavorite(src: String, albumId: Int64, detailPath: String? = nil) async {
         await removeFavorite(src: src, albumId: albumId, detailPath: detailPath)
     }
