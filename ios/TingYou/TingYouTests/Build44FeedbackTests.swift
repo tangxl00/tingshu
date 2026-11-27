@@ -77,6 +77,15 @@ final class Build44FeedbackTests: XCTestCase {
         XCTAssertTrue(src.contains("playablePages(bvid:"), "BILI 分支必须经 playablePages 复合入口取分P")
     }
 
+    /// v1.4.4+ · 详情页章节加载同样必须走 playablePages。此前 SourceRouter.chapters
+    /// 直连 view（412 高风险），与已迁移的播放链路不一致，是 testH「标题已出、
+    /// 章节列表为空」长期失败的根因。本守卫补齐反馈 3 的覆盖盲区。
+    func testSourceRouterUsesPlayablePages() throws {
+        let src = try Self.loadSource("TingYou/Services/SourceRouter.swift")
+        XCTAssertFalse(src.contains("videoInfo(bvid:"), "BILI 章节分支不得直接调 videoInfo（旧 412 路径）")
+        XCTAssertTrue(src.contains("playablePages(bvid:"), "BILI 章节分支必须经 playablePages 复合入口取分P")
+    }
+
     // build 45 · 反馈 3：悦听（ytysxs）全链摘除——反馈 2 的两个用例
     //（发现页验证 sheet 重放 / WebView cookie 轮询）所守卫的
     // YtysxsVerifySheet / YtysxsVerifyWebView / antibotKeyword 闭环已整体

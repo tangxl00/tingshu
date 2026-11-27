@@ -95,9 +95,13 @@ actor SourceRouter {
             // v1.4.1 · 发现页点书直达：detailPath 即 bvid，章节 = 分P列表。
             // index 取 0 基（page - 1）：PlaybackRepository BILI 播放口径为
             // page == chapterIdx + 1，且与导入页 ImportedChapterModel 的 chapterIdx（0 基）一致。
+            // v1.4.4+ · 详情页章节加载与播放链路对齐：改走 playablePages 复合入口
+            //（进程内缓存 → pagelist 轻接口 → view 兜底）。原 videoInfo 直连 view
+            // 对匿名高频请求稳定 412，导致详情页标题已出但章节列表为空（testH
+            // 长期失败根因）。守卫见 Build44FeedbackTests.testSourceRouterUsesPlayablePages。
             guard let bvid = detailPath, !bvid.isEmpty else { throw URLError(.badURL) }
-            let info = try await biliAdapter.videoInfo(bvid: bvid).get()
-            return info.pages.map {
+            let pages = try await biliAdapter.playablePages(bvid: bvid).get()
+            return pages.map {
                 Chapter(chapterId: $0.cid, index: $0.page - 1, title: $0.part, durationSec: nil)
             }
         default:
