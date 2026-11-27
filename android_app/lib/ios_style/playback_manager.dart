@@ -246,7 +246,7 @@ class PlaybackManager extends ChangeNotifier {
     File? localFile,
   }) async {
     if (localFile != null) {
-      await _player.open(Media.file(localFile), play: autoPlay);
+      await _player.open(Media(localFile.path), play: autoPlay);
       if (startPosMs > 0) {
         await _player.seek(Duration(milliseconds: startPosMs));
       }
