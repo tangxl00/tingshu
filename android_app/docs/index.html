@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>听友 — 免登录、无广告、专注收听的 B 站有声小说播放器</title>
+<meta name="description" content="听友是一个免登录、无广告、专注收听的第三方 B 站有声小说播放器。有声小说、评书、相声、广播剧，点开即听；支持后台播放、断点续播、睡眠定时与批量离线缓存。">
+<meta name="theme-color" content="#040F30">
+<link rel="icon" href="logo.png">
+<meta property="og:type" content="website">
+<meta property="og:title" content="听友 — 免登录、无广告、专注收听的 B 站有声小说播放器">
+<meta property="og:description" content="把 B 站当作有声书库：有声小说、评书、相声、广播剧，点开即听。">
+<style>
+:root{
+  --navy:#040F30;
+  --surface:rgba(168,217,252,.055);
+  --surface-2:rgba(168,217,252,.09);
+  --line:rgba(168,217,252,.15);
+  --line-soft:rgba(168,217,252,.09);
+  --ice:#A8D9FC;
+  --moon:#EDF2FC;
+  --hint:#8FA7FC;
+  --blue:#1478FC;
+  --deep:#1236FC;
+  --sky:#5FC0FC;
+  --violet:#7649FC;
+  --serif:"Songti SC","STSong","Noto Serif SC","Source Han Serif SC","SimSun",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC","Source Han Sans SC",sans-serif;
+  --max:1080px;
+  --radius:20px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--navy);color:var(--moon);
+  font-family:var(--sans);font-size:16px;line-height:1.75;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+  -webkit-tap-highlight-color:transparent;
+}
+a{color:var(--ice);text-decoration:none}
+a:hover{color:#fff}
+img{max-width:100%}
+::selection{background:rgba(20,120,252,.45);color:#fff}
+:focus-visible{outline:2px solid var(--sky);outline-offset:3px;border-radius:6px}
+
+.bg{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none}
+.bg::before,.bg::after{content:"";position:absolute;border-radius:50%;filter:blur(90px);opacity:.5}
+.bg::before{width:760px;height:760px;top:-320px;left:50%;transform:translateX(-50%);background:radial-gradient(circle,rgba(18,54,252,.42),transparent 62%)}
+.bg::after{width:640px;height:640px;bottom:-260px;right:-180px;background:radial-gradient(circle,rgba(118,73,252,.26),transparent 64%)}
+.bg .glow{position:absolute;width:520px;height:520px;bottom:22%;left:-260px;border-radius:50%;filter:blur(100px);background:radial-gradient(circle,rgba(95,192,252,.16),transparent 65%)}
+
+.wrap{max-width:var(--max);margin:0 auto;padding:0 22px}
+
+.nav{
+  position:sticky;top:0;z-index:50;
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  background:rgba(4,15,48,.72);
+  border-bottom:1px solid var(--line-soft);
+}
+.nav-in{max-width:var(--max);margin:0 auto;padding:12px 22px;display:flex;align-items:center;gap:20px}
+.brand{display:flex;align-items:center;gap:10px;color:var(--moon);font-family:var(--serif);font-size:19px;font-weight:700;letter-spacing:.06em}
+.brand img{width:30px;height:30px;border-radius:8px;display:block}
+.nav-links{display:flex;align-items:center;gap:18px;margin-left:auto;font-size:14.5px}
+.nav-links a{color:var(--hint)}
+.nav-links a:hover{color:var(--moon)}
+.nav .gh{
+  display:inline-flex;align-items:center;gap:7px;
+  padding:7px 14px;border:1px solid var(--line);border-radius:999px;
+  font-size:14px;color:var(--moon);background:var(--surface);
+}
+.nav .gh:hover{border-color:rgba(168,217,252,.4);background:var(--surface-2)}
+.nav .gh svg{width:16px;height:16px;fill:currentColor}
+
+.hero{padding:84px 0 0;text-align:center;position:relative}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  font-size:13px;color:var(--ice);letter-spacing:.14em;
+  border:1px solid var(--line);border-radius:999px;padding:6px 16px;
+  background:var(--surface);
+}
+.eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--sky);box-shadow:0 0 10px var(--sky)}
+h1{
+  font-family:var(--serif);
+  font-size:clamp(52px,11vw,104px);
+  line-height:1.08;margin:26px 0 0;font-weight:700;letter-spacing:.04em;
+}
+h1 .b{color:var(--moon)}
+h1 .t{
+  background:linear-gradient(120deg,var(--sky) 0%,var(--blue) 45%,var(--violet) 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.slogan{margin:22px auto 0;max-width:660px;font-size:clamp(16px,2.6vw,19px);color:var(--ice);line-height:1.9}
+.cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:36px}
+.btn{
+  display:inline-flex;align-items:center;gap:9px;
+  padding:13px 28px;border-radius:999px;font-size:15.5px;font-weight:600;
+  transition:transform .18s ease,box-shadow .18s ease,background .18s ease,border-color .18s ease;
+}
+.btn:active{transform:translateY(1px) scale(.99)}
+.btn-primary{
+  color:#fff;background:linear-gradient(120deg,var(--deep),var(--blue) 58%,var(--sky));
+  box-shadow:0 12px 34px rgba(20,120,252,.38);
+}
+.btn-primary:hover{color:#fff;box-shadow:0 16px 42px rgba(20,120,252,.5);transform:translateY(-2px)}
+.btn-ghost{color:var(--moon);border:1px solid var(--line);background:var(--surface)}
+.btn-ghost:hover{border-color:rgba(168,217,252,.42);background:var(--surface-2);transform:translateY(-2px)}
+.btn svg{width:17px;height:17px;fill:currentColor}
+
+.wave{display:flex;align-items:flex-end;justify-content:center;gap:5px;height:40px;margin:50px auto 0}
+.wave i{
+  width:5px;height:100%;border-radius:3px;
+  background:linear-gradient(180deg,var(--sky),var(--blue));
+  transform-origin:bottom;transform:scaleY(.22);
+  animation:pulse 1.35s ease-in-out infinite;
+  animation-delay:var(--d);opacity:.85;
+}
+@keyframes pulse{0%,100%{transform:scaleY(.22)}50%{transform:scaleY(1)}}
+
+.shots{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin:48px 0 0}
+.shots figure{margin:0}
+.shots img{
+  display:block;width:100%;aspect-ratio:9/20;object-fit:cover;
+  border-radius:16px;
+  border:1px solid var(--line);background:var(--surface);
+  transition:transform .22s ease,border-color .22s ease,box-shadow .22s ease;
+}
+.shots figure:hover img{transform:translateY(-5px);border-color:rgba(168,217,252,.36);box-shadow:0 18px 40px rgba(2,8,28,.55)}
+.shots figcaption{margin-top:11px;font-size:12.5px;color:var(--hint);text-align:center}
+
+section{padding:92px 0 0}
+section[id]{scroll-margin-top:72px}
+.sec-head{display:flex;align-items:baseline;gap:16px}
+.sec-num{
+  font-family:var(--serif);font-size:15px;color:var(--sky);
+  border:1px solid var(--line);border-radius:10px;
+  padding:3px 11px;letter-spacing:.2em;
+  background:var(--surface);flex:0 0 auto;transform:translateY(-2px);
+}
+.sec-title{font-family:var(--serif);font-size:clamp(26px,4.4vw,36px);margin:0;font-weight:700;letter-spacing:.03em}
+.sec-body{margin-top:40px}
+
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.card{
+  border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--surface);padding:28px 26px;
+  transition:transform .2s ease,border-color .2s ease,background .2s ease;
+}
+.card:hover{transform:translateY(-4px);border-color:rgba(168,217,252,.34);background:var(--surface-2)}
+.card .ico{
+  width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(140deg,rgba(20,120,252,.28),rgba(118,73,252,.18));
+  border:1px solid var(--line);margin-bottom:18px;
+}
+.card .ico svg{width:21px;height:21px;fill:none;stroke:var(--sky);stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.card h3{margin:0 0 8px;font-size:18.5px;letter-spacing:.02em}
+.card p{margin:0;color:var(--ice);font-size:14.5px;line-height:1.85}
+
+.feats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.feat{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:26px}
+.feat h4{
+  margin:0 0 16px;font-size:15px;color:var(--sky);
+  letter-spacing:.12em;font-weight:600;
+  padding-bottom:12px;border-bottom:1px solid var(--line-soft);
+}
+.feat ul{margin:0;padding:0;list-style:none}
+.feat li{position:relative;padding-left:20px;margin:11px 0;color:var(--moon);font-size:14.5px;line-height:1.8}
+.feat li::before{
+  content:"";position:absolute;left:2px;top:.72em;width:6px;height:6px;border-radius:50%;
+  background:linear-gradient(135deg,var(--sky),var(--blue));
+}
+
+.dl{border:1px solid var(--line);border-radius:26px;background:linear-gradient(180deg,var(--surface-2),var(--surface));padding:clamp(24px,4.5vw,44px)}
+.dl-top{display:flex;align-items:center;gap:20px;flex-wrap:wrap;justify-content:space-between}
+.dl-top h3{margin:0;font-family:var(--serif);font-size:clamp(21px,3.4vw,27px);letter-spacing:.02em}
+.dl-top p{margin:6px 0 0;color:var(--hint);font-size:14px}
+.dl-rows{margin-top:26px;border-top:1px solid var(--line-soft)}
+.dl-row{display:flex;align-items:center;gap:16px;padding:15px 2px;border-bottom:1px solid var(--line-soft)}
+.dl-row code{
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  font-size:13px;color:var(--moon);
+  background:rgba(168,217,252,.08);border:1px solid var(--line-soft);
+  padding:2px 9px;border-radius:7px;white-space:nowrap;
+}
+.dl-row .rec{
+  display:inline-block;margin-left:8px;padding:1px 9px;border-radius:999px;
+  font-size:12px;color:#fff;background:linear-gradient(120deg,var(--deep),var(--blue));
+}
+.dl-row .dev{color:var(--hint);font-size:14px}
+.dl-row .size{margin-left:auto;color:var(--ice);font-size:14px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.note{margin-top:18px;color:var(--hint);font-size:13.5px;line-height:1.9}
+
+.chg{margin-top:26px;border-top:1px solid var(--line-soft);padding-top:22px}
+.chg-head{margin:0 0 14px;font-size:13px;color:var(--hint);letter-spacing:.08em}
+.chg ul{margin:0;padding:0;list-style:none}
+.chg li{position:relative;padding-left:20px;margin:9px 0;color:var(--ice);font-size:14px;line-height:1.8}
+.chg li::before{
+  content:"";position:absolute;left:2px;top:.7em;width:6px;height:6px;border-radius:50%;
+  background:linear-gradient(135deg,var(--sky),var(--blue));
+}
+.chg li b{color:var(--moon);font-weight:600}
+
+.dl-pan{margin-top:22px;border-top:1px solid var(--line-soft);padding-top:22px}
+.pan-head{margin:0 0 15px;font-size:13px;color:var(--hint);letter-spacing:.08em}
+.pan-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.pan{
+  display:flex;align-items:center;gap:13px;
+  border:1px solid var(--line);border-radius:16px;background:var(--surface);
+  padding:15px 17px;color:var(--moon);
+  transition:transform .18s ease,border-color .18s ease,background .18s ease;
+}
+.pan:hover{transform:translateY(-3px);border-color:rgba(168,217,252,.38);background:var(--surface-2)}
+.pan-mark{
+  flex:0 0 38px;width:38px;height:38px;border-radius:11px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--serif);font-size:17px;font-weight:700;color:#fff;
+}
+.mark-qk{background:linear-gradient(140deg,#22C3D6,#0E7FB4)}
+.mark-xl{background:linear-gradient(140deg,#FFC04D,#FF7A18)}
+.mark-bd{background:linear-gradient(140deg,#4E6EFF,#2932E1)}
+.pan-name{font-size:15px;font-weight:600;line-height:1.4}
+.pan-name em{display:block;font-style:normal;font-size:12px;font-weight:400;color:var(--hint);margin-top:3px}
+.pan svg{margin-left:auto;width:15px;height:15px;fill:none;stroke:var(--hint);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:0 0 auto}
+
+.legal{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:clamp(22px,4.5vw,40px)}
+.legal p{margin:0;padding:16px 0;color:var(--ice);font-size:14px;line-height:1.9}
+.legal p + p{border-top:1px solid var(--line-soft)}
+.legal p:first-child{padding-top:0}
+.legal p:last-child{padding-bottom:0}
+
+footer{
+  margin-top:100px;padding:50px 0 60px;
+  border-top:1px solid var(--line-soft);
+  background:linear-gradient(180deg,transparent,rgba(8,20,51,.8));
+}
+.foot-in{max-width:var(--max);margin:0 auto;padding:0 22px;display:flex;gap:24px;flex-wrap:wrap;justify-content:space-between;align-items:center}
+.foot-brand{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-size:17px;font-weight:700;letter-spacing:.05em}
+.foot-brand img{width:28px;height:28px;border-radius:8px}
+.foot-links{display:flex;gap:18px;font-size:14px}
+.foot-links a{color:var(--hint)}
+.foot-links a:hover{color:var(--moon)}
+
+@media (max-width:1000px){
+  .shots{grid-template-columns:repeat(3,1fr)}
+  .cards,.feats{grid-template-columns:1fr 1fr}
+  .cards > :last-child:nth-child(odd),
+  .feats > :last-child:nth-child(odd){grid-column:1/-1}
+}
+@media (max-width:680px){
+  .hero{padding-top:60px}
+  section{padding-top:72px}
+  .cards,.feats{grid-template-columns:1fr}
+  .cards > :last-child:nth-child(odd),
+  .feats > :last-child:nth-child(odd){grid-column:auto}
+  .shots{grid-template-columns:repeat(2,1fr);gap:10px}
+  .shots figcaption{font-size:11.5px}
+  .nav-links a:not(.gh){display:none}
+  .wave{height:32px;gap:4px}
+  .wave i{width:4px}
+  .dl-top .btn{width:100%;justify-content:center}
+  .pan-grid{grid-template-columns:1fr}
+  .dl-row{flex-wrap:wrap;gap:8px}
+  .dl-row .size{margin-left:0;width:100%}
+  .foot-in{flex-direction:column;align-items:flex-start;gap:14px}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .wave i{animation:none;transform:scaleY(.6)}
+  .btn,.card,.shots img{transition:none}
+}
+</style>
+</head>
+<body>
+<div class="bg" aria-hidden="true"><div class="glow"></div></div>
+
+<header class="nav">
+  <div class="nav-in">
+    <a class="brand" href="#top"><img src="logo.png" alt="听友 LOGO">听友</a>
+    <nav class="nav-links">
+      <a href="#features">能听什么</a>
+      <a href="#download">下载</a>
+      <a href="#disclaimer">免责声明</a>
+      <a class="gh" href="https://github.com/tangxl00/tingshu" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap">
+      <span class="eyebrow"><span class="dot"></span>第三方 · 非官方 · 永久免费</span>
+      <h1><span class="b">阿B</span><span class="t">听书</span></h1>
+      <p class="slogan">免登录、无广告、专注收听的第三方 B 站有声小说播放器。<br>把 B 站当作有声书库，点开即听。</p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#download">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a1 1 0 0 1 1 1v6.6l2.3-2.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L7 8.6V2a1 1 0 0 1 1-1zM2 13a1 1 0 0 1 1 1h10a1 1 0 1 1 0 2H3a1 1 0 0 1-1-1v-1z"/></svg>
+          下载安装
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/tangxl00/tingshu" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          查看源码
+        </a>
+      </div>
+      <div class="wave" aria-hidden="true">
+        <i style="--d:0s"></i><i style="--d:.12s"></i><i style="--d:.24s"></i><i style="--d:.06s"></i><i style="--d:.3s"></i><i style="--d:.18s"></i><i style="--d:.42s"></i><i style="--d:.09s"></i><i style="--d:.33s"></i><i style="--d:.21s"></i><i style="--d:.03s"></i><i style="--d:.27s"></i><i style="--d:.15s"></i><i style="--d:.39s"></i><i style="--d:.1s"></i><i style="--d:.31s"></i><i style="--d:.2s"></i><i style="--d:.05s"></i><i style="--d:.36s"></i><i style="--d:.14s"></i><i style="--d:.26s"></i>
+      </div>
+      <div class="shots">
+        <figure><img src="screenshots/1.jpg" alt="书架页" loading="lazy"><figcaption>书架</figcaption></figure>
+        <figure><img src="screenshots/2.jpg" alt="发现页" loading="lazy"><figcaption>发现</figcaption></figure>
+        <figure><img src="screenshots/3.jpg" alt="我的页" loading="lazy"><figcaption>我的</figcaption></figure>
+        <figure><img src="screenshots/4.jpg" alt="书籍详情页" loading="lazy"><figcaption>书籍详情</figcaption></figure>
+        <figure><img src="screenshots/5.jpg" alt="播放页" loading="lazy"><figcaption>播放</figcaption></figure>
+        <figure><img src="screenshots/6.jpg" alt="睡眠定时页" loading="lazy"><figcaption>睡眠定时</figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="principles">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="sec-num">壹</span>
+        <h2 class="sec-title">为什么是听友</h2>
+      </div>
+      <div class="sec-body cards">
+        <div class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3v8m0 0 3.5-3.5M12 11 8.5 7.5"/><rect x="4" y="3" width="16" height="18" rx="3"/></svg></div>
+          <h3>免登录</h3>
+          <p>不登录即可搜索、收听、收藏、记录进度；扫码登录仅用于同步昵称头像。</p>
+        </div>
+        <div class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M6 6l12 12"/></svg></div>
+          <h3>无广告</h3>
+          <p>没有广告、没有会员、没有弹窗，打开就能听。</p>
+        </div>
+        <div class="card">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 13a8 8 0 0 1 16 0"/><rect x="3" y="13" width="4" height="7" rx="2"/><rect x="17" y="13" width="4" height="7" rx="2"/></svg></div>
+          <h3>专注收听</h3>
+          <p>断点续播精确到秒；睡眠定时、后台播放与锁屏控制。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="sec-num">贰</span>
+        <h2 class="sec-title">能听什么，怎么听</h2>
+      </div>
+      <div class="sec-body feats">
+        <div class="feat">
+          <h4>听什么</h4>
+          <ul>
+            <li>有声小说、评书、相声、广播剧</li>
+            <li>分类浏览与精选主播直达</li>
+            <li>搜索分「听书 / UP主」：关注 UP 后只听 TA 的内容</li>
+          </ul>
+        </div>
+        <div class="feat">
+          <h4>怎么听</h4>
+          <ul>
+            <li>分P连播、上/下一章、±15 秒快进退</li>
+            <li>倍速 0.5x~3.0x 共 11 档预设，点一下即切</li>
+            <li>选集离线缓存，无网也能听</li>
+          </ul>
+        </div>
+        <div class="feat">
+          <h4>离线缓存</h4>
+          <ul>
+            <li>勾选多集批量缓存，开始后可离开页面</li>
+            <li>通知栏实时显示缓存到第几集、百分比</li>
+            <li>中途退出也不丢，重进自动接着下</li>
+            <li>失败会列出来并能一键重试</li>
+          </ul>
+        </div>
+        <div class="feat">
+          <h4>稳定与省心</h4>
+          <ul>
+            <li>长音频断流自动重连、来电暂停、拔耳机暂停</li>
+            <li>断点续播精确到秒，已听章节打 ✓</li>
+            <li>书架右上角续播角标：上次在听那本的封面，正在播放时自动旋转</li>
+            <li>书架显示整本书的进度，点一下直接续播</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="download">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="sec-num">叁</span>
+        <h2 class="sec-title">下载安装</h2>
+      </div>
+      <div class="sec-body dl">
+        <div class="dl-top">
+          <div>
+            <h3>听友 v1.2.0</h3>
+            <p>Android 7.0+ · 已签名 · 包名 dev.pages.tingyou · 安装包彼此可覆盖升级</p>
+          </div>
+          <a class="btn btn-primary" href="https://github.com/tangxl00/tingshu/releases/latest" target="_blank" rel="noopener">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a1 1 0 0 1 1 1v6.6l2.3-2.3a1 1 0 1 1 1.4 1.4l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.4L7 8.6V2a1 1 0 0 1 1-1zM2 13a1 1 0 0 1 1 1h10a1 1 0 1 1 0 2H3a1 1 0 0 1-1-1v-1z"/></svg>
+            前往 Releases 下载
+          </a>
+        </div>
+        <div class="dl-rows">
+          <div class="dl-row"><code>arm64-v8a</code><span class="rec">推荐</span><span class="dev">绝大多数手机</span><span class="size">约 26 MB</span></div>
+          <div class="dl-row"><code>armeabi-v7a</code><span class="dev">较老的 32 位手机 / 低端设备</span><span class="size">约 23 MB</span></div>
+          <div class="dl-row"><code>x86_64</code><span class="dev">x86_64 模拟器 / 平板 / 部分盒子</span><span class="size">约 28 MB</span></div>
+          <div class="dl-row"><code>universal</code><span class="dev">不确定架构时选它，兼容所有架构</span><span class="size">约 73 MB</span></div>
+        </div>
+        <div class="chg">
+          <p class="chg-head">v1.2.0 更新要点</p>
+          <ul>
+            <li><b>书架右上角续播角标</b>：上次在听那本的圆形封面做底叠加播放图标，点一下续播；正在播放时角标换成当前封面并像唱片一样旋转，点一下直接进播放页、不再重新加载</li>
+            <li><b>离线与在线统一</b>：目录、上下章、断点续播、进度保存共用同一套逻辑；没网自动退回已缓存章节，发现页无网时列出已缓存书籍</li>
+            <li><b>书架显示整本书的进度</b>，不再是某一章的百分比；每章可看收听进度</li>
+            <li><b>修复「点开就退会丢进度」</b>；长音频断流自动重连；修复多处缓存丢失 / 误报失效</li>
+          </ul>
+        </div>
+        <div class="dl-pan">
+          <p class="pan-head">网盘分流 · 国内直连（免访问 GitHub）</p>
+          <div class="pan-grid">
+            <a class="pan" href="https://pan.quark.cn/s/2462f4fc7fbf" target="_blank" rel="noopener">
+              <span class="pan-mark mark-qk">夸</span>
+              <span class="pan-name">夸克网盘<em>全量安装包 · 无需提取码</em></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7m0 0H8m9 0v9"/></svg>
+            </a>
+            <a class="pan" href="https://pan.xunlei.com/s/VP22CJIak7GKht4DwHJEySFwA1?pwd=2igj" target="_blank" rel="noopener">
+              <span class="pan-mark mark-xl">迅</span>
+              <span class="pan-name">迅雷网盘<em>提取码：2igj</em></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7m0 0H8m9 0v9"/></svg>
+            </a>
+            <a class="pan" href="https://pan.baidu.com/s/1doaqW0Ggn3fR1wIFN9Vbvw?pwd=tingyou" target="_blank" rel="noopener">
+              <span class="pan-mark mark-bd">百</span>
+              <span class="pan-name">百度网盘<em>提取码：tingyou</em></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7m0 0H8m9 0v9"/></svg>
+            </a>
+          </div>
+        </div>
+        <p class="note">怎么确认架构：设置 → 我的设备 → 处理器型号；或用 CPU-Z / AIDA64 查看 ABI 一栏。GitHub 在国内访问可能不稳定，如打不开可优先使用上方网盘分流，或更换网络重试。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="disclaimer">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="sec-num">肆</span>
+        <h2 class="sec-title">免责声明</h2>
+      </div>
+      <div class="sec-body legal">
+        <p>本应用为第三方个人开发的播放工具，与哔哩哔哩官方无任何关联，不代表、也不受哔哩哔哩官方授权或认可。</p>
+        <p>应用内所有音频、封面、文字等内容均来自第三方平台的公开链接，版权归原作者及相关权利人所有；本应用不存储、不修改、不二次分发任何内容。</p>
+        <p>内容仅供个人学习、研究与试听交流使用，请勿用于任何商业用途，请勿下载、录制或传播相关内容。</p>
+        <p>请在试听后支持正版：如喜欢某部作品，建议前往官方平台购买、订阅或支持作者。</p>
+        <p>若权利人认为本应用侵犯其合法权益，请通过 GitHub Issues 告知，我们将在核实后及时处理（包括但不限于移除相关入口）。</p>
+        <p>因使用本应用产生的任何直接或间接后果，由使用者自行承担。</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="foot-in">
+    <div class="foot-brand"><img src="logo.png" alt="">听友 · 非官方项目</div>
+    <nav class="foot-links">
+      <a href="https://github.com/tangxl00/tingshu" target="_blank" rel="noopener">GitHub 仓库</a>
+      <a href="https://github.com/tangxl00/tingshu/releases/latest" target="_blank" rel="noopener">下载</a>
+      <a href="https://github.com/tangxl00/tingshu/blob/main/LICENSE" target="_blank" rel="noopener">MIT 协议</a>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>
