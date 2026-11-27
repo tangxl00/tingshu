@@ -663,6 +663,17 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
     private let resolveLock = NSLock()
     private static let resolvedCacheLimit = 12
 
+    /// 播放中预缓存的后续章节数（用户要求：后 5 章）。
+    static let prefetchAheadCount = 5
+
+    /// 纯函数：当前章之后的预取窗口，供实现与单测共用同一口径。
+    static func prefetchRange(currentIndex: Int, totalCount: Int) -> Range<Int>? {
+        let start = currentIndex + 1
+        guard start >= 0, start < totalCount else { return nil }
+        let end = min(start + prefetchAheadCount, totalCount)
+        return start..<end
+    }
+
     /// build 58 · 修复 1：**B站签名直链缓存时效**（10 分钟）。
     ///
     /// 阈值依据：
@@ -1167,8 +1178,13 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
                                 albumId: currentAlbum?.albumId ?? 0,
                                 chapterIdx: ch.index)
         guard let url = URL(string: uri) else { return }
-        let asset = AVURLAsset(url: url)
-        asset.resourceLoader.setDelegate(self, queue: .global(qos: .userInitiated))
+        // 预缓存命中直接走本地文件，不经过占位 URI / resourceLoader——
+        // 换章时无需重新解析签名直链，也无 CDN 抖动窗口。
+        let cachedFile = ChapterAudioCache.shared.cachedFileURL(forKey: uri)
+        let asset = AVURLAsset(url: cachedFile ?? url)
+        if cachedFile == nil {
+            asset.resourceLoader.setDelegate(self, queue: .global(qos: .userInitiated))
+        }
         let item = AVPlayerItem(asset: asset)
         statusObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             if item.status == .readyToPlay {
@@ -2403,38 +2419,42 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         resolveLock.unlock()
     }
 
-    /// 预取下一章直链：提前解析（markPaid:false 付费章静默跳过）+ AVFoundation 预热
-    /// （asset.load(.isPlayable) 提前完成 DNS/TLS/媒体头交互），切章零等待。
+    /// 播放中预缓存后续 5 章：先解析直链（markPaid:false 静默跳过付费章），
+    /// 再用现有 proxySession 把整章音频下载到本地缓存。切章时命中本地文件，
+    /// 直接绕过占位 URI、签名直链解析与 CDN 首包等待。
     private func scheduleNextChapterPrefetch() {
         prefetchTask?.cancel()
         guard let album = currentAlbum,
-              currentChapterIdx + 1 < currentChapters.count,
-              let repository = playbackRepository else { return }
-        let next = currentChapters[currentChapterIdx + 1]
-        let key = PlayUri.build(src: album.source, albumId: album.albumId, chapterIdx: next.index)
+              let repository = playbackRepository,
+              let range = Self.prefetchRange(currentIndex: currentChapterIdx,
+                                             totalCount: currentChapters.count) else { return }
         prefetchTask = Task { [weak self] in
-            guard !Task.isCancelled else { return }
-            if self?.resolvedPlayUrl(forKey: key) != nil { return } // 已预取过
-            // v1.4.2 · P2-1（质检）：预取补传 detailPath——此前缺参时 BILI 必抛 badURL
-            // 被静默吞掉（切章预取全失效）、TING59 导入书回退 String(albumId) 解析到
-            // 错误书页；与 resourceLoader 主路径（detailPath: currentAlbum?.detailPath）
-            // 口径对齐，预取与播放解析到同一章。
-            // build 58 · 修复 3：预取改走**候选链**接口——除主选外把 backup 镜像
-            // 一并写进缓存（`mirrors:`）。这样下一章切章时缓存命中也有镜像链可补
-            //（锁屏长听后切章失败 → 有镜像可换，而不是「无可用 backup 镜像」终局）。
-            // markPaid: false 保持预取口径（静默预取不打付费标、失败不影响播放）。
-            guard let playUrls = try? await repository.getPlayUrlCandidates(
-                src: album.source, albumId: album.albumId, chapterIdx: next.index,
-                detailPath: album.detailPath,
-                markPaid: false), // 静默预取：付费章不弹不打标，失败不影响播放
-                let resolved = playUrls.first, !resolved.isEmpty else { return }
-            guard !Task.isCancelled else { return }
-            self?.storeResolved(key: key, url: resolved,
-                                mirrors: Array(playUrls.dropFirst()))
-            // AVFoundation 预热（iOS 16+ async load；失败静默忽略）
-            if let warmURL = URL(string: resolved) {
-                let asset = AVURLAsset(url: warmURL)
-                _ = try? await asset.load(.isPlayable)
+            guard let self else { return }
+            for idx in range {
+                guard !Task.isCancelled else { return }
+                let next = self.currentChapters[idx]
+                let key = PlayUri.build(src: album.source, albumId: album.albumId,
+                                        chapterIdx: next.index)
+                if ChapterAudioCache.shared.cachedFileURL(forKey: key) != nil { continue }
+
+                // 直链口径与播放主路径一致：detailPath 必传，候选镜像随条目入缓存。
+                let resolved: String
+                if let cached = self.resolvedPlayUrl(forKey: key) {
+                    resolved = cached
+                } else {
+                    guard let candidates = try? await repository.getPlayUrlCandidates(
+                        src: album.source, albumId: album.albumId, chapterIdx: next.index,
+                        detailPath: album.detailPath, markPaid: false),
+                        let first = candidates.first, !first.isEmpty else { continue }
+                    self.storeResolved(key: key, url: first,
+                                       mirrors: Array(candidates.dropFirst()))
+                    resolved = first
+                }
+                guard !Task.isCancelled, let remote = URL(string: resolved) else { continue }
+                var request = URLRequest(url: remote)
+                Self.applyBiliCdnHeaders(to: &request, url: remote)
+                _ = await ChapterAudioCache.shared.prefetch(
+                    key: key, request: request, session: self.proxySession)
             }
         }
     }

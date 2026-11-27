@@ -64,9 +64,17 @@ final class AlbumChapterUITests: XCTestCase {
     func testReversedOrderDoesNotTouchPlayQueue() throws {
         let src = try Self.albumSource()
         XCTAssertTrue(src.contains("ForEach(displayedChapters)"), "展示必须用 displayedChapters")
-        XCTAssertTrue(src.contains("playChapter(ch)"), "点击必须仍按原章对象播放")
+        XCTAssertTrue(src.contains("startPlayback(ch)"), "点击必须仍按原章对象播放")
         XCTAssertTrue(src.contains("chaptersReversed ? chapters.reversed() : chapters"),
                       "displayedChapters 必须只改展示顺序")
         XCTAssertFalse(src.contains("playChapter(displayedChapters"), "不得把展示顺序写入播放路径")
+    }
+
+    /// 点章 / 继续收听必须唤起播放器 sheet（Environment 注入，不逐层透传闭包）。
+    func testChapterTapOpensPlayer() throws {
+        let src = try Self.albumSource()
+        XCTAssertTrue(src.contains("@Environment(\\.openPlayer)"), "缺少 openPlayer 环境注入")
+        XCTAssertTrue(src.contains("openPlayer()"), "点章后未唤起播放器")
+        XCTAssertTrue(src.contains("startPlayback(ch)"), "章节行未走统一播放入口")
     }
 }
