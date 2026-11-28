@@ -75,7 +75,7 @@ class _MineScreenState extends State<MineScreen> {
     final store = context.watch<LocalStore>();
     return Scaffold(
       // v2.0.0：去掉顶部大标题，内容整体上移
-      appBar: const AppBar(title: Text('')),
+      appBar: AppBar(title: const Text('')),
       body: ListView(
         children: [
           Padding(
