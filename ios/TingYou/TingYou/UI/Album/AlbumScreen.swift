@@ -24,6 +24,7 @@ struct AlbumScreen: View {
     @State private var chaptersReversed = false
     @Environment(\.appContainer) private var container
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openPlayer) private var openPlayer
 
     /// UI 增强：章节展示顺序。倒序仅作用于本页 ForEach，playChapter 仍传原 chapters，
     /// 保证播放队列下标与 chapterIdx 口径不变（abts 同为纯展示层顺序切换）。
@@ -72,7 +73,7 @@ struct AlbumScreen: View {
                 // 打开即看到上次听到哪章、播到几成，一键续听。
                 if let plan = resumePlan {
                     Button {
-                        playChapter(plan.chapter)
+                        startPlayback(plan.chapter)
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "play.circle.fill")
@@ -119,7 +120,7 @@ struct AlbumScreen: View {
                     }
                     ForEach(displayedChapters) { ch in
                         Button {
-                            playChapter(ch)
+                            startPlayback(ch)
                         } label: {
                             HStack {
                                 // UI 增强：标题自带序号时不重复编号（avoid "0. P1 绪论"）
@@ -311,6 +312,12 @@ struct AlbumScreen: View {
             print("Album load error (\(album.source)): \(error)")
         }
         isLoading = false
+    }
+
+    /// 点章 / 继续收听的统一入口：先装载并播放，再唤起播放器 sheet。
+    private func startPlayback(_ ch: Chapter) {
+        playChapter(ch)
+        openPlayer()
     }
 
     /// build 54：点章播放。**点的正是历史定位章**时从历史位置续播

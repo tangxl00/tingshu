@@ -6,6 +6,7 @@ import 'source_registry.dart';
 import 'source_router.dart';
 import 'storage.dart';
 import 'playback_manager.dart';
+import 'player_screen.dart';
 import 'widgets.dart';
 
 class AlbumScreen extends StatefulWidget {
@@ -25,6 +26,7 @@ class _AlbumScreenState extends State<AlbumScreen> {
   bool _didPosition = false;
   int? _resumeArrayPosition;
   int _resumeMs = 0;
+  final GlobalKey _resumeChapterKey = GlobalKey();
 
   @override
   void initState() {
@@ -53,6 +55,19 @@ class _AlbumScreenState extends State<AlbumScreen> {
         _chapters = chapters;
         _loading = false;
       });
+      if (_resumeArrayPosition != null && _resumeArrayPosition! > 0) {
+        _didPosition = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final ctx = _resumeChapterKey.currentContext;
+          if (ctx != null && mounted) {
+            Scrollable.ensureVisible(
+              ctx,
+              duration: const Duration(milliseconds: 250),
+              alignment: 0.25,
+            );
+          }
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -183,8 +198,15 @@ class _AlbumScreenState extends State<AlbumScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: FilledButton.tonalIcon(
                 key: const ValueKey('album_resume_button'),
-                onPressed: () =>
-                    _playChapter(_chapters[_resumeArrayPosition!]),
+                onPressed: () async {
+                  await _playChapter(_chapters[_resumeArrayPosition!]);
+                  if (!mounted) return;
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const PlayerScreen(),
+                    ),
+                  );
+                },
                 icon: const Icon(Icons.play_circle_fill),
                 label: Text(
                   '继续收听：${_chapters[_resumeArrayPosition!].title} · 已播 ${_resumePercent()}%',
@@ -248,7 +270,10 @@ class _AlbumScreenState extends State<AlbumScreen> {
           else
             for (final chapter in _displayed)
               ListTile(
-                key: ValueKey('album_chapter_row_${chapter.index}'),
+                key: _resumeArrayPosition != null &&
+                        _chapters.indexOf(chapter) == _resumeArrayPosition
+                    ? _resumeChapterKey
+                    : ValueKey('album_chapter_row_${chapter.index}'),
                 dense: true,
                 selected: _isCurrent(chapter),
                 leading: SizedBox(
@@ -284,7 +309,15 @@ class _AlbumScreenState extends State<AlbumScreen> {
                           color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ],
                 ),
-                onTap: () => _playChapter(chapter),
+                onTap: () async {
+                  await _playChapter(chapter);
+                  if (!mounted) return;
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const PlayerScreen(),
+                    ),
+                  );
+                },
               ),
         ],
       ),

@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 
+import 'audio_cache.dart';
 import 'models.dart';
 import 'source_router.dart';
 import 'tingyou_api.dart';
@@ -34,6 +36,22 @@ class SleepConfig {
 
 /// iOS PlaybackManager 对等实现：章节队列 + 断点续播 + 倍速 + 定时 + 失败重试。
 class PlaybackManager extends ChangeNotifier {
+  /// 播放中预缓存的后续章节数（用户要求：后 5 章）。
+  static const int prefetchAheadCount = 5;
+
+  /// 纯函数：当前章之后的预取窗口，便于测试锁定口径。
+  static List<int> prefetchWindow({
+    required int currentIndex,
+    required int totalCount,
+  }) {
+    final start = currentIndex + 1;
+    if (start < 0 || start >= totalCount) return const [];
+    final end = start + prefetchAheadCount < totalCount
+        ? start + prefetchAheadCount
+        : totalCount;
+    return [for (var i = start; i < end; i++) i];
+  }
+
   PlaybackManager._({
     required SourceRouter router,
     required LocalStore store,
@@ -68,6 +86,7 @@ class PlaybackManager extends ChangeNotifier {
 
   SleepConfig _sleepConfig = const SleepConfig(mode: SleepMode.off);
   Timer? _sleepTimer;
+  Timer? _prefetchTimer;
   bool _sleepStopAtChapterEnd = false;
 
   int _lastHistoryWriteMs = 0;
@@ -189,15 +208,30 @@ class PlaybackManager extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final resolved = await _router.playUrl(album, chapter);
-      _resolved = resolved;
-      _alternativeIdx = 0;
-      await _openResolved(
-        resolved,
-        autoPlay: autoPlay,
-        startPosMs: startPosMs,
-      );
+      final cacheKey = AudioCache.keyFor(album.key, chapter.index);
+      final cached = await AudioCache.instance.cachedFile(cacheKey);
+      if (cached != null) {
+        // 命中预缓存：直接播本地文件，无需重新解析签名直链。
+        _resolved = null;
+        _alternativeIdx = 0;
+        await _openResolved(
+          ResolvedAudio(url: cached.path),
+          autoPlay: autoPlay,
+          startPosMs: startPosMs,
+          localFile: cached,
+        );
+      } else {
+        final resolved = await _router.playUrl(album, chapter);
+        _resolved = resolved;
+        _alternativeIdx = 0;
+        await _openResolved(
+          resolved,
+          autoPlay: autoPlay,
+          startPosMs: startPosMs,
+        );
+      }
       await _player.setRate(_store.playbackSpeed);
+      _schedulePrefetch();
     } catch (e) {
       _playbackError = '加载失败：${_describe(e)}';
       _isChapterLoading = false;
@@ -209,7 +243,20 @@ class PlaybackManager extends ChangeNotifier {
     ResolvedAudio resolved, {
     required bool autoPlay,
     int startPosMs = 0,
+    File? localFile,
   }) async {
+    if (localFile != null) {
+      await _player.open(Media(localFile.path), play: autoPlay);
+      if (startPosMs > 0) {
+        await _player.seek(Duration(milliseconds: startPosMs));
+      }
+      _isPlaying = autoPlay;
+      _isChapterLoading = false;
+      _playbackError = null;
+      notifyListeners();
+      return;
+    }
+
     final urls = <String>[resolved.url, ...resolved.alternatives];
     Object? lastError;
     for (var i = _alternativeIdx; i < urls.length; i++) {
@@ -232,6 +279,31 @@ class PlaybackManager extends ChangeNotifier {
       }
     }
     throw lastError ?? '没有可用的音频地址';
+  }
+
+  /// 当前章起播后，后台预缓存后续 5 章。
+  /// 延迟 300ms 启动，避免与首章起播竞争带宽；失败静默，不影响播放。
+  void _schedulePrefetch() {
+    _prefetchTimer?.cancel();
+    _prefetchTimer = Timer(const Duration(milliseconds: 300), () async {
+      final album = _currentAlbum;
+      if (album == null) return;
+      final indices = prefetchWindow(
+        currentIndex: _currentChapterIdx,
+        totalCount: _currentChapters.length,
+      );
+      for (final idx in indices) {
+        final chapter = _currentChapters[idx];
+        final key = AudioCache.keyFor(album.key, chapter.index);
+        if (await AudioCache.instance.cachedFile(key) != null) continue;
+        try {
+          final resolved = await _router.playUrl(album, chapter);
+          await AudioCache.instance.prefetch(key: key, audio: resolved);
+        } catch (e) {
+          debugPrint('[PlaybackManager] prefetch chapter ${chapter.index} failed: $e');
+        }
+      }
+    });
   }
 
   Future<void> retryCurrentChapter() async {

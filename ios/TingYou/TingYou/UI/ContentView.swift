@@ -51,6 +51,8 @@ struct ContentView: View {
         .sheet(isPresented: $showPlayer) {
             PlayerScreen()
         }
+        // 点章节后由子页面直接唤起播放器，无需逐层透传闭包。
+        .environment(\.openPlayer, { showPlayer = true })
         // build 21 · 反馈 3（增强 1）：打开 App 自动记忆上次播放——载入最新一条历史，
         // 重建完整章节队列并定位到上次进度，迷你条显示但不自动出声（用户点播放才播）。
         .task {
