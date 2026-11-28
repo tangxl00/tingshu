@@ -30,7 +30,13 @@ struct UpdateInfo {
     /// 是否有新版本：iOS 必须比 IPA 里的版本；没有 IPA 资产时不误报更新。
     var hasNewer: Bool {
         guard let iosVersion, !iosVersion.isEmpty else { return false }
-        return Self.compare(Self.currentVersion, iosVersion) < 0
+        return Self.isNewer(current: Self.currentVersion, ipa: iosVersion)
+    }
+
+    /// 纯函数版本判断，便于单元测试（不依赖测试 bundle 的 CFBundleShortVersionString）。
+    static func isNewer(current: String, ipa: String?) -> Bool {
+        guard let ipa, !ipa.isEmpty else { return false }
+        return compare(current, ipa) < 0
     }
 
     static var currentVersion: String {
