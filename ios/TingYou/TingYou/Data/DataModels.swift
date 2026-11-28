@@ -59,9 +59,19 @@ final class HistoryModel {
         self.src = src; self.albumId = albumId; self.albumTitle = albumTitle
         self.coverUrl = coverUrl; self.chapterIdx = chapterIdx
         self.chapterTitle = chapterTitle; self.positionMs = positionMs
-        self.durationMs = durationMs; self.detailPath = detailPath
+        self.durationMs = durationMs;         self.detailPath = detailPath
         self.updatedAt = updatedAt
     }
+
+    /// 历史记录精确进度文案：第 N 章 MM:SS。
+    /// chapterIdx 为音源原生章号（1 基），positionMs 为该章内播放位置。
+    var chapterProgressText: String {
+        let sec = max(0, positionMs) / 1000
+        let m = sec / 60
+        let s = sec % 60
+        return String(format: "第%d章 %02d:%02d", chapterIdx, m, s)
+    }
+
     func toAlbum() -> Album {
         Album(albumId: albumId, title: albumTitle, author: nil, teller: nil,
               coverUrl: coverUrl, intro: nil, category: nil, categoryId: nil,

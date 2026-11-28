@@ -319,7 +319,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                 const SizedBox(height: 4),
                 Text(f.title, maxLines: 1, overflow: TextOverflow.ellipsis),
                 Text(
-                  history == null ? '未开始' : '已播 ${history.percent}%',
+                  history == null ? '未开始' : history.chapterProgressText,
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
                 ),
               ],
@@ -344,7 +344,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
             subtitle: Text(
               history == null
                   ? '未开始'
-                  : '${history.chapterTitle} · 已播 ${history.percent}%',
+                  : '${history.chapterProgressText} · 已播 ${history.percent}%',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -406,7 +406,7 @@ class _ShelfScreenState extends State<ShelfScreen> {
                   leading: CoverImage(url: h.coverUrl, size: 56),
                   title: Text(h.albumTitle,
                       maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text('${h.chapterTitle} · 已播 ${h.percent}%',
+                  subtitle: Text('${h.chapterProgressText} · 已播 ${h.percent}%',
                       maxLines: 1, overflow: TextOverflow.ellipsis),
                   onTap: () => _resumeHistory(h),
                 ),
