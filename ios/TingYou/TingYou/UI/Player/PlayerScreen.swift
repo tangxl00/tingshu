@@ -23,7 +23,7 @@ struct PlayerScreen: View {
             // 播放器页面调整：一页完整展示、不滚动。用 GeometryReader 取可用高度，
             // 封面按剩余空间自适应，保证小屏也不溢出。
             GeometryReader { geo in
-                VStack(spacing: 12) {
+                VStack(spacing: 16) {
                     CoverImage(url: pm?.coverUrl,
                                size: Self.coverSize(availableHeight: geo.size.height),
                                source: pm?.currentAlbum?.source)
@@ -83,13 +83,13 @@ struct PlayerScreen: View {
                     }
                     .padding(.horizontal)
 
-                    HStack(spacing: 40) {
+                    HStack(spacing: 52) {
                         Button { pm?.previousChapter() } label: {
-                            Image(systemName: "backward.end.fill").font(.title2)
+                            Image(systemName: "backward.end.fill").font(.title)
                         }
                         Button { pm?.togglePlayPause() } label: {
                             Image(systemName: (pm?.isPlaying ?? false) ? "pause.circle.fill" : "play.circle.fill")
-                                .font(.system(size: 64))
+                                .font(.system(size: 76))
                         }
                         // build 45 · CI 第一轮（反馈 2c）：播放/暂停按钮此前只有 SF
                         // Symbol 无文本——XCUITest「暂停」断言永不命中（H 播放态判据
@@ -98,33 +98,33 @@ struct PlayerScreen: View {
                         .accessibilityLabel((pm?.isPlaying ?? false) ? "暂停" : "播放")
                         .accessibilityIdentifier("player_play_pause")
                         Button { pm?.nextChapter() } label: {
-                            Image(systemName: "forward.end.fill").font(.title2)
+                            Image(systemName: "forward.end.fill").font(.title)
                         }
                     }
                     .foregroundStyle(.primary)
 
                     // 播放器页面调整：删除 ±15 秒跳转与独立倍速行，功能统一收到底部一行。
-                    HStack(spacing: 24) {
+                    HStack(spacing: 32) {
                         Button { activeSheet = .chapters } label: {
                             VStack(spacing: 2) {
-                                Image(systemName: "list.bullet").font(.title3)
-                                Text("章节").font(.caption2)
+                                Image(systemName: "list.bullet").font(.title2)
+                                Text("章节").font(.caption)
                             }
                         }
                         .buttonStyle(.pressable)
                         Button { activeSheet = .sleepTimer } label: {
                             VStack(spacing: 2) {
-                                Image(systemName: "moon.fill").font(.title3)
-                                Text("定时").font(.caption2)
+                                Image(systemName: "moon.fill").font(.title2)
+                                Text("定时").font(.caption)
                             }
                         }
                         .buttonStyle(.pressable)
                         // Bug 2：收藏真实落库（原为本地 @State 切换，重启即失）
                         Button { toggleFavorite() } label: {
                             VStack(spacing: 2) {
-                                Image(systemName: isFavorite ? "heart.fill" : "heart").font(.title3)
+                                Image(systemName: isFavorite ? "heart.fill" : "heart").font(.title2)
                                     .foregroundStyle(isFavorite ? Color.pink : Color.secondary)
-                                Text("收藏").font(.caption2)
+                                Text("收藏").font(.caption)
                             }
                         }
                         .buttonStyle(.pressable)
@@ -133,14 +133,14 @@ struct PlayerScreen: View {
                             VStack(spacing: 2) {
                                 Text("\(String(format: "%.1f", pm?.speed ?? 1.0))x")
                                     .font(.caption).monospacedDigit()
-                                Text("倍速").font(.caption2)
+                                Text("倍速").font(.caption)
                             }
                         }
                         .buttonStyle(.pressable)
                         Button { activeSheet = .settings } label: {
                             VStack(spacing: 2) {
-                                Image(systemName: "gearshape").font(.title3)
-                                Text("设置").font(.caption2)
+                                Image(systemName: "gearshape").font(.title2)
+                                Text("设置").font(.caption)
                             }
                         }
                         .buttonStyle(.pressable)
@@ -149,7 +149,7 @@ struct PlayerScreen: View {
 
                     // v2.0.0：底部只留少量弹性，上方 Spacer 吸收剩余高度
                     Spacer(minLength: 0)
-                        .frame(maxHeight: 56)
+                        .frame(maxHeight: 36)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
             }
@@ -256,7 +256,7 @@ struct PlayerScreen: View {
     /// 夹在 120–280pt 之间，避免小屏溢出或大屏封面过大。
     private static func coverSize(availableHeight h: CGFloat) -> CGFloat {
         // v2.0.0：封面缩小到原先的 3/4（280→210，上限同步收敛）
-        min(210, max(90, (h - 300) * 3 / 4))
+        min(210, max(90, (h - 340) * 3 / 4))
     }
 
     func formatMs(_ ms: Int64) -> String {

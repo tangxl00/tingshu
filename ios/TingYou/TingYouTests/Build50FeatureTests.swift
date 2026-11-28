@@ -1,25 +1,26 @@
 import XCTest
 @testable import TingYou
 
-/// build 50 · 音源对齐 PC（v1.1.8 三源基准）守卫：补齐易听书（yitingshu）——
-///   注册/四链路路由/播放/发现页 9 分类/本地标题索引搜索/证书白名单。
+/// build 50 · 音源对齐 PC（三源基准）守卫；v2.0.1 · 易听书（yitingshu）下架——
+///   注册/四链路路由/播放/分类/本地索引/证书白名单全链摘除，本套件改写为
+///   「已下架」口径守卫（存量书架数据保留，播放/详情按字符串兼容提示）。
 ///
 /// 沙箱无 Swift 工具链，运行时行为由真机复测与 CI 兜底；此处锁定可静态/
 /// 纯函数验证的接线面。
 final class Build50FeatureTests: XCTestCase {
 
-    // MARK: - 任务 2 · 易听书补齐（对齐 PC 三源基准）
+    // MARK: - v2.0.1 · 易听书下架（对齐用户点名删除）
 
     /// 三源基准守卫：发现页可选音源必须与 PC v1.1.8 完全一致
     /// （tingyou / bili / yitingshu），易听书 9 个分类同 PC YTS_CATS 清单。
     func testDiscoverCatalogMatchesPcThreeSourceBaseline() {
         XCTAssertEqual(DiscoverCatalog.sourceOptions.map(\.id),
-                       [SourceRegistry.TINGYOU, SourceRegistry.BILI, SourceRegistry.YITINGSHU],
-                       "发现页音源清单必须与 PC v1.1.8 三源基准一致（build 50 补齐易听书）")
-        let yts = DiscoverCatalog.categories(for: SourceRegistry.YITINGSHU)
-        XCTAssertEqual(yts.count, 9, "易听书分类必须为 9 个（PC YTS_CATS 同清单）")
-        XCTAssertEqual(yts.first?.name, "言情", "易听书首个分类应为言情（PC 同顺序）")
-        XCTAssertEqual(yts.last?.name, "商业财经", "易听书末个分类应为商业财经（PC 同顺序）")
+                       [SourceRegistry.TINGYOU, SourceRegistry.BILI],
+                       "发现页音源清单须为两源（v2.0.1 易听书下架）")
+        XCTAssertFalse(DiscoverCatalog.sourceOptions.contains { $0.id == "yitingshu" },
+                       "易听书已下架，不得出现在发现页音源清单")
+        XCTAssertTrue(DiscoverCatalog.categories(for: "yitingshu").isEmpty,
+                       "易听书分类须清空（v2.0.1）")
         // 搜索源三处注册一致性由 Build22AlignmentTests 守卫，此处不重复
     }
 
@@ -27,15 +28,15 @@ final class Build50FeatureTests: XCTestCase {
     /// 封面 CDN / 音频直链 CDN（aod.cos.tx.xmcdn.com，精确主机口径，
     /// 不放行 *.xmcdn.com 整域）。
     func testPinnedAllowlistAdmitsBuild50Hosts() {
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"),
-                      "易听书站点页主机必须放行（build 50）")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("imagev2.xmcdn.com"),
-                      "易听书封面 CDN 必须放行（build 50）")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"),
-                      "易听书音频直链 CDN 必须放行（build 50）")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"),
+                      "易听书已下架（v2.0.1），站点页主机须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("imagev2.xmcdn.com"),
+                      "易听书封面 CDN 须摘除（v2.0.1）")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"),
+                      "易听书音频直链 CDN 须摘除（v2.0.1）")
         // fail-closed 结构性保证：白名单整域通配不得回归
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("evil.xmcdn.com"),
-                       "xmcdn.com 不得整域放行——只允许 imagev2 / aod.cos.tx 两个精确子域")
+                       "xmcdn.com 不得整域放行（fail-closed 铁律）")
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("evil.yitingshu.com"),
                        "yitingshu.com 不得整域放行（fail-closed 铁律）")
     }
@@ -44,14 +45,9 @@ final class Build50FeatureTests: XCTestCase {
     /// audioExact 只认 aod.cos.tx.xmcdn.com，audioSuffixes 必须为空
     /// ——后缀 .xmcdn.com 会放行其他子域。
     func testYitingshuAudioDomainsAreExactHostOnly() {
-        let cfg = SourceRegistry.configOf(src: SourceRegistry.YITINGSHU)
-        XCTAssertNotNil(cfg, "易听书必须注册在 msrcSources（build 50）")
-        XCTAssertEqual(cfg?.audioExact, ["aod.cos.tx.xmcdn.com"],
-                       "音频直链只认精确主机 aod.cos.tx.xmcdn.com")
-        XCTAssertEqual(cfg?.audioSuffixes ?? ["非空"], [],
-                       "音频后缀白名单必须为空（不得整域放行 .xmcdn.com）")
-        XCTAssertEqual(cfg?.fetchHosts, ["www.yitingshu.com"],
-                       "站点页主机必须精确为 www.yitingshu.com")
+        let cfg = SourceRegistry.configOf(src: "yitingshu")
+        XCTAssertNil(cfg, "易听书已下架（v2.0.1），config 不得残留")
+        XCTAssertFalse(SourceRegistry.isKnown(src: "yitingshu"), "易听书不得为已知源")
     }
 
     /// 四链路路由守卫：搜索（含本地索引兜底）/ 详情 / 章节 / 发现页分类
@@ -59,25 +55,19 @@ final class Build50FeatureTests: XCTestCase {
     /// YITINGSHU case。本地索引资源必须随包（Resources/yts_index.txt）。
     func testYitingshuWiredIntoAllRoutes() throws {
         let router = Self.codeOnly(try Self.loadSource("TingYou/Services/SourceRouter.swift"))
-        let ytsCases = router.components(separatedBy: "case SourceRegistry.YITINGSHU:")
-        XCTAssertEqual(ytsCases.count, 5,
-                       "SourceRouter 必须有 4 个 YITINGSHU case（搜索/详情/章节/发现页分类），实际 \(ytsCases.count - 1) 个")
-        XCTAssertTrue(router.contains("func discoverCategory(src: String, categoryId: String, page: Int)"),
-                      "发现页分类路由必须存在（易听书走 /yi/{cat}-{page}.html 分类页口径）")
+        XCTAssertFalse(router.contains("case SourceRegistry.YITINGSHU:"),
+                       "v2.0.1 易听书下架，SourceRouter 不得残留 YITINGSHU case")
+        XCTAssertFalse(router.contains("yitingshuAdapter"),
+                       "易听书适配器装配须摘除")
 
         let playback = Self.codeOnly(try Self.loadSource("TingYou/Services/PlaybackRepository.swift"))
-        XCTAssertTrue(playback.contains("case SourceRegistry.YITINGSHU:"),
-                      "PlaybackRepository 播放链路必须有 YITINGSHU case（var now 直链提取）")
+        XCTAssertFalse(playback.contains("case SourceRegistry.YITINGSHU:"),
+                      "PlaybackRepository 播放链路不得残留 YITINGSHU case")
 
-        let adapter = Self.codeOnly(try Self.loadSource("TingYou/Services/YitingshuAdapter.swift"))
-        XCTAssertTrue(adapter.contains("Bundle.main.url(forResource: \"yts_index\", withExtension: \"txt\")"),
-                      "搜索必须加载本地标题索引 Resources/yts_index.txt（search.php 被 vdimgck 验证码拦截）")
-
-        let project = try Self.loadSource("project.yml")
-        XCTAssertTrue(project.contains("- path: TingYou/Resources"),
-                      "Resources 目录必须整体入包（yts_index.txt 随包分发）")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: Self.projectRoot() + "/TingYou/Resources/yts_index.txt"),
-                      "yts_index.txt 资源文件必须在场（16,671 条本地索引）")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Self.projectRoot() + "/TingYou/Services/YitingshuAdapter.swift"),
+                      "YitingshuAdapter.swift 必须删除（v2.0.1 死代码清理）")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Self.projectRoot() + "/TingYou/Resources/yts_index.txt"),
+                      "yts_index.txt 资源须随易听书下架删除")
     }
 
     // MARK: - 版本
@@ -86,10 +76,10 @@ final class Build50FeatureTests: XCTestCase {
     /// Build29RegressionTests 守卫；此处复核 Info.plist）。
     func testBuild50Version() throws {
         let plist = try Self.loadSource("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>64</string>"),
-                      "Info.plist CFBundleVersion 必须为 64")
-        XCTAssertTrue(plist.contains("<string>2.0.0</string>"),
-                      "Info.plist CFBundleShortVersionString 维持 2.0.0")
+        XCTAssertTrue(plist.contains("<string>65</string>"),
+                      "Info.plist CFBundleVersion 必须为 65")
+        XCTAssertTrue(plist.contains("<string>2.0.1</string>"),
+                      "Info.plist CFBundleShortVersionString 维持 2.0.1")
     }
 
     // MARK: - 工具

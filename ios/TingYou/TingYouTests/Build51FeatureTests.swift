@@ -33,9 +33,8 @@ final class Build51FeatureTests: XCTestCase {
         let searcher = B51FakeSearcher()
         searcher.results = [
             SourceRegistry.TINGYOU: [Self.album(1, "听友书", src: SourceRegistry.TINGYOU)],
-            SourceRegistry.YITINGSHU: [Self.album(3, "易听书", src: SourceRegistry.YITINGSHU)],
         ]
-        // B站模拟「挂住 30s」（弱网 / 站点慢响应）
+        // v2.0.1 易听书下架：B站模拟「挂住 30s」（弱网 / 站点慢响应）
         searcher.delayBySource[SourceRegistry.BILI] = 30_000_000_000
 
         let start = Date()
@@ -44,8 +43,8 @@ final class Build51FeatureTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
 
         XCTAssertLessThan(elapsed, 3.0, "单源 30s 挂起不得拖住整轮（护栏生效），实测 \(elapsed)s")
-        XCTAssertEqual(outcome.albums.map(\.title), ["听友书", "易听书"],
-                       "其余源结果必须照常产出，且仍按固定序拼接")
+        XCTAssertEqual(outcome.albums.map(\.title), ["听友书"],
+                       "v2.0.1 两源基准：其余源结果照常产出，且仍按固定序拼接")
         XCTAssertEqual(outcome.failedSourceNames, ["B站"], "超时源按失败源如实透出")
         XCTAssertFalse(outcome.allFailed, "只有一源超时不算整体失败")
     }
@@ -60,7 +59,6 @@ final class Build51FeatureTests: XCTestCase {
         let searcher = B51FakeSearcher()
         searcher.results = [SourceRegistry.TINGYOU: [Self.album(1, "听友书", src: SourceRegistry.TINGYOU)]]
         searcher.delayBySource[SourceRegistry.BILI] = 30_000_000_000
-        searcher.delayBySource[SourceRegistry.YITINGSHU] = 30_000_000_000
 
         // 收集所有 partial（MainActor 回调，用锁保护计数）
         final class Box: @unchecked Sendable {
@@ -87,7 +85,8 @@ final class Build51FeatureTests: XCTestCase {
     /// 单源超时的默认值是 3s（质检给出的护栏值），易听书 live 探测另设 2s
     func testTimeoutBudgetConstants() {
         XCTAssertEqual(AggregateSearcher.perSourceTimeout, .seconds(3), "单源护栏必须是 3s")
-        XCTAssertEqual(YitingshuAdapter.liveSearchTimeout, .seconds(2), "易听书 live 探测必须单独 2s 上限")
+        XCTAssertFalse(SourceEnabledStore.searchSources.contains("yitingshu"),
+                       "v2.0.1 易听书下架，不得参与搜索（原 2s live 探测随适配器删除）")
     }
 
     // MARK: - 音源残留（属「去掉多余音源」主题）
@@ -117,16 +116,16 @@ final class Build51FeatureTests: XCTestCase {
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("tingyou.fm"))
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"))
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("api.bilibili.com"))
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"))
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"))
-        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("xmcdn.com"), "易听书未整域放行 xmcdn.com")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"), "易听书已下架（v2.0.1）")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"), "易听书已下架（v2.0.1）")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("xmcdn.com"), "fail-closed：整域永不放行")
     }
 
     /// 版本升位：b51 双处一致（project.yml 由 Build29 守卫，此处复核 Info.plist）
     func testBuild51Version() throws {
         let plist = try Self.source("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>64</string>"), "Info.plist CFBundleVersion 必须为 64")
-        XCTAssertTrue(plist.contains("<string>2.0.0</string>"), "CFBundleShortVersionString 维持 2.0.0")
+        XCTAssertTrue(plist.contains("<string>65</string>"), "Info.plist CFBundleVersion 必须为 65")
+        XCTAssertTrue(plist.contains("<string>2.0.1</string>"), "CFBundleShortVersionString 维持 2.0.1")
     }
 
     // MARK: - 工具

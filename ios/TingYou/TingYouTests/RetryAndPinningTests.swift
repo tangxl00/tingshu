@@ -316,7 +316,7 @@ final class RetryAndPinningTests: XCTestCase {
     func testAllowlistExactDomains() {
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"), "听友FM 文件域仍在役")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("imge.kugou.com"), "封面域仍在役")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"), "易听书站必须放行")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"), "易听书已下架（v2.0.1），域名须摘除")
         // 已下架源（听十五 / 书音FM 及其图床音频域）必须摘除
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("m.ting15.com"), "听十五已下架")
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("api.aikeu.com"), "书音FM 图床已下架")
@@ -324,12 +324,13 @@ final class RetryAndPinningTests: XCTestCase {
         // 精确域名的子域不在白名单内（仅后缀域支持子域）
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("x.file.hgeuz.cn"))
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("sub.www.yitingshu.com"))
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"), "易听书音频 CDN 须摘除")
     }
 
     func testAllowlistCaseInsensitive() {
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("API.TINGYOU.FM"))
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("WWW.YITINGSHU.COM"))
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("AOD.COS.TX.XMCDN.COM"))
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("WWW.YITINGSHU.COM"), "易听书已下架")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("AOD.COS.TX.XMCDN.COM"), "易听书已下架")
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("EVIL.TINGYOU.FM.EVIL.COM"))
         // build 51：已下架源的大小写变体同样不得放行
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("WWW.TING08.COM"), "听吧已下架")

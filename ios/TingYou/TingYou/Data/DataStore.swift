@@ -131,7 +131,6 @@ final class SourceEnabledStore {
     static let searchSources: [String] = [
         SourceRegistry.TINGYOU,
         SourceRegistry.BILI,
-        SourceRegistry.YITINGSHU,
     ]
 
     func isEnabled(_ src: String) -> Bool {

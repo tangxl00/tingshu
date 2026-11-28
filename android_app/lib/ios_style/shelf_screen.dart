@@ -226,45 +226,16 @@ class _ShelfScreenState extends State<ShelfScreen> {
     final store = context.watch<LocalStore>();
     return Scaffold(
       appBar: AppBar(
-        // v2.0.0：去掉顶部大标题，内容整体上移
+        // v2.0.1：顶部留白减半（toolbarHeight 56→28）
+        toolbarHeight: 28,
         title: const Text(''),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              switch (value) {
-                case 'list':
-                  setState(() => _layout = 0);
-                  break;
-                case 'grid':
-                  setState(() => _layout = 1);
-                  break;
-                case 'local':
-                  _pickLocalFiles();
-                  break;
-                case 'online':
-                  _showOnlineImport();
-                  break;
-                case 'imported':
-                  _showImportedBooks();
-                  break;
-              }
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'list', child: Text('列表')),
-              const PopupMenuItem(value: 'grid', child: Text('九宫格')),
-              const PopupMenuDivider(),
-              const PopupMenuItem(value: 'local', child: Text('本地导入')),
-              const PopupMenuItem(value: 'online', child: Text('在线导入')),
-              const PopupMenuItem(value: 'imported', child: Text('导入书籍')),
-            ],
-            icon: const Icon(Icons.more_horiz),
-          ),
-        ],
       ),
       body: Column(
         children: [
+          // v2.0.1 · 需求 4：书架布局对齐 iOS——分段控件与「更多」菜单同一行，
+          // 纵向 padding 8（iOS .padding(.vertical, 8) 口径）。
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Row(
               children: [
                 Expanded(
@@ -281,6 +252,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
                     onSelectionChanged: (s) => setState(() => _tab = s.first),
                   ),
                 ),
+                const SizedBox(width: 4),
+                _moreMenu(),
               ],
             ),
           ),
@@ -289,6 +262,41 @@ class _ShelfScreenState extends State<ShelfScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// v2.0.1 · 需求 4：原 AppBar actions 的「更多」菜单迁到分段控件同一行，
+  /// 与 iOS ShelfScreen 的 Picker + ellipsis.circle 布局对齐。
+  Widget _moreMenu() {
+    return PopupMenuButton<String>(
+      onSelected: (value) {
+        switch (value) {
+          case 'list':
+            setState(() => _layout = 0);
+            break;
+          case 'grid':
+            setState(() => _layout = 1);
+            break;
+          case 'local':
+            _pickLocalFiles();
+            break;
+          case 'online':
+            _showOnlineImport();
+            break;
+          case 'imported':
+            _showImportedBooks();
+            break;
+        }
+      },
+      itemBuilder: (_) => [
+        const PopupMenuItem(value: 'list', child: Text('列表')),
+        const PopupMenuItem(value: 'grid', child: Text('九宫格')),
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: 'local', child: Text('本地导入')),
+        const PopupMenuItem(value: 'online', child: Text('在线导入')),
+        const PopupMenuItem(value: 'imported', child: Text('导入书籍')),
+      ],
+      icon: const Icon(Icons.more_horiz),
     );
   }
 
@@ -338,16 +346,29 @@ class _ShelfScreenState extends State<ShelfScreen> {
           key: ValueKey(f.key),
           background: Container(color: Colors.red),
           onDismissed: (_) => store.removeFavorite(f.key),
+          // v2.0.1 · 需求 4：对齐 iOS FavoriteRow——封面 60 + 标题 / 作者 / 进度三行。
           child: ListTile(
             key: ValueKey('favorite_row_$i'),
-            leading: CoverImage(url: f.coverUrl, size: 56),
+            leading: CoverImage(url: f.coverUrl, size: 60),
             title: Text(f.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-            subtitle: Text(
-              history == null
-                  ? '未开始'
-                  : '${history.chapterProgressText} · 已播 ${history.percent}%',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (f.author != null && f.author!.isNotEmpty)
+                  Text(f.author!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12)),
+                Text(
+                  history == null
+                      ? '未开始'
+                      : '${history.chapterProgressText} · 已播 ${history.percent}%',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ],
             ),
             onTap: () => _openAlbum(f.toAlbum()),
           ),
@@ -403,12 +424,25 @@ class _ShelfScreenState extends State<ShelfScreen> {
                 key: ValueKey('${h.key}-${h.updatedAt}'),
                 background: Container(color: Colors.red),
                 onDismissed: (_) => store.deleteHistory(h.key),
+                // v2.0.1 · 需求 4：对齐 iOS HistoryRow——封面 60 + 标题 / 章节 / 进度三行。
                 child: ListTile(
-                  leading: CoverImage(url: h.coverUrl, size: 56),
+                  leading: CoverImage(url: h.coverUrl, size: 60),
                   title: Text(h.albumTitle,
                       maxLines: 1, overflow: TextOverflow.ellipsis),
-                  subtitle: Text('${h.chapterProgressText} · 已播 ${h.percent}%',
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(h.chapterTitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12)),
+                      Text('${h.chapterProgressText} · 已播 ${h.percent}%',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11)),
+                    ],
+                  ),
                   onTap: () => _resumeHistory(h),
                 ),
               );

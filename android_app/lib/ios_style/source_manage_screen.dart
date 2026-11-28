@@ -25,7 +25,6 @@ class _SourceManageScreenState extends State<SourceManageScreen> {
   static const _rows = <({String id, String name, String? note})>[
     (id: SourceRegistry.tingyou, name: '听友FM', note: null),
     (id: SourceRegistry.bili, name: 'B站', note: null),
-    (id: SourceRegistry.yitingshu, name: '易听书', note: null),
     (
       id: SourceRegistry.importSource,
       name: '导入',
@@ -70,8 +69,6 @@ class _SourceManageScreenState extends State<SourceManageScreen> {
     switch (id) {
       case SourceRegistry.bili:
         return 'hot';
-      case SourceRegistry.yitingshu:
-        return '1';
       default:
         return 'recommend';
     }

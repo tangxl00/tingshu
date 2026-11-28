@@ -74,8 +74,8 @@ class _MineScreenState extends State<MineScreen> {
   Widget build(BuildContext context) {
     final store = context.watch<LocalStore>();
     return Scaffold(
-      // v2.0.0：去掉顶部大标题，内容整体上移
-      appBar: AppBar(title: const Text('')),
+      // v2.0.1：顶部留白减半（toolbarHeight 56→28）
+      appBar: AppBar(toolbarHeight: 28, title: const Text('')),
       body: ListView(
         children: [
           Padding(

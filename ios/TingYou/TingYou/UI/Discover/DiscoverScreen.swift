@@ -82,7 +82,7 @@ struct DiscoverScreen: View {
         NavigationStack {
             VStack(spacing: 0) {
                 // Search bar
-                HStack(spacing: 8) {
+                HStack(spacing: 12) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
                     // build 48 · 需求 1：搜索框抽为叶子视图——焦点态的「读」收敛
@@ -106,15 +106,16 @@ struct DiscoverScreen: View {
                         }
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 18)
                 // build 46 · 反馈 2（布局）：搜索栏内外纵向 padding 8 → 4——
                 // 压缩「发现」大标题与搜索栏、搜索栏与历史区之间的留白
                 //（真机反馈：搜索框整体上移、压缩顶部空白）。
-                .padding(.vertical, 4)
+                // v2.0.1 · 需求 3：搜索框留白与间距放大 1.5 倍（4→6 / 12→18 / 圆角 10→14）
+                .padding(.vertical, 6)
                 .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
                 .padding(.horizontal)
-                .padding(.vertical, 4)
+                .padding(.vertical, 6)
                 // build 45 · 反馈 4：此前的「搜索栏容器 simultaneousGesture +
                 // 间距区 onTapGesture」两处局部收焦挂载已删除——全局收键盘改走
                 // window 级 UIKit recognizer（GlobalKeyboardDismiss，

@@ -3,10 +3,9 @@
 class SourceRegistry {
   static const String tingyou = 'tingyou';
   static const String bili = 'bili';
-  static const String yitingshu = 'yitingshu';
   static const String importSource = 'import';
 
-  static const List<String> searchSources = [tingyou, bili, yitingshu];
+  static const List<String> searchSources = [tingyou, bili];
 
   static String displayName(String src) {
     switch (src) {
@@ -14,8 +13,6 @@ class SourceRegistry {
         return '听友FM';
       case bili:
         return 'B站';
-      case yitingshu:
-        return '易听书';
       case importSource:
         return '导入';
       default:
@@ -49,17 +46,6 @@ class DiscoverCatalog {
       DiscoverCategory('mystery', '悬疑推理', keyword: '悬疑推理有声小说', order: 'totalrank'),
       DiscoverCategory('xuanhuan', '玄幻仙侠', keyword: '玄幻仙侠有声小说', order: 'totalrank'),
       DiscoverCategory('classic', '名著悦读', keyword: '名著有声书', order: 'totalrank'),
-    ],
-    SourceRegistry.yitingshu: [
-      DiscoverCategory('1', '言情'),
-      DiscoverCategory('2', '武侠'),
-      DiscoverCategory('3', '悬疑'),
-      DiscoverCategory('4', '历史'),
-      DiscoverCategory('5', '军事'),
-      DiscoverCategory('6', '评书'),
-      DiscoverCategory('7', '相声小品'),
-      DiscoverCategory('8', '百家讲坛'),
-      DiscoverCategory('9', '商业财经'),
     ],
   };
 

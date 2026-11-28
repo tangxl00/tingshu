@@ -175,7 +175,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        // v2.0.0：去掉顶部大标题，内容整体上移
+        // v2.0.1：顶部留白减半（toolbarHeight 56→28）
+        toolbarHeight: 28,
         title: const Text(''),
         backgroundColor: Theme.of(context).colorScheme.surface,
       ),

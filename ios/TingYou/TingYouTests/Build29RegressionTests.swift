@@ -97,9 +97,9 @@ final class Build29RegressionTests: XCTestCase {
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"), "听友FM 文件域仍在役")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("tingyou.fm"), "听友FM 旧白名单不得丢失")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("guoguo.org.cn"), "guoguo 旧白名单不得丢失")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"), "易听书站必须放行")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"), "易听书音频 CDN 必须放行")
-        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("imagev2.xmcdn.com"), "易听书封面域必须放行")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.yitingshu.com"), "易听书已下架（v2.0.1），域名须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"), "易听书音频 CDN 须摘除")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("imagev2.xmcdn.com"), "易听书封面域须摘除")
     }
 
     // MARK: - R8 · 导入书数据模型对既有源仍正常读写（meta 字段 lightweight migration）
@@ -124,6 +124,8 @@ final class Build29RegressionTests: XCTestCase {
         // build 45 · 反馈 3：悦听下架——isKnown 翻转、显示名回落原始 id（同 ting15/mekui/ting59 口径）
         XCTAssertFalse(SourceRegistry.isKnown(src: "ytysxs"), "悦听已下架，不应再注册为已知源")
         XCTAssertEqual(SourceRegistry.displayName(src: "ytysxs"), "ytysxs", "悦听下架后显示名回落原始 id")
+        XCTAssertFalse(SourceRegistry.isKnown(src: "yitingshu"), "易听书已下架（v2.0.1）")
+        XCTAssertEqual(SourceRegistry.displayName(src: "yitingshu"), "yitingshu", "易听书下架后显示名回落原始 id")
         // build 37 · 反馈 1：听十五/书音FM 下架——不再注册，显示名回落原始 id
         XCTAssertFalse(SourceRegistry.isKnown(src: "ting15"), "听十五已下架，不应再注册为已知源")
         XCTAssertFalse(SourceRegistry.isKnown(src: "mekui"), "书音FM 已下架，不应再注册为已知源")
@@ -146,9 +148,9 @@ final class Build29RegressionTests: XCTestCase {
         XCTAssertNil(SourceRegistry.configOf(src: "mekui"), "书音FM 已下架，config 不得残留")
         XCTAssertNil(SourceRegistry.configOf(src: "bili"), "B站不应进入 msrcSources")
         XCTAssertNil(SourceRegistry.configOf(src: "ting59"), "ting59 不应进入 msrcSources")
-        // build 50：易听书注册进 MSRC（对齐 PC 三源基准），注册表不再为空
-        XCTAssertNotNil(SourceRegistry.msrcSources[SourceRegistry.YITINGSHU], "易听书应注册进 MSRC")
-        XCTAssertEqual(SourceRegistry.msrcSources.count, 1, "MSRC 仅易听书一个源（bili 走专用适配器不进 MSRC）")
+        // v2.0.1：易听书下架，MSRC 注册表清空
+        XCTAssertNil(SourceRegistry.msrcSources["yitingshu"], "易听书已下架，config 不得残留")
+        XCTAssertEqual(SourceRegistry.msrcSources.count, 0, "MSRC 注册表应为空")
     }
 
     // MARK: - 版本号断言
@@ -174,10 +176,10 @@ final class Build29RegressionTests: XCTestCase {
             XCTFail("project.yml 不可读：\(ymlPath)")
             return
         }
-        XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "2.0.0",
-                       "project.yml MARKETING_VERSION 必须为 2.0.0（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "64",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 64（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "2.0.1",
+                       "project.yml MARKETING_VERSION 必须为 2.0.1（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "65",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 65（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40

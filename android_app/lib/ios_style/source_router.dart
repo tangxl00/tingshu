@@ -10,7 +10,6 @@ import '../services/bili_api.dart';
 import 'models.dart';
 import 'source_registry.dart';
 import 'tingyou_api.dart';
-import 'yitingshu_source.dart';
 
 class AggregateOutcome {
   final List<AppAlbum> albums;
@@ -29,16 +28,13 @@ class AggregateOutcome {
 class SourceRouter {
   SourceRouter({
     TingYouApi? tingyou,
-    YitingshuSource? yitingshu,
     BiliApi? bili,
     List<ImportedBook> Function()? importedBooks,
   })  : _tingyou = tingyou ?? TingYouApi(),
-        _yitingshu = yitingshu ?? YitingshuSource(),
         _bili = bili ?? BiliApi.instance,
         _importedBooks = importedBooks;
 
   final TingYouApi _tingyou;
-  final YitingshuSource _yitingshu;
   final BiliApi _bili;
   final List<ImportedBook> Function()? _importedBooks;
 
@@ -75,8 +71,6 @@ class SourceRouter {
       case SourceRegistry.bili:
         final books = await _bili.search(keyword);
         return books.map(_albumFromBili).toList();
-      case SourceRegistry.yitingshu:
-        return _yitingshu.search(keyword);
       case SourceRegistry.importSource:
         final kw = keyword.trim().toLowerCase();
         return (_importedBooks?.call() ?? const <ImportedBook>[])
@@ -128,10 +122,6 @@ class SourceRouter {
     switch (album.source) {
       case SourceRegistry.tingyou:
         return _tingyou.detail(album.albumId);
-      case SourceRegistry.yitingshu:
-        final id = album.detailPath;
-        if (id == null || id.isEmpty) return null;
-        return _yitingshu.albumDetail(id);
       case SourceRegistry.bili:
         final id = album.detailPath;
         if (id == null || id.isEmpty) return null;
@@ -154,10 +144,6 @@ class SourceRouter {
     switch (album.source) {
       case SourceRegistry.tingyou:
         return _tingyou.chapters(album.albumId);
-      case SourceRegistry.yitingshu:
-        final id = album.detailPath;
-        if (id == null || id.isEmpty) return const [];
-        return _yitingshu.chapters(id);
       case SourceRegistry.bili:
         final bvid = album.detailPath;
         if (bvid == null || bvid.isEmpty) return const [];
@@ -202,8 +188,6 @@ class SourceRouter {
           items: books.map(_albumFromBili).toList(),
           hasMore: books.length >= 20,
         );
-      case SourceRegistry.yitingshu:
-        return _yitingshu.category(categoryId, page: page);
       default:
         return (items: const <AppAlbum>[], hasMore: false);
     }
@@ -245,11 +229,6 @@ class SourceRouter {
             'User-Agent': BiliEndpoints.userAgent,
           },
         );
-      case SourceRegistry.yitingshu:
-        final id = album.detailPath;
-        if (id == null || id.isEmpty) throw ApiException('易听书书号缺失');
-        final url = await _yitingshu.playUrl(id, chapter.index);
-        return ResolvedAudio(url: url);
       case SourceRegistry.importSource:
         final uri = chapter.uri;
         if (uri == null || uri.isEmpty) throw ApiException('导入章节没有地址');
