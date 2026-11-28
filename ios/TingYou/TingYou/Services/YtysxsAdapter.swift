@@ -23,7 +23,7 @@ actor YtysxsAdapter: Sendable {
     /// 站点验证/反爬拦截特征（命中即视为「源暂不可用」，不做自动绕过）。
     static let antibotPatterns = [
         "搜索驗證", "搜索验证", "安全检查", "安全验证",
-        "cf-turnstile", "be_captcha_token", "滑动验证", "滑块验证",
+        "cf-turnstile", "滑动验证", "滑块验证",
     ]
 
     /// 悦听源暂不可用（站点验证拦截 / 非 JSON 响应）。UI 按 LocalizedError 文案透出。

@@ -75,7 +75,7 @@ class YtysxsSource {
 
   static const List<String> antibotPatterns = [
     '搜索驗證', '搜索验证', '安全检查', '安全验证',
-    'cf-turnstile', 'be_captcha_token', '滑动验证', '滑块验证',
+    'cf-turnstile', '滑动验证', '滑块验证',
   ];
 
   final Dio _dio;

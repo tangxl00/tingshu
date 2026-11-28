@@ -123,8 +123,8 @@ final class Build50FeatureTests: XCTestCase {
         let plist = try Self.loadSource("TingYou/Info.plist")
         XCTAssertTrue(plist.contains("<string>66</string>"),
                       "Info.plist CFBundleVersion 必须为 66")
-        XCTAssertTrue(plist.contains("<string>2.0.1</string>"),
-                      "Info.plist CFBundleShortVersionString 维持 2.0.1")
+        XCTAssertTrue(plist.contains("<string>2.0.2</string>"),
+                      "Info.plist CFBundleShortVersionString 维持 2.0.2")
     }
 
     // MARK: - 工具
