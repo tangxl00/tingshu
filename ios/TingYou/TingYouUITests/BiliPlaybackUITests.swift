@@ -101,13 +101,22 @@ final class BiliPlaybackUITests: XCTestCase {
         field.tap()
         XCTAssertTrue(app.keyboards.count > 0, "用例 G 前置失败：点击搜索框键盘未弹起")
 
-        // 多点位：搜索栏上方 / 分类行区 / 列表空白区（若命中某行则同时验证导航）
+        // v2.0.0：顶部大标题移除后，原先顶部 8% 的归一化点位落在状态栏/导航栏，
+        // window 级收键盘 recognizer 收不到该触摸。改用与已通过的
+        // DiscoverNavigationUITests.testG 同锚的「搜索框上沿上方 10pt」绝对坐标，
+        // 保留「搜索栏上方」覆盖语义；其余两点继续用归一化坐标。
+        let f = field.frame
+        let aboveSearch = max(f.minY - 10, 2)
+        let points: [CGVector] = [
+            CGVector(dx: f.midX, dy: aboveSearch),
+            CGVector(dx: 0.5, dy: 0.20),
+            CGVector(dx: 0.5, dy: 0.72),
+        ]
         // infra 抖动容错：background assertion 失败（tap 层 infra，非键盘断言）
         // 时重开 app、重新聚焦搜索框、该点位重试一次；仍失败才如实红。
-        let points = [(0.5, 0.08), (0.5, 0.20), (0.5, 0.72)]
-        for (nx, ny) in points {
+        for pt in points {
             infraFlakeDetected = false
-            app.coordinate(withNormalizedOffset: CGVector(dx: nx, dy: ny)).tap()
+            tapPoint(pt, in: app)
             if infraFlakeDetected {
                 app.terminate()
                 app = XCUIApplication()
@@ -117,17 +126,23 @@ final class BiliPlaybackUITests: XCTestCase {
                               "用例 G infra 重试前置失败：重启后搜索框未出现")
                 field.tap()
                 infraFlakeDetected = false
-                app.coordinate(withNormalizedOffset: CGVector(dx: nx, dy: ny)).tap()
+                tapPoint(pt, in: app)
             }
             let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 0"),
                                                  object: app.keyboards)
             let result = XCTWaiter.wait(for: [gone], timeout: 5)
             XCTAssertTrue(result == .completed,
-                          "用例 G 失败：点 (\(nx), \(ny)) 后 5s 内键盘未收起——全局收键盘覆盖空洞（若刚发生 background assertion 重试仍红，请结合 C/旧 G 判定是否纯 infra）")
+                          "用例 G 失败：点 (\(pt.dx), \(pt.dy)) 后 5s 内键盘未收起——全局收键盘覆盖空洞")
         }
 
         // 导航哨兵：键盘收起后点书必须仍能进详情（recognizer 不吞事件）
-        if app.staticTexts["album_screen_title"].exists { app.navigationBars.buttons.firstMatch.tap() }
+        // v2.0.0：多点位可能命中书行/播放器，先确保回到发现页再做导航哨兵。
+        if app.staticTexts["album_screen_title"].exists {
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+        if app.buttons["完成"].exists { app.buttons["完成"].tap() }
+        if !field.exists { app.tabBars.buttons["发现"].tap() }
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "用例 G 哨兵前置失败：未回到发现页")
         field.tap()
         field.typeText("水浒\n")
         let row = app.descendants(matching: .any)
@@ -143,4 +158,14 @@ final class BiliPlaybackUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["album_screen_title"].waitForExistence(timeout: 10),
                       "用例 G 失败：收键盘后点书行未进详情——recognizer 吞事件（A/B 哨兵同源回归）")
     }
+
+    /// v2.0.0：归一化坐标（dx、dy ≤ 1）与绝对像素坐标的统一点击入口。
+    private func tapPoint(_ pt: CGVector, in app: XCUIApplication) {
+        if pt.dx <= 1 && pt.dy <= 1 {
+            app.coordinate(withNormalizedOffset: pt).tap()
+        } else {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(pt).tap()
+        }
+    }
+
 }
