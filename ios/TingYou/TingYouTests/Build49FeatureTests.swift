@@ -237,10 +237,10 @@ final class Build49FeatureTests: XCTestCase {
     ///（build 58 升位；project.yml 两处在 Build29RegressionTests 已守卫）。
     func testBuild49Version() throws {
         let plist = try Self.source("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>59</string>"),
-                      "Info.plist CFBundleVersion 必须为 59")
-        XCTAssertTrue(plist.contains("<string>1.4.4</string>"),
-                      "Info.plist CFBundleShortVersionString 维持 1.4.4")
+        XCTAssertTrue(plist.contains("<string>61</string>"),
+                      "Info.plist CFBundleVersion 必须为 61")
+        XCTAssertTrue(plist.contains("<string>1.4.6</string>"),
+                      "Info.plist CFBundleShortVersionString 维持 1.4.6")
     }
 
     // MARK: - 工具

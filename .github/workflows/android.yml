@@ -3,12 +3,13 @@ name: Android APK
 on:
   push:
     branches: [main, "android/**", "feat/android-**"]
+    tags: ['v*']
     paths:
       - 'android_app/**'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 defaults:
   run:
@@ -41,6 +42,29 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      # 可选：配置过签名密钥时用它构建，保证跨版本可覆盖安装。
+      # 未配置则沿用 debug 签名，仅用于本地验证，不建议作为长期更新源。
+      - name: Restore release signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            mkdir -p ../android/app
+            printf '%s' "$KEYSTORE_B64" | base64 -d > ../android/app/release.jks
+            cat > ../android/key.properties <<EOF
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=app/release.jks
+          EOF
+            echo "Release keystore restored"
+          else
+            echo "::warning::未配置签名密钥，本次使用 debug 签名；跨版本覆盖安装可能失败"
+          fi
+
       - name: Analyze (non-blocking)
         continue-on-error: true
         run: flutter analyze
@@ -61,3 +85,16 @@ jobs:
           path: artifacts/tingyou-android-release.apk
           if-no-files-found: error
           retention-days: 90
+
+      # 打 tag 时创建 Release 并附上 APK：App 内「检查更新」读取 latest release。
+      # release notes 由 GitHub 自动生成，直接作为弹窗里的更新说明展示。
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 听书 ${{ github.ref_name }}
+          generate_release_notes: true
+          files: artifacts/tingyou-android-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

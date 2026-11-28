@@ -1,8 +1,15 @@
 import SwiftUI
+import UIKit
 
 struct MineScreen: View {
     @Environment(\.appContainer) private var container
     @State private var showSourceManage = false
+    @State private var checkingUpdate = false
+    @State private var updateInfo: UpdateInfo?
+    @State private var showUpdateDialog = false
+    @State private var showDownloadURL = false
+    @State private var showingMessage = false
+    @State private var updateMessage = ""
 
     /// 展示版本号：动态读 Bundle 的 CFBundleShortVersionString / CFBundleVersion，
     /// 与 project.yml 构建设置永远同源，杜绝静态字面量漂移。
@@ -46,6 +53,26 @@ struct MineScreen: View {
                     }
                 }
 
+                Section("其他") {
+                    Button {
+                        Task { await checkUpdate() }
+                    } label: {
+                        HStack {
+                            Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
+                            Spacer()
+                            if checkingUpdate {
+                                ProgressView()
+                            } else {
+                                Text("当前 v\(UpdateInfo.currentVersion) · 对比 GitHub Release")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.pressable)
+                    .disabled(checkingUpdate)
+                }
+
                 Section("关于") {
                     HStack {
                         Text("版本")
@@ -58,6 +85,119 @@ struct MineScreen: View {
             }
             .navigationTitle("我的")
         }
+        .alert("检查更新", isPresented: $showingMessage) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(updateMessage)
+        }
+        .overlay {
+            if let info = updateInfo, showUpdateDialog {
+                updateDialog(info)
+            }
+        }
+    }
+
+    @MainActor
+    private func checkUpdate() async {
+        guard !checkingUpdate else { return }
+        checkingUpdate = true
+        defer { checkingUpdate = false }
+        do {
+            let info = try await AppUpdate.check()
+            updateInfo = info
+            if info.hasNewer {
+                showDownloadURL = false
+                showUpdateDialog = true
+            } else {
+                updateMessage = "已是最新版本"
+                showingMessage = true
+            }
+        } catch {
+            updateMessage = error.localizedDescription
+            showingMessage = true
+        }
+    }
+
+    @MainActor
+    private func openDownload(for info: UpdateInfo) {
+        showUpdateDialog = false
+        guard let url = URL(string: info.htmlUrl) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    private func updateDialog(_ info: UpdateInfo) -> some View {
+        ZStack {
+            Color.black.opacity(0.38).ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 0) {
+                Text("发现新版本")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(info.versionLine)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+
+                ScrollView {
+                    Text(info.changelog.isEmpty ? "暂无更新说明" : info.changelog)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(Color(uiColor: .secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .frame(maxHeight: 220)
+                .padding(.top, 14)
+
+                Button {
+                    withAnimation { showDownloadURL.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: showDownloadURL ? "chevron.down" : "chevron.right")
+                        Text("下载地址")
+                    }
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.top, 10)
+
+                if showDownloadURL {
+                    Text(info.htmlUrl)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
+                        .padding(.top, 4)
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        showUpdateDialog = false
+                    } label: {
+                        Text("稍后")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color(uiColor: .secondarySystemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    Button {
+                        openDownload(for: info)
+                    } label: {
+                        Text("前往下载")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.primary)
+                            .foregroundStyle(Color(uiColor: .systemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                }
+                .padding(.top, 18)
+            }
+            .padding(22)
+            .background(Color(uiColor: .systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 22))
+            .padding(.horizontal, 28)
+        }
+        .zIndex(100)
     }
 
     func formatTime(_ ms: Int64) -> String {

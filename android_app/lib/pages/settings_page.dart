@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/app_meta.dart';
 import '../core/storage/cache_store.dart';
 import '../core/theme/app_theme.dart';
+import '../services/app_update.dart';
 import '../services/auth_store.dart';
+import '../services/browser.dart';
 import '../services/device_service.dart';
 import '../widgets/tv_page_scaffold.dart';
 import 'login_page.dart';
@@ -19,6 +22,7 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool _loading = true;
   bool _ignoring = false;
+  bool _checkingUpdate = false;
 
   /// 缓存位置展示信息
   bool _cacheExternal = false;
@@ -64,6 +68,128 @@ class _SettingsPageState extends State<SettingsPage> {
     final gb = bytes / 1024 / 1024 / 1024;
     if (gb >= 1) return '${gb.toStringAsFixed(1)} GB';
     return '${(bytes / 1024 / 1024).toStringAsFixed(0)} MB';
+  }
+
+  Future<void> _checkUpdate() async {
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+    final result = await AppUpdate.check();
+    if (!mounted) return;
+    setState(() => _checkingUpdate = false);
+    if (result.error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.error!)),
+      );
+      return;
+    }
+    if (!result.configured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('尚未配置更新仓库')),
+      );
+      return;
+    }
+    if (!result.hasNewer) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已是最新版本')),
+      );
+      return;
+    }
+    _showUpdateDialog(result);
+  }
+
+  void _showUpdateDialog(UpdateResult result) {
+    var showUrl = false;
+    final date = result.publishedAt ?? '';
+    final versionLine =
+        'v${AppMeta.version} → v${result.latestVersion ?? ''}'
+        '${date.isEmpty ? '' : ' · $date'}';
+    final url = result.apkUrl ?? result.htmlUrl ?? AppMeta.repoUrl;
+
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setStateDialog) => AlertDialog(
+          backgroundColor: AppTheme.surface,
+          title: Text(
+            '发现新版本',
+            style: TextStyle(color: AppTheme.textMain, fontSize: 18),
+          ),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  versionLine,
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surfaceHigh,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    (result.changelog ?? '').isEmpty
+                        ? '暂无更新说明'
+                        : result.changelog!,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: AppTheme.textSub,
+                      height: 1.6,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                InkWell(
+                  onTap: () => setStateDialog(() => showUrl = !showUrl),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      children: [
+                        Icon(
+                          showUrl
+                              ? Icons.expand_less_rounded
+                              : Icons.play_arrow_rounded,
+                          size: 16,
+                          color: AppTheme.textSub,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '下载地址',
+                          style: TextStyle(
+                              fontSize: 12, color: AppTheme.textSub),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (showUrl)
+                  SelectableText(
+                    url,
+                    style: TextStyle(fontSize: 11, color: AppTheme.textHint),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('稍后', style: TextStyle(color: AppTheme.textSub)),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await Browser.open(url);
+              },
+              child: const Text('前往下载'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 选择缓存位置（内部存储 / 外部存储·SD 卡）
@@ -289,6 +415,32 @@ class _SettingsPageState extends State<SettingsPage> {
             trailing: Icon(Icons.chevron_right_rounded,
                 color: AppTheme.textHint),
             onTap: _pickCacheLocation,
+          ),
+          const SizedBox(height: 12),
+          _sectionTitle('其他'),
+          ListTile(
+            leading: Icon(Icons.system_update_alt_rounded,
+                color: AppTheme.accent),
+            title: Text(
+              '检查更新',
+              style: TextStyle(fontSize: 14, color: AppTheme.textMain),
+            ),
+            subtitle: Text(
+              '当前 v${AppMeta.version} · 对比 GitHub Release',
+              style: TextStyle(fontSize: 12, color: AppTheme.textSub),
+            ),
+            trailing: _checkingUpdate
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppTheme.accent,
+                    ),
+                  )
+                : Icon(Icons.chevron_right_rounded,
+                    color: AppTheme.textHint),
+            onTap: _checkingUpdate ? null : _checkUpdate,
           ),
         ],
       ),
