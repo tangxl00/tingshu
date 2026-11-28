@@ -16,7 +16,7 @@ struct UpdateInfo {
     /// 弹窗副标题：当前版本 → 最新版本 · 发布日期
     var versionLine: String {
         let current = Self.currentVersion
-        let latest = Self.displayVersion
+        let latest = displayVersion
         let date = publishedAt ?? ""
         return "v\(current) → v\(latest)\(date.isEmpty ? "" : " · \(date)")"
     }
