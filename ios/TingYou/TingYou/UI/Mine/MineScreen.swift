@@ -121,7 +121,9 @@ struct MineScreen: View {
     @MainActor
     private func openDownload(for info: UpdateInfo) {
         showUpdateDialog = false
-        guard let url = URL(string: info.htmlUrl) else { return }
+        // 优先跳 IPA 直链（浏览器下载后自签）；没有 IPA 时回退到 Release 页。
+        let target = info.ipaUrl ?? info.htmlUrl
+        guard let url = URL(string: target) else { return }
         UIApplication.shared.open(url)
     }
 
@@ -162,11 +164,30 @@ struct MineScreen: View {
                 .padding(.top, 10)
 
                 if showDownloadURL {
-                    Text(info.htmlUrl)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .textSelection(.enabled)
-                        .padding(.top, 4)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let ipaUrl = info.ipaUrl {
+                            Text("iOS 安装包（下载后需自签）")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                            Text(ipaUrl)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.tertiary)
+                                .textSelection(.enabled)
+                        }
+                        Text("Release 页面")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 2)
+                        Text(info.htmlUrl)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .textSelection(.enabled)
+                        Text("提示：iOS 安装包未签名，下载后请用自签工具（AltStore / Sideloadly / 爱思助手等）签名安装，或用个人开发者证书重签名。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 4)
+                    }
+                    .padding(.top, 4)
                 }
 
                 HStack(spacing: 12) {
@@ -182,7 +203,7 @@ struct MineScreen: View {
                     Button {
                         openDownload(for: info)
                     } label: {
-                        Text("前往下载")
+                        Text(info.ipaUrl == nil ? "前往下载" : "下载 iOS 安装包")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 12)
                             .background(Color.primary)

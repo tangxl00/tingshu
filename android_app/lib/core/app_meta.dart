@@ -6,7 +6,7 @@ class AppMeta {
   AppMeta._();
 
   static const String name = '听书';
-  static const String version = '1.2.7';
+  static const String version = '1.2.8';
 
   /// 副标题 / 一句话介绍
   static const String tagline = '免登录、无广告、专注收听的 B 站有声小说播放器';
