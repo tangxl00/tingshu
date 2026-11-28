@@ -18,6 +18,8 @@ enum PinnedDomainAllowlist {
         "biliapi.net",    // B站 API 备用域
         "akamaized.net",  // Akamai CDN 节点
         "hdslb.com",      // B站自建 CDN
+        "ytysxs.com",     // v2.0.2 悦听：站点页 / 详情 / playlist JSON / 封面
+        "ytysxs.top",     // v2.0.2 悦听：音频直链 mp3.ytysxs.top 与封面图床
     ]
 
     /// includeSubdomains = false（精确域）

@@ -10,25 +10,31 @@ import Foundation
 /// build 45 · 反馈 3：悦听有声书（ytysxs）下架（第 5 次同类下架，用户点名）——
 /// 路由 case、适配器装配、YtysxsAdapter 整体删除；存量 ytysxs 书走 default
 /// 分支抛 unsupportedURL（UI 层字符串兼容标注「源已下架」）。
+/// v2.0.2 · 悦听（ytysxs）重新接入：search/detail/chapters/discoverCategory 走
+/// YtysxsAdapter（本地索引 + 公开 JSON），playUrl 委托 PlaybackRepository 的 YTYSXS case。
 actor SourceRouter {
     private let apiClient: APIClient
     private let albumRepository: AlbumRepository
     private let biliAdapter: BiliAdapter
+    private let ytysxsAdapter: YtysxsAdapter
     let biliSearchApi: BiliSearchApi
     let playbackRepository: PlaybackRepository
 
     init(apiClient: APIClient,
          albumRepository: AlbumRepository? = nil,
          biliAdapter: BiliAdapter? = nil,
-         biliSearchApi: BiliSearchApi? = nil) {
+         biliSearchApi: BiliSearchApi? = nil,
+         ytysxsAdapter: YtysxsAdapter? = nil) {
         self.apiClient = apiClient
         self.albumRepository = albumRepository
             ?? AlbumRepository(apiClient: apiClient)
         self.biliAdapter = biliAdapter ?? BiliAdapter()
         self.biliSearchApi = biliSearchApi ?? BiliSearchApi(adapter: self.biliAdapter)
+        self.ytysxsAdapter = ytysxsAdapter ?? YtysxsAdapter(apiClient: apiClient)
         self.playbackRepository = PlaybackRepository(
             apiClient: apiClient,
-            biliAdapter: self.biliAdapter)
+            biliAdapter: self.biliAdapter,
+            ytysxsAdapter: self.ytysxsAdapter)
     }
 
     // MARK: - 搜索
@@ -41,6 +47,9 @@ actor SourceRouter {
         case SourceRegistry.BILI:
             let page = try await biliSearchApi.searchAudiobooks(keyword: keyword, page: 1)
             return page.items.map { Self.albumFromBili($0) }
+        case SourceRegistry.YTYSXS:
+            // v2.0.2：本地索引搜索，零网络——彻底规避站内搜索滑块验证。
+            return await ytysxsAdapter.search(keyword: keyword).map { Self.albumFromYtysxs($0) }
         default:
             throw URLError(.unsupportedURL)
         }
@@ -55,6 +64,15 @@ actor SourceRouter {
         case SourceRegistry.BILI:
             // B站不从此入口取详情；详情在导入环节通过 biliAdapter.videoInfo 获取
             throw URLError(.unsupportedURL)
+        case SourceRegistry.YTYSXS:
+            // v2.0.2：站点详情页解析 og:title/og:image/playlist 引用（带验证页检测）
+            let d = try await ytysxsAdapter.detail(albumId: albumId)
+            return Album(albumId: albumId, title: d.title, author: nil, teller: nil,
+                         coverUrl: d.cover, intro: d.intro,
+                         category: nil, categoryId: nil, type: nil, typeId: nil,
+                         status: nil, chapterCount: d.playlists.count, updatedAt: nil,
+                         playCount: nil, available: true,
+                         source: SourceRegistry.YTYSXS, detailPath: String(albumId))
         default:
             throw URLError(.unsupportedURL)
         }
@@ -78,6 +96,16 @@ actor SourceRouter {
             let pages = try await biliAdapter.playablePages(bvid: bvid).get()
             return pages.map {
                 Chapter(chapterId: $0.cid, index: $0.page - 1, title: $0.part, durationSec: nil)
+            }
+        case SourceRegistry.YTYSXS:
+            // v2.0.2：AudioIgniter playlist JSON → tracks；chapterId 用稳定序号（0 基）。
+            // 章节标题已含序号（第xxx集），UI 的 ChapterTitleFormatting 自动去重。
+            let tracks = try await ytysxsAdapter.chapters(albumId: albumId)
+            guard !tracks.isEmpty else {
+                throw YtysxsAdapter.YtysxsUnavailableError(detail: "站点未返回章节")
+            }
+            return tracks.enumerated().map { idx, t in
+                Chapter(chapterId: Int64(idx + 1), index: idx, title: t.title, durationSec: nil)
             }
         default:
             throw URLError(.unsupportedURL)
@@ -105,6 +133,10 @@ actor SourceRouter {
             let keyword = BiliCategories.ALL.first(where: { $0.key == categoryId })?.keywords.first ?? categoryId
             let result = try await biliSearchApi.searchAudiobooks(keyword: keyword, page: page)
             return (result.items.map { Self.albumFromBili($0) }, result.hasMore)
+        case SourceRegistry.YTYSXS:
+            // v2.0.2：本地索引按分类过滤（零网络，封面随索引携带）
+            let out = await ytysxsAdapter.categoryRows(categoryId: categoryId, page: page)
+            return (out.rows.map { Self.albumFromYtysxs($0) }, out.hasMore)
         default:
             throw URLError(.unsupportedURL) // 该源暂不支持发现页
         }
@@ -134,6 +166,16 @@ actor SourceRouter {
               status: nil, chapterCount: nil, updatedAt: nil,
               playCount: item.play, available: !item.paid,
               source: SourceRegistry.BILI, detailPath: item.bvid)
+    }
+
+    /// v2.0.2：本地索引行 → Album（albumId = 站点书 ID，detailPath 同为书 ID 字符串）。
+    private static func albumFromYtysxs(_ row: YtysxsAdapter.IndexRow) -> Album {
+        Album(albumId: row.bookId, title: row.title, author: nil, teller: nil,
+              coverUrl: row.cover, intro: nil,
+              category: row.category, categoryId: nil, type: nil, typeId: nil,
+              status: nil, chapterCount: nil, updatedAt: nil,
+              playCount: nil, available: true,
+              source: SourceRegistry.YTYSXS, detailPath: String(row.bookId))
     }
 
 }

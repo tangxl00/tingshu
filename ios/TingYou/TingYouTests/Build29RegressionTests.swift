@@ -12,8 +12,8 @@ final class Build29RegressionTests: XCTestCase {
     func testAggregateSearchSourcesIncludeLegacySources() {
         let sources = SourceEnabledStore.searchSources
         XCTAssertTrue(sources.contains(SourceRegistry.TINGYOU), "听友FM 必须在搜索源列表中")
-        // build 45 · 反馈 3：悦听（ytysxs）已下架——不得再出现在搜索源列表
-        XCTAssertFalse(sources.contains("ytysxs"), "悦听已下架，不得残留在搜索源列表中")
+        // v2.0.2 · 悦听（ytysxs）重新接入——应出现在搜索源列表
+        XCTAssertTrue(sources.contains("ytysxs"), "悦听已重新接入，须在搜索源列表中")
         // build 36 · 反馈 4：听吧（ting08）已下架——不得再出现在搜索源列表
         XCTAssertFalse(sources.contains("ting08"), "听吧已下架，不得残留在搜索源列表中")
         // build 37 · 反馈 1：听十五/书音FM 已下架——不得再出现在搜索源列表
@@ -90,9 +90,9 @@ final class Build29RegressionTests: XCTestCase {
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("mp3.aikeu.com"), "书音FM 音频域已下架，pin 白名单必须摘除")
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("shuyinfm.oss-cn-hangzhou.aliyuncs.com"),
                        "书音FM OSS 已下架，pin 白名单必须摘除")
-        // build 45 · 反馈 3：悦听下架——pin 白名单域名同步摘除（不再需要证书锁定）
-        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("www.ytysxs.com"), "悦听已下架，域名应已从 pin 白名单摘除")
-        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("mp3.ytysxs.top"), "悦听音频域名应已从 pin 白名单摘除")
+        // v2.0.2 · 悦听重新接入——站点与音频域名须在白名单（fail-closed 出站许可）
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.ytysxs.com"), "悦听站点域名须放行")
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("mp3.ytysxs.top"), "悦听音频域名须放行")
         // 在役三源仍须放行（收敛不能过头）
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("file.hgeuz.cn"), "听友FM 文件域仍在役")
         XCTAssertTrue(PinnedDomainAllowlist.isAllowed("tingyou.fm"), "听友FM 旧白名单不得丢失")
@@ -121,9 +121,9 @@ final class Build29RegressionTests: XCTestCase {
     func testSourceRegistryDisplayNamesUnchanged() {
         XCTAssertEqual(SourceRegistry.displayName(src: "tingyou"), "听友FM")
         XCTAssertFalse(SourceRegistry.isKnown(src: "ting08"), "听吧已下架，不应再注册为已知源")
-        // build 45 · 反馈 3：悦听下架——isKnown 翻转、显示名回落原始 id（同 ting15/mekui/ting59 口径）
-        XCTAssertFalse(SourceRegistry.isKnown(src: "ytysxs"), "悦听已下架，不应再注册为已知源")
-        XCTAssertEqual(SourceRegistry.displayName(src: "ytysxs"), "ytysxs", "悦听下架后显示名回落原始 id")
+        // v2.0.2 · 悦听重新接入——isKnown 真、显示名「悦听」
+        XCTAssertTrue(SourceRegistry.isKnown(src: "ytysxs"), "悦听已重新接入，须为已知源")
+        XCTAssertEqual(SourceRegistry.displayName(src: "ytysxs"), "悦听", "悦听显示名")
         XCTAssertFalse(SourceRegistry.isKnown(src: "yitingshu"), "易听书已下架（v2.0.1）")
         XCTAssertEqual(SourceRegistry.displayName(src: "yitingshu"), "yitingshu", "易听书下架后显示名回落原始 id")
         // build 37 · 反馈 1：听十五/书音FM 下架——不再注册，显示名回落原始 id
@@ -176,10 +176,10 @@ final class Build29RegressionTests: XCTestCase {
             XCTFail("project.yml 不可读：\(ymlPath)")
             return
         }
-        XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "2.0.1",
-                       "project.yml MARKETING_VERSION 必须为 2.0.1（升版本时同步改此断言）")
-        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "65",
-                       "project.yml CURRENT_PROJECT_VERSION 必须为 65（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "MARKETING_VERSION", in: yml), "2.0.2",
+                       "project.yml MARKETING_VERSION 必须为 2.0.2（升版本时同步改此断言）")
+        XCTAssertEqual(Self.yamlFirstValue(of: "CURRENT_PROJECT_VERSION", in: yml), "66",
+                       "project.yml CURRENT_PROJECT_VERSION 必须为 66（升版本时同步改此断言）")
     }
 
     /// build 39-41 · 回归守卫：键盘收焦与点书导航的形态约束（防 build 37/39/40

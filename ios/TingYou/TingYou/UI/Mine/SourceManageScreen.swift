@@ -112,6 +112,7 @@ final class SourceManageModel {
     let rows: [Row] = [
         Row(id: SourceRegistry.TINGYOU, name: "听友FM", note: nil),
         Row(id: SourceRegistry.BILI, name: "B站", note: nil),
+        Row(id: SourceRegistry.YTYSXS, name: "悦听", note: "本地索引"),
         Row(id: SourceRegistry.IMPORT, name: "导入", note: "不参与搜索与检测"),
     ]
 
@@ -167,6 +168,9 @@ final class SourceManageModel {
                         _ = try await router.discoverCategory(src: id, categoryId: "recommend", page: 1)
                     case SourceRegistry.BILI:
                         _ = try await router.discoverCategory(src: id, categoryId: "hot", page: 1)
+                    case SourceRegistry.YTYSXS:
+                        // v2.0.2：本地索引分类，零网络——恒可用（只要索引随包）
+                        _ = try await router.discoverCategory(src: id, categoryId: "yanqing", page: 1)
                     default:
                         return .failed
                     }

@@ -19,6 +19,7 @@ enum DiscoverCatalog {
     static let sourceOptions: [(id: String, name: String)] = [
         (SourceRegistry.TINGYOU, "听友FM"),
         (SourceRegistry.BILI, "B站"),
+        (SourceRegistry.YTYSXS, "悦听"),
     ]
 
     /// 不支持发现页的源（UI 显示提示而非空列表）
@@ -39,6 +40,20 @@ enum DiscoverCatalog {
             // v1.4.1 · B站 6 个分类（BiliCategories.ALL：关键词搜索口径，数据走
             // SourceRouter.discoverCategory 的 BILI case）
             return BiliCategories.ALL.map { DiscoverCategory(id: $0.key, name: $0.name) }
+        case SourceRegistry.YTYSXS:
+            // v2.0.2 · 悦听站点原始分类（分类数据走本地索引，零网络）
+            return [
+                DiscoverCategory(id: "yanqing", name: "言情"),
+                DiscoverCategory(id: "xianxia", name: "仙侠"),
+                DiscoverCategory(id: "xuanhuan", name: "玄幻"),
+                DiscoverCategory(id: "lishi", name: "历史"),
+                DiscoverCategory(id: "dushi", name: "都市"),
+                DiscoverCategory(id: "qihuan", name: "奇幻"),
+                DiscoverCategory(id: "wuxia", name: "武侠"),
+                DiscoverCategory(id: "kehuan", name: "科幻"),
+                DiscoverCategory(id: "junshi", name: "军事"),
+                DiscoverCategory(id: "kbly", name: "恐怖灵异"),
+            ]
         default:
             return []
         }

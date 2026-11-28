@@ -325,6 +325,10 @@ final class RetryAndPinningTests: XCTestCase {
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("x.file.hgeuz.cn"))
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("sub.www.yitingshu.com"))
         XCTAssertFalse(PinnedDomainAllowlist.isAllowed("aod.cos.tx.xmcdn.com"), "易听书音频 CDN 须摘除")
+        // v2.0.2 悦听重新接入：后缀域放行，但整域通配的仿冒域仍须 fail-closed
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("www.ytysxs.com"), "悦听站点域须放行")
+        XCTAssertTrue(PinnedDomainAllowlist.isAllowed("mp3.ytysxs.top"), "悦听音频域须放行")
+        XCTAssertFalse(PinnedDomainAllowlist.isAllowed("ytysxs.com.evil.com"), "仿冒域不得放行")
     }
 
     func testAllowlistCaseInsensitive() {

@@ -4,6 +4,9 @@ enum SourceRegistry {
     static let TINGYOU = "tingyou"
     static let BILI = "bili"
     static let IMPORT = "import"
+    /// v2.0.2：悦听有声书（ytysxs.com）重新接入——独立适配器（非 MSRC），
+    /// 搜索/分类走随包本地索引（规避站内搜索滑块），详情/章节/播放走站点公开页面与 JSON。
+    static let YTYSXS = "ytysxs"
 
     struct MsrcSourceConfig: Sendable {
         let id: String
@@ -35,6 +38,8 @@ enum SourceRegistry {
     /// v2.0.1 · 易听书（yitingshu）下架（用户点名）：常量摘除、msrcSources 清空、
     /// 适配器/路由/白名单/资源全链删除；存量书架 yitingshu 来源的书保留可读，
     /// 播放/详情按字符串兼容提示「源已下架」。MSRC 解析器与白名单纯函数保留供复用。
+    /// v2.0.2 · 悦听（ytysxs）重新接入：走独立 YtysxsAdapter（本地索引 + 公开 JSON），
+    /// 不进 MSRC 注册表（msrcSources 仍为空）；仅为 isKnown/displayName 注册新常量。
     static let msrcSources: [String: MsrcSourceConfig] = [:]
 
     static func displayName(src: String) -> String {
@@ -42,12 +47,13 @@ enum SourceRegistry {
         case TINGYOU: return "听友FM"
         case IMPORT: return "导入"
         case BILI: return "B站"
+        case YTYSXS: return "悦听"
         default: return msrcSources[src]?.name ?? src
         }
     }
 
     static func isKnown(src: String) -> Bool {
-        src == TINGYOU || msrcSources[src] != nil || src == BILI
+        src == TINGYOU || msrcSources[src] != nil || src == BILI || src == YTYSXS
     }
 
     static func configOf(src: String) -> MsrcSourceConfig? { msrcSources[src] }

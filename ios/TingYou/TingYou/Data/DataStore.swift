@@ -128,9 +128,11 @@ final class SourceEnabledStore {
     /// build 45 · 反馈 3：悦听有声书（ytysxs）下架（用户点名），3 → 2 源。
     /// build 50 · 任务 2（音源对齐 PC）：补入易听书（yitingshu），2 → 3 源
     ///（与 PC 端 v1.1.13 音源清单对齐：tingyou / bili / yitingshu）。
+    /// v2.0.2 · 悦听（ytysxs）重新接入，2 → 3 源（本地索引搜索，参与聚合）。
     static let searchSources: [String] = [
         SourceRegistry.TINGYOU,
         SourceRegistry.BILI,
+        SourceRegistry.YTYSXS,
     ]
 
     func isEnabled(_ src: String) -> Bool {

@@ -44,7 +44,7 @@ final class Build51FeatureTests: XCTestCase {
 
         XCTAssertLessThan(elapsed, 3.0, "单源 30s 挂起不得拖住整轮（护栏生效），实测 \(elapsed)s")
         XCTAssertEqual(outcome.albums.map(\.title), ["听友书"],
-                       "v2.0.1 两源基准：其余源结果照常产出，且仍按固定序拼接")
+                       "v2.0.2 三源基准：B站挂起不拖轮，听友结果照常产出")
         XCTAssertEqual(outcome.failedSourceNames, ["B站"], "超时源按失败源如实透出")
         XCTAssertFalse(outcome.allFailed, "只有一源超时不算整体失败")
     }
@@ -124,8 +124,8 @@ final class Build51FeatureTests: XCTestCase {
     /// 版本升位：b51 双处一致（project.yml 由 Build29 守卫，此处复核 Info.plist）
     func testBuild51Version() throws {
         let plist = try Self.source("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>65</string>"), "Info.plist CFBundleVersion 必须为 65")
-        XCTAssertTrue(plist.contains("<string>2.0.1</string>"), "CFBundleShortVersionString 维持 2.0.1")
+        XCTAssertTrue(plist.contains("<string>66</string>"), "Info.plist CFBundleVersion 必须为 66")
+        XCTAssertTrue(plist.contains("<string>2.0.2</string>"), "CFBundleShortVersionString 维持 2.0.2")
     }
 
     // MARK: - 工具

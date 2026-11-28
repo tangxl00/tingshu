@@ -25,6 +25,7 @@ class _SourceManageScreenState extends State<SourceManageScreen> {
   static const _rows = <({String id, String name, String? note})>[
     (id: SourceRegistry.tingyou, name: '听友FM', note: null),
     (id: SourceRegistry.bili, name: 'B站', note: null),
+    (id: SourceRegistry.ytysxs, name: '悦听', note: '本地索引'),
     (
       id: SourceRegistry.importSource,
       name: '导入',
@@ -69,6 +70,8 @@ class _SourceManageScreenState extends State<SourceManageScreen> {
     switch (id) {
       case SourceRegistry.bili:
         return 'hot';
+      case SourceRegistry.ytysxs:
+        return 'yanqing'; // v2.0.2：本地索引分类，零网络——恒可用
       default:
         return 'recommend';
     }

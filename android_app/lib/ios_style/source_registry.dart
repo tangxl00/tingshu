@@ -4,8 +4,10 @@ class SourceRegistry {
   static const String tingyou = 'tingyou';
   static const String bili = 'bili';
   static const String importSource = 'import';
+  /// v2.0.2：悦听有声书（ytysxs.com）重新接入——独立适配器 + 本地索引。
+  static const String ytysxs = 'ytysxs';
 
-  static const List<String> searchSources = [tingyou, bili];
+  static const List<String> searchSources = [tingyou, bili, ytysxs];
 
   static String displayName(String src) {
     switch (src) {
@@ -13,6 +15,8 @@ class SourceRegistry {
         return '听友FM';
       case bili:
         return 'B站';
+      case ytysxs:
+        return '悦听';
       case importSource:
         return '导入';
       default:
@@ -46,6 +50,19 @@ class DiscoverCatalog {
       DiscoverCategory('mystery', '悬疑推理', keyword: '悬疑推理有声小说', order: 'totalrank'),
       DiscoverCategory('xuanhuan', '玄幻仙侠', keyword: '玄幻仙侠有声小说', order: 'totalrank'),
       DiscoverCategory('classic', '名著悦读', keyword: '名著有声书', order: 'totalrank'),
+    ],
+    // v2.0.2 · 悦听站点原始分类（数据走本地索引，零网络）
+    SourceRegistry.ytysxs: [
+      DiscoverCategory('yanqing', '言情'),
+      DiscoverCategory('xianxia', '仙侠'),
+      DiscoverCategory('xuanhuan', '玄幻'),
+      DiscoverCategory('lishi', '历史'),
+      DiscoverCategory('dushi', '都市'),
+      DiscoverCategory('qihuan', '奇幻'),
+      DiscoverCategory('wuxia', '武侠'),
+      DiscoverCategory('kehuan', '科幻'),
+      DiscoverCategory('junshi', '军事'),
+      DiscoverCategory('kbly', '恐怖灵异'),
     ],
   };
 

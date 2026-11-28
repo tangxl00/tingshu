@@ -165,48 +165,42 @@ final class Build45FeedbackTests: XCTestCase {
 
     // MARK: - 反馈 3 · 悦听全链摘除
 
-    /// 摘除守卫：Ytysxs* 源文件必须不存在；主 target 不得残留任何
-    /// Ytysxs 类型/类名引用（小写 "ytysxs" 字符串仅允许出现在存量书
-    /// 兼容层：describePlaybackError 提示文案 + ShelfScreen kindLabel）。
-    func testYtysxsFullyRemovedGuard() throws {
+    /// v2.0.2 · 悦听重新接入守卫：YtysxsAdapter.swift 必须存在，且验证 WebView /
+    /// KeychainTokenStore 等「人工验证」链不得回归（用户确认方案：本地索引 + 明确降级，
+    /// 不做验证码识别/token 伪造/滑块模拟）。
+    func testYtysxsReintakeGuard() throws {
         let fm = FileManager.default
         let testDir = (#filePath as NSString).deletingLastPathComponent
         let projectDir = (testDir as NSString).deletingLastPathComponent
-        for gone in ["TingYou/Services/YtysxsAdapter.swift",
-                     "TingYou/UI/Components/YtysxsVerifyWebView.swift",
+        XCTAssertTrue(fm.fileExists(atPath: projectDir + "/TingYou/Services/YtysxsAdapter.swift"),
+                      "YtysxsAdapter.swift 必须存在（v2.0.2 悦听重新接入）")
+        XCTAssertTrue(fm.fileExists(atPath: projectDir + "/TingYou/Resources/ytysxs_index.txt"),
+                      "ytysxs_index.txt 本地索引必须随包（搜索/分类零网络）")
+        for gone in ["TingYou/UI/Components/YtysxsVerifyWebView.swift",
                      "TingYou/UI/Components/YtysxsVerifySheetState.swift",
                      "TingYou/Services/KeychainTokenStore.swift",
-                     "TingYouTests/YtysxsAdapterTests.swift",
                      "TingYouTests/YtysxsCookieMatchingTests.swift",
                      "TingYouTests/YtysxsVerifySheetStateTests.swift",
                      "TingYouTests/KeychainTokenStoreTests.swift"] {
             XCTAssertFalse(fm.fileExists(atPath: projectDir + "/" + gone),
-                           "\(gone) 必须已删除（悦听全链摘除）")
+                           "\(gone) 人工验证链不得回归（不绕过验证码）")
         }
-        // 主 target：Ytysxs 类名 / AntibotException / antibotKeyword 零残留
-        let enumFiles = try fm.contentsOfDirectory(atPath: projectDir + "/TingYou")
-        for dir in enumFiles where dir.hasSuffix(".swift") {
-            let raw = try String(contentsOfFile: projectDir + "/TingYou/" + dir, encoding: .utf8)
-            // 代码级判定（剔除整行注释）：注释里的「已删除」说明不算残留引用
-            let code = raw.split(separator: "\n")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.hasPrefix("//") }
-                .joined(separator: "\n")
-            XCTAssertFalse(code.contains("Ytysxs"), "\(dir) 不得残留 Ytysxs 类型引用（注释说明除外）")
-            XCTAssertFalse(code.contains("AntibotException"), "\(dir) 不得残留 AntibotException")
-        }
+        // 验证检测存在（抛错降级），但不得出现 WebView/token 伪造路径
+        let adapter = try String(contentsOfFile: projectDir + "/TingYou/Services/YtysxsAdapter.swift", encoding: .utf8)
+        let code = adapter.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.hasPrefix("//") }
+            .joined(separator: "\n")
+        XCTAssertTrue(code.contains("isAntibot"), "必须有验证页检测（命中即降级，不把验证页当数据）")
+        XCTAssertTrue(code.contains("YtysxsUnavailableError"), "必须有明确的不可用错误类型")
+        XCTAssertFalse(code.contains("be_captcha_token"), "不得携带/伪造验证 token")
+        XCTAssertFalse(code.contains("WKWebView"), "不得用 WebView 引导人工验证（合规底线）")
     }
 
-    /// 存量书兼容：悦听来源的书点击播放必须给出人话失效提示（不删用户数据）。
-    /// build 49 同步组长口径（远端 b48 守卫修正）：「悦听（已下线）」标注随
-    /// b48 书架导入列表整体删除而消失——改为断言导入列表声明级类型不存在。
-    func testLegacyYtysxsPlaybackErrorMessageGuard() {
+    /// 悦听来源书播放失败兜底：站点暂不可用时给人话降级提示（不删用户数据）。
+    func testYtysxsPlaybackErrorMessageGuard() {
         let pm = Self.loadSource("TingYou/Playback/PlaybackManager.swift")
-        XCTAssertTrue(pm.contains(#"source == "ytysxs""#), "describePlaybackError 必须识别存量悦听书")
-        XCTAssertTrue(pm.contains("悦听有声书源已下线"), "存量悦听书必须给人话失效提示（换源收听）")
-        let shelf = Self.loadSource("TingYou/UI/Shelf/ShelfScreen.swift")
-        // 否定断言用 `struct ` 声明级前缀——裸标识符会误中删除说明注释
-        XCTAssertFalse(shelf.contains("struct ImportedBookRow"), "导入行视图声明必须已删除（随导入列表移除）")
-        XCTAssertFalse(shelf.contains("struct ImportedBookGridItem"), "导入网格项声明必须已删除（随导入列表移除）")
+        XCTAssertTrue(pm.contains(#"source == "ytysxs""#), "describePlaybackError 必须识别悦听书")
+        XCTAssertTrue(pm.contains("悦听音源暂时不可用"), "悦听书播放失败必须给人话降级提示（重试或换源）")
     }
 }

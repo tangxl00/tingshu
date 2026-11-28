@@ -1862,11 +1862,11 @@ final class PlaybackManager: NSObject, @unchecked Sendable, AVAssetResourceLoade
         if source == "ting59" {
             return "59听书网音频源当前不可用（站点侧变更，2026-10-24 实测其音频直链已被 CDN 全面拒绝），请换用其他音源收听本书"
         }
-        // build 45 · 反馈 3：悦听有声书（ytysxs）全链摘除（用户点名删除）——
-        // 常量与适配器已删，存量书架 ytysxs 来源的书保留（数据不删），播放时
-        // 按字符串兼容报「源已下架」指引换源（SourceRegistry.YTYXSX 常量不再存在）。
+        // v2.0.2 · 悦听（ytysxs）重新接入后，本兜底仅处理「站点侧暂不可用」的失败：
+        // 验证拦截 / 章节为空 / 直链失效等由适配器抛 YtysxsUnavailableError 或 URLError，
+        // 统一给可理解的降级提示（不阻断存量书架 book，引导重试或换源）。
         if source == "ytysxs" {
-            return "悦听有声书源已下线（2026-10-27 build 45 摘除），请换用其他音源收听本书"
+            return "悦听音源暂时不可用（站点验证或网络原因），请稍后重试或切换其他音源"
         }
         if let ue = error as? URLError {
             switch ue.code {

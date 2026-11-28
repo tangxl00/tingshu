@@ -12,11 +12,15 @@ import Foundation
 final class PlaybackRepository: Sendable {
     private let apiClient: APIClient
     private let biliAdapter: BiliAdapter
+    private let ytysxsAdapter: YtysxsAdapter
 
+    /// v2.0.2 · 悦听重新接入：init 2 → 3 参数（新增 ytysxsAdapter，默认内部构造以兼容测试调用）。
     init(apiClient: APIClient,
-         biliAdapter: BiliAdapter) {
+         biliAdapter: BiliAdapter,
+         ytysxsAdapter: YtysxsAdapter? = nil) {
         self.apiClient = apiClient
         self.biliAdapter = biliAdapter
+        self.ytysxsAdapter = ytysxsAdapter ?? YtysxsAdapter(apiClient: apiClient)
     }
 
     /// 解析占位 URI 为真实音频直链（AVAssetResourceLoaderDelegate 惰性调用）。
@@ -88,6 +92,10 @@ final class PlaybackRepository: Sendable {
             }
             let streamResult = await biliAdapter.audioStreamUrl(bvid: bvid, cid: page.cid)
             return try streamResult.get()
+        case SourceRegistry.YTYSXS:
+            // v2.0.2：按 albumId + chapterIdx 从适配器取直链（章节内有进程缓存）；
+            // 直链经白名单自检（仅 https + ytysxs.top 域）。
+            return try await ytysxsAdapter.playUrl(albumId: albumId, chapterIdx: chapterIdx)
         default:
             throw URLError(.unsupportedURL)
         }

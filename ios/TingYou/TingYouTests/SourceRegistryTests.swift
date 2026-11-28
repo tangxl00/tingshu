@@ -29,7 +29,8 @@ final class SourceRegistryTests: XCTestCase {
         XCTAssertFalse(SourceRegistry.isKnown(src: "ting15"), "听十五已下架")
         XCTAssertFalse(SourceRegistry.isKnown(src: "mekui"), "书音FM 已下架")
         XCTAssertTrue(SourceRegistry.isKnown(src: "tingyou"))
-        XCTAssertFalse(SourceRegistry.isKnown(src: "ytysxs"), "悦听已下架（build 45）")
+        XCTAssertTrue(SourceRegistry.isKnown(src: "ytysxs"), "悦听已重新接入（v2.0.2）")
+        XCTAssertEqual(SourceRegistry.displayName(src: "ytysxs"), "悦听")
         XCTAssertTrue(SourceRegistry.isKnown(src: "bili"))
         // build 38 · 反馈 1：ting59（59听书网）下架
         XCTAssertFalse(SourceRegistry.isKnown(src: "ting59"), "59听书网已下架")

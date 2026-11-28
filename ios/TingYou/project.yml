@@ -11,8 +11,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tingyou.app.ios
-        MARKETING_VERSION: 2.0.1
-        CURRENT_PROJECT_VERSION: 65
+        MARKETING_VERSION: 2.0.2
+        CURRENT_PROJECT_VERSION: 66
         INFOPLIST_FILE: TingYou/Info.plist
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
@@ -27,8 +27,8 @@ targets:
     info:
       path: TingYou/Info.plist
       properties:
-        CFBundleShortVersionString: "2.0.1"
-        CFBundleVersion: "65"
+        CFBundleShortVersionString: "2.0.2"
+        CFBundleVersion: "66"
         CFBundleIconName: AppIcon
         UILaunchScreen: {}
         UIApplicationSceneManifest:

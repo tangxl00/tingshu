@@ -10,6 +10,7 @@ import '../services/bili_api.dart';
 import 'models.dart';
 import 'source_registry.dart';
 import 'tingyou_api.dart';
+import 'ytysxs_source.dart';
 
 class AggregateOutcome {
   final List<AppAlbum> albums;
@@ -29,14 +30,26 @@ class SourceRouter {
   SourceRouter({
     TingYouApi? tingyou,
     BiliApi? bili,
+    YtysxsSource? ytysxs,
     List<ImportedBook> Function()? importedBooks,
   })  : _tingyou = tingyou ?? TingYouApi(),
         _bili = bili ?? BiliApi.instance,
+        _ytysxs = ytysxs ?? YtysxsSource(),
         _importedBooks = importedBooks;
 
   final TingYouApi _tingyou;
   final BiliApi _bili;
+  final YtysxsSource _ytysxs;
   final List<ImportedBook> Function()? _importedBooks;
+
+  AppAlbum _albumFromYtysxs(YtysxsIndexRow r) => AppAlbum(
+        albumId: r.bookId,
+        title: r.title,
+        coverUrl: r.cover,
+        available: true,
+        source: SourceRegistry.ytysxs,
+        detailPath: '${r.bookId}',
+      );
 
   /// B站 albumId 稳定哈希（FNV-1a 64），与 iOS SourceRouter.biliAlbumId 一致。
   static int biliAlbumId(String bvid) {
@@ -71,6 +84,9 @@ class SourceRouter {
       case SourceRegistry.bili:
         final books = await _bili.search(keyword);
         return books.map(_albumFromBili).toList();
+      case SourceRegistry.ytysxs:
+        // v2.0.2：本地索引搜索，零网络——规避站内搜索滑块验证
+        return (await _ytysxs.search(keyword)).map(_albumFromYtysxs).toList();
       case SourceRegistry.importSource:
         final kw = keyword.trim().toLowerCase();
         return (_importedBooks?.call() ?? const <ImportedBook>[])
@@ -129,6 +145,13 @@ class SourceRouter {
         return _albumFromBili(book).copyWith(
           chapterCount: book.chapters?.length ?? book.pages,
         );
+      case SourceRegistry.ytysxs:
+        final d = await _ytysxs.detail(album.albumId);
+        return album.copyWith(
+          title: d.title.isEmpty ? album.title : d.title,
+          coverUrl: d.cover ?? album.coverUrl,
+          intro: d.intro ?? album.intro,
+        );
       case SourceRegistry.importSource:
         final books = _importedBooks?.call() ?? const <ImportedBook>[];
         for (final b in books) {
@@ -155,6 +178,18 @@ class SourceRouter {
                   index: p.page - 1,
                   title: p.part,
                   durationSec: p.duration > 0 ? p.duration : null,
+                ))
+            .toList();
+      case SourceRegistry.ytysxs:
+        // v2.0.2：AudioIgniter playlist JSON → tracks（chapterId 用稳定序号）
+        final tracks = await _ytysxs.chapters(album.albumId);
+        return tracks
+            .asMap()
+            .entries
+            .map((e) => AppChapter(
+                  chapterId: e.key + 1,
+                  index: e.key,
+                  title: e.value.title,
                 ))
             .toList();
       case SourceRegistry.importSource:
@@ -187,6 +222,13 @@ class SourceRouter {
         return (
           items: books.map(_albumFromBili).toList(),
           hasMore: books.length >= 20,
+        );
+      case SourceRegistry.ytysxs:
+        // v2.0.2：本地索引按分类过滤，零网络
+        final out = await _ytysxs.categoryRows(categoryId, page: page);
+        return (
+          items: out.rows.map(_albumFromYtysxs).toList(),
+          hasMore: out.hasMore,
         );
       default:
         return (items: const <AppAlbum>[], hasMore: false);
@@ -229,6 +271,10 @@ class SourceRouter {
             'User-Agent': BiliEndpoints.userAgent,
           },
         );
+      case SourceRegistry.ytysxs:
+        // v2.0.2：站点直链（白名单自检在适配器内完成），无额外请求头
+        final url = await _ytysxs.playUrl(album.albumId, chapter.index);
+        return ResolvedAudio(url: url);
       case SourceRegistry.importSource:
         final uri = chapter.uri;
         if (uri == null || uri.isEmpty) throw ApiException('导入章节没有地址');
