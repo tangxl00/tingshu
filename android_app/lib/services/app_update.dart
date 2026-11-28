@@ -2,13 +2,10 @@ import 'package:dio/dio.dart';
 
 import '../core/app_meta.dart';
 
-/// 检查更新：数据源走 GitHub Releases
+/// 检查更新：数据源走 GitHub Releases。
 ///
-/// 发布后把下面两个常量改成你的仓库即可，例如：
-/// ```dart
-/// static const githubOwner = 'your-name';
-/// static const githubRepo = 'tingyou';
-/// ```
+/// 仓库地址与 AppMeta.repoUrl 同源；发布时由 android.yml 在 tag 上创建 Release
+/// 并附上 APK，App 读取 latest release 的 tag / body / assets 即可。
 class UpdateResult {
   const UpdateResult({
     required this.configured,
@@ -18,6 +15,7 @@ class UpdateResult {
     this.changelog,
     this.htmlUrl,
     this.apkUrl,
+    this.publishedAt,
   });
 
   /// 是否已配置 GitHub 仓库（未配置时不会发起请求）
@@ -28,6 +26,9 @@ class UpdateResult {
   final String? changelog;
   final String? htmlUrl;
   final String? apkUrl;
+
+  /// Release 发布日期，格式 yyyy-MM-dd
+  final String? publishedAt;
 
   bool get hasNewer {
     if (!configured) return false;
@@ -54,11 +55,9 @@ int _compareVersion(String a, String b) {
 class AppUpdate {
   AppUpdate._();
 
-  /// GitHub 仓库（检查更新数据源）。
-  /// 听书本地版不接入云端更新检查：tingshu 仓库是 iOS 工程，其 Releases 与
-  /// 本安卓包无关，误指向会给出错误提示。置空即关闭该入口的网络请求。
-  static const String githubOwner = '';
-  static const String githubRepo = '';
+  /// GitHub 仓库（检查更新数据源）
+  static const String githubOwner = 'tangxl00';
+  static const String githubRepo = 'tingshu';
 
   static bool get configured => githubOwner.isNotEmpty && githubRepo.isNotEmpty;
 
@@ -68,9 +67,7 @@ class AppUpdate {
   static String get _downloadBase =>
       'https://github.com/$githubOwner/$githubRepo/releases/latest';
 
-  /// 检查最新版本。
-  ///
-  /// 未配置仓库时直接返回 [configured=false]，不发起网络请求。
+  /// 检查最新版本。失败时返回带 error 的结果，不抛异常。
   static Future<UpdateResult> check() async {
     if (!configured) {
       return const UpdateResult(configured: false);
@@ -81,6 +78,8 @@ class AppUpdate {
         options: Options(
           headers: {'Accept': 'application/vnd.github+json'},
           responseType: ResponseType.json,
+          connectTimeout: const Duration(seconds: 10),
+          receiveTimeout: const Duration(seconds: 10),
         ),
       );
       final data = resp.data as Map? ?? {};
@@ -95,6 +94,7 @@ class AppUpdate {
         }
       }
       final tag = '${data['tag_name'] ?? ''}';
+      final published = '${data['published_at'] ?? ''}';
       return UpdateResult(
         configured: true,
         latestVersion: tag.isEmpty ? null : tag.replaceFirst(RegExp(r'^v'), ''),
@@ -102,8 +102,9 @@ class AppUpdate {
         changelog: '${data['body'] ?? ''}'.trim(),
         htmlUrl: '${data['html_url'] ?? _downloadBase}',
         apkUrl: apkUrl?.isEmpty == true ? null : apkUrl,
+        publishedAt: published.length >= 10 ? published.substring(0, 10) : null,
       );
-    } catch (e) {
+    } catch (_) {
       return UpdateResult(configured: true, error: '检查更新失败，请稍后重试');
     }
   }
