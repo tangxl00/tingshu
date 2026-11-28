@@ -27,8 +27,8 @@ targets:
     info:
       path: TingYou/Info.plist
       properties:
-        CFBundleShortVersionString: "1.4.4"
-        CFBundleVersion: "59"
+        CFBundleShortVersionString: "1.4.5"
+        CFBundleVersion: "60"
         CFBundleIconName: AppIcon
         UILaunchScreen: {}
         UIApplicationSceneManifest:
