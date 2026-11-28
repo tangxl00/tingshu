@@ -70,12 +70,12 @@ jobs:
         run: flutter analyze
 
       - name: Build release APK
-        run: flutter build apk --release --target-platform android-arm64
+        run: flutter build apk --release --split-per-abi
 
       - name: Prepare artifact
         run: |
           mkdir -p ../artifacts
-          cp build/app/outputs/flutter-apk/app-release.apk ../artifacts/tingyou-android-release.apk
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../artifacts/tingyou-android-release.apk
           ls -lh ../artifacts/
 
       - name: Upload APK
