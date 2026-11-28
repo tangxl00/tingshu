@@ -100,7 +100,8 @@ final class Build50FeatureTests: XCTestCase {
         XCTAssertNil(rows[1].cover, "空封面须为 nil")
         let hits = YtysxsAdapter.searchIndex(rows, keyword: "甲乙")
         XCTAssertEqual(hits.count, 2)
-        XCTAssertEqual(hits.first?.bookId, 10, "前缀命中优先且短标题在前")
+        XCTAssertEqual(Set(hits.map(\.bookId)), Set([10, 12]), "前缀命中均须返回")
+        XCTAssertEqual(hits.first?.bookId, 12, "同为前缀命中时短标题在前（甲乙前传 4 字 < 《甲乙》有声 6 字）")
         XCTAssertTrue(YtysxsAdapter.isAntibot("<html>请完成安全检查</html>"))
         XCTAssertFalse(YtysxsAdapter.isAntibot("<html><a href='/1.html'>书</a></html>"))
         XCTAssertEqual(try? YtysxsAdapter.validateAudioUrl("https://mp3.ytysxs.top/2024/50/001.mp3"),

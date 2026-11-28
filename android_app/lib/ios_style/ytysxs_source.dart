@@ -110,7 +110,7 @@ class YtysxsSource {
   /// 本地索引搜索：前缀命中优先，其次子串；同档短标题优先。
   static List<YtysxsIndexRow> searchIndex(List<YtysxsIndexRow> rows, String keyword) {
     final kw = keyword.trim().toLowerCase();
-    if (kw.isEmpty) return const [];
+    if (kw.isEmpty) return <YtysxsIndexRow>[];
     final prefix = <YtysxsIndexRow>[];
     final substring = <YtysxsIndexRow>[];
     for (final r in rows) {
@@ -160,8 +160,9 @@ class YtysxsSource {
   }) async {
     final all = (await _loadIndex()).where((r) => r.category == categoryId).toList();
     final start = (page - 1) * pageSize;
-    if (start >= all.length) return (rows: const [], hasMore: false);
-    final end = (start + pageSize).clamp(0, all.length);
+    if (start >= all.length) return (rows: <YtysxsIndexRow>[], hasMore: false);
+    final rawEnd = start + pageSize;
+    final end = rawEnd > all.length ? all.length : rawEnd;
     return (rows: all.sublist(start, end), hasMore: end < all.length);
   }
 
@@ -234,7 +235,7 @@ class YtysxsSource {
   static List<YtysxsTrack> parseTracksJson(String raw) {
     try {
       final decoded = jsonDecode(raw);
-      if (decoded is! List) return const [];
+      if (decoded is! List) return <YtysxsTrack>[];
       final out = <YtysxsTrack>[];
       for (final item in decoded) {
         if (item is! Map) continue;
@@ -250,7 +251,7 @@ class YtysxsSource {
       }
       return out;
     } catch (_) {
-      return const [];
+      return <YtysxsTrack>[];
     }
   }
 
