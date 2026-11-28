@@ -175,7 +175,8 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_searchMode ? '搜索' : '发现'),
+        // v2.0.0：去掉顶部大标题，内容整体上移
+        title: const Text(''),
         backgroundColor: Theme.of(context).colorScheme.surface,
       ),
       body: Column(

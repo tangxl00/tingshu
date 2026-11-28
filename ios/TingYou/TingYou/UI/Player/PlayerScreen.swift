@@ -33,6 +33,9 @@ struct PlayerScreen: View {
                         Text(pm?.currentChapterTitle ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                     }
 
+                    // v2.0.0：封面缩至 3/4 后整体布局上移，进度条落在屏幕中间偏下
+                    Spacer(minLength: 0)
+
                     // v1.4.3 · P0（取证 D）：播放失败非阻断提示——不打断界面、可重试
                     //（此前 .failed 完全静默，点章失败用户无感知）
                     if let playbackError = pm?.playbackError {
@@ -144,7 +147,9 @@ struct PlayerScreen: View {
                     }
                     .foregroundStyle(.secondary)
 
+                    // v2.0.0：底部只留少量弹性，上方 Spacer 吸收剩余高度
                     Spacer(minLength: 0)
+                        .frame(maxHeight: 56)
                 }
                 .frame(width: geo.size.width, height: geo.size.height)
             }
@@ -250,7 +255,8 @@ struct PlayerScreen: View {
     /// 一页布局封面尺寸：为标题/进度/控制/功能区预留约 300pt，剩余空间给封面，
     /// 夹在 120–280pt 之间，避免小屏溢出或大屏封面过大。
     private static func coverSize(availableHeight h: CGFloat) -> CGFloat {
-        min(280, max(120, h - 300))
+        // v2.0.0：封面缩小到原先的 3/4（280→210，上限同步收敛）
+        min(210, max(90, (h - 300) * 3 / 4))
     }
 
     func formatMs(_ ms: Int64) -> String {

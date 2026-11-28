@@ -143,7 +143,9 @@ struct DiscoverScreen: View {
                     libraryContent
                 }
             }
-            .navigationTitle(searchMode ? "搜索" : "发现")
+            // v2.0.0：去掉顶部大标题，内容整体上移
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             // build 47 · 反馈 2（布局返修·用户可感知标准）：「发现」大标题改
             // 内联小标题——导航栏从大字标题形态（额外 ~52pt 标题行高）收敛为
             // 栏内小字标题，搜索框上移约一个标题行的高度（b46 仅压 4~8pt

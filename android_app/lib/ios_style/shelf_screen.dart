@@ -226,7 +226,8 @@ class _ShelfScreenState extends State<ShelfScreen> {
     final store = context.watch<LocalStore>();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('书架'),
+        // v2.0.0：去掉顶部大标题，内容整体上移
+        title: const Text(''),
         actions: [
           PopupMenuButton<String>(
             onSelected: (value) {

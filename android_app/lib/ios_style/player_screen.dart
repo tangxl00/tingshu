@@ -33,11 +33,13 @@ class PlayerScreen extends StatelessWidget {
         // 封面按剩余空间自适应，保证小屏也不溢出。
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final coverSize = (constraints.maxHeight - 300).clamp(90.0, 240.0).toDouble();
+            // v2.0.0：封面缩小到原先的 3/4（240→180）
+            final coverSize = ((constraints.maxHeight - 300) * 0.75).clamp(68.0, 180.0).toDouble();
             return Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+                // v2.0.0：整体布局上移，进度条落在屏幕中间偏下
+                mainAxisAlignment: MainAxisAlignment.start,
                 mainAxisSize: MainAxisSize.max,
                 children: [
               CoverImage(url: pm.coverUrl, size: coverSize, radius: 16),
@@ -57,6 +59,8 @@ class PlayerScreen extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
+              // v2.0.0：弹性留白把进度条推到中间偏下（3:1 分配）
+              const Spacer(flex: 3),
               if (pm.playbackError != null) ...[
                 const SizedBox(height: 12),
                 Text(
@@ -152,6 +156,7 @@ class PlayerScreen extends StatelessWidget {
                   ),
                 ],
               ),
+              const Spacer(flex: 1),
             ],
           ),
         );

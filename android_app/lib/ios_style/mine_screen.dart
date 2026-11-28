@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../core/app_meta.dart';
-import 'shelf_screen.dart';
+import '../services/app_update.dart';
+import '../services/browser.dart';
+import 'disclaimer_screen.dart';
 import 'source_manage_screen.dart';
 import 'storage.dart';
 import 'widgets.dart';
@@ -17,11 +20,62 @@ class MineScreen extends StatefulWidget {
 }
 
 class _MineScreenState extends State<MineScreen> {
+  bool _checking = false;
+
+  Future<void> _checkUpdate(BuildContext context) async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    final result = await AppUpdate.check();
+    if (!context.mounted) return;
+    setState(() => _checking = false);
+    if (result.error != null) {
+      _toast(context, result.error!);
+      return;
+    }
+    if (!result.hasNewer) {
+      _toast(context, '已是最新版本');
+      return;
+    }
+    final url = result.apkUrl ?? result.htmlUrl;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('发现新版本'),
+        content: Text(
+          '当前 ${AppMeta.version} → ${result.latestVersion ?? ''}\n\n'
+          '${result.changelog ?? ''}',
+          maxLines: 12,
+          overflow: TextOverflow.ellipsis,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('稍后'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              if (url == null || url.isEmpty) return;
+              final ok = await Browser.open(url);
+              if (!ok) await Share.share(url);
+            },
+            child: const Text('下载安装'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toast(BuildContext context, String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = context.watch<LocalStore>();
     return Scaffold(
-      appBar: AppBar(title: const Text('我的')),
+      // v2.0.0：去掉顶部大标题，内容整体上移
+      appBar: const AppBar(title: Text('')),
       body: ListView(
         children: [
           Padding(
@@ -38,12 +92,6 @@ class _MineScreenState extends State<MineScreen> {
             leading: const Icon(Icons.schedule),
             title: const Text('今日时长'),
             trailing: Text(formatListeningTime(store.todayListeningMs)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.menu_book),
-            title: const Text('我的书架'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: widget.onOpenShelf,
           ),
           const Divider(),
           Padding(
@@ -81,11 +129,44 @@ class _MineScreenState extends State<MineScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child:
-                Text('关于', style: Theme.of(context).textTheme.labelLarge),
+                Text('版本', style: Theme.of(context).textTheme.labelLarge),
           ),
           ListTile(
-            title: const Text('版本'),
-            trailing: Text('${AppMeta.version} (6)'),
+            leading: Icon(Icons.system_update_alt_rounded,
+                color: Theme.of(context).colorScheme.primary),
+            title: const Text('检查更新'),
+            subtitle: Text(
+              '当前 v${AppMeta.version} · 对比 GitHub Release',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+            ),
+            trailing: _checking
+                ? SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Theme.of(context).colorScheme.primary),
+                  )
+                : null,
+            onTap: () => _checkUpdate(context),
+          ),
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child:
+                Text('免责声明', style: Theme.of(context).textTheme.labelLarge),
+          ),
+          ListTile(
+            leading: const Icon(Icons.gavel),
+            title: const Text('免责声明'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const DisclaimerScreen(),
+              ),
+            ),
           ),
         ],
       ),

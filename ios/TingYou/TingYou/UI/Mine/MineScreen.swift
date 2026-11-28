@@ -36,9 +36,6 @@ struct MineScreen: View {
                         Text(formatTime(container?.listeningTimeStore.todayMs ?? 0))
                             .foregroundStyle(.secondary)
                     }
-                    NavigationLink("我的书架") {
-                        ShelfScreen(onOpenPlayer: {})
-                    }
                 }
 
                 Section("外观") {
@@ -53,7 +50,7 @@ struct MineScreen: View {
                     }
                 }
 
-                Section("其他") {
+                Section("版本") {
                     Button {
                         Task { await checkUpdate() }
                     } label: {
@@ -73,17 +70,15 @@ struct MineScreen: View {
                     .disabled(checkingUpdate)
                 }
 
-                Section("关于") {
-                    HStack {
-                        Text("版本")
-                        Spacer()
-                        // 从 Bundle 动态读版本号，杜绝静态字面量与构建版本漂移
-                        Text("\(Self.displayVersion)")
-                            .foregroundStyle(.secondary)
+                Section("免责声明") {
+                    NavigationLink("免责声明") {
+                        DisclaimerScreen()
                     }
                 }
             }
-            .navigationTitle("我的")
+            // v2.0.0：去掉顶部大标题，内容整体上移
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
         }
         .alert("检查更新", isPresented: $showingMessage) {
             Button("好", role: .cancel) {}

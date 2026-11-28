@@ -73,7 +73,9 @@ struct ShelfScreen: View {
                     historyContent
                 }
             }
-            .navigationTitle("书架")
+            // v2.0.0：去掉顶部大标题，内容整体上移
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .navigationBarTitleDisplayMode(.large)
             .alert("清空播放历史", isPresented: $showClearConfirm) {
                 Button("清空", role: .destructive) { clearAllHistory() }
