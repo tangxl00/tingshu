@@ -79,31 +79,44 @@ struct ChapterListSheet: View {
 
     var body: some View {
         NavigationStack {
-            // 播放器页面调整：打开章节面板即定位到当前播放章，而不是从第 1 章开始。
+            // 播放器章节面板对齐发现页书籍章节列表：当前播放章居中显示（上下都有章节），
+            // 当前章后带音量标志，当前章之前的章节带 ✓。
             ScrollViewReader { proxy in
                 List(chapters.indices, id: \.self) { i in
                     let isCurrent = i == currentIdx
-                    // build 28 · 章节整行可点：HStack 加 `.frame(maxWidth: .infinity, maxHeight: .infinity)`
-                    // 强制 label 占据 List 行内全部可用空间，使 `.contentShape(Rectangle())`
-                    // 的矩形真正覆盖整行（原实现仅文本区响应，因 List 行内 Button label
-                    // 的隐式 frame 未包含 spacer 展开后的空间）。
+                    let isListened = i < currentIdx
                     Button {
                         onSelect(i)
                         dismiss()
                     } label: {
-                        HStack {
-                            Text("\(chapters[i].index). \(chapters[i].title)")
-                                .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(chapters[i].index). \(chapters[i].title)")
+                                    .font(.body)
+                                    .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+                                if let dur = chapters[i].durationSec {
+                                    Text(Self.formatDuration(dur))
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
                             Spacer()
                             if isCurrent {
-                                Image(systemName: "waveform")
+                                // 音量标志：与发现页书籍章节当前播放项一致（speaker.wave.3.fill）
+                                Image(systemName: "speaker.wave.3.fill")
+                                    .font(.caption)
                                     .foregroundStyle(Color.accentColor)
+                                    .accessibilityIdentifier("player_chapter_now_playing")
+                            } else if isListened {
+                                Image(systemName: "checkmark")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("player_chapter_done_\(chapters[i].index)")
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }
-                    // 增强 4：按压反馈 + 当前播放项高亮底色
                     .buttonStyle(.pressable)
                     .listRowBackground(
                         Group { if isCurrent { Color.accentColor.opacity(0.12) } }
@@ -111,7 +124,6 @@ struct ChapterListSheet: View {
                     .id(i)
                 }
                 .onAppear {
-                    // 列表渲染后再滚动，避免首帧行高未计算导致定位落空。
                     guard chapters.indices.contains(currentIdx) else { return }
                     DispatchQueue.main.async {
                         withAnimation(.easeOut(duration: 0.2)) {
@@ -128,5 +140,11 @@ struct ChapterListSheet: View {
                 }
             }
         }
+    }
+
+    private static func formatDuration(_ sec: Int) -> String {
+        let m = sec / 60
+        let s = sec % 60
+        return String(format: "%d:%02d", m, s)
     }
 }

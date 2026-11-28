@@ -232,46 +232,84 @@ class PlayerScreen extends StatelessWidget {
 
   void _showChapters(BuildContext context) {
     final pm = context.read<PlaybackManager>();
-    // 播放器页面调整：打开章节面板即定位到当前播放章，而不是从第 1 章开始。
-    // dense ListTile 行高固定 48，配合 itemExtent 让初始滚动偏移精准命中当前章。
-    const double rowHeight = 48;
+    // 播放器章节面板对齐发现页书籍章节列表：标题+时长两行、已听 ✓、当前章音量标志，
+    // 并让当前播放章落在视口中央（上下都有章节）。dense ListTile 带 subtitle 行高 72。
+    const double rowHeight = 72;
     final current = pm.currentChapterIdx;
-    final controller = ScrollController(
-      initialScrollOffset: current > 0 ? current * rowHeight : 0.0,
-    );
+    final controller = ScrollController();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) => SafeArea(
-        child: SizedBox(
-          height: MediaQuery.of(sheetContext).size.height * 0.7,
-          child: Column(
-            children: [
-              const ListTile(title: Text('章节')),
-              Expanded(
-                child: ListView.builder(
-                  controller: controller,
-                  itemExtent: rowHeight,
-                  itemCount: pm.currentChapters.length,
-                  itemBuilder: (_, i) {
-                    final c = pm.currentChapters[i];
-                    return ListTile(
-                      dense: true,
-                      selected: i == pm.currentChapterIdx,
-                      leading: Text('${c.index}.'),
-                      title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      onTap: () {
-                        pm.playChapterAt(i);
-                        Navigator.of(sheetContext).pop();
-                      },
-                    );
-                  },
+      builder: (sheetContext) {
+        // 布局完成后按视口高度计算居中偏移，避免用 initialScrollOffset 把当前章顶到第一行。
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!controller.hasClients) return;
+          final viewport = controller.position.viewportDimension;
+          final target = current * rowHeight - (viewport - rowHeight) / 2;
+          controller.jumpTo(
+            target.clamp(0.0, controller.position.maxScrollExtent).toDouble(),
+          );
+        });
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(sheetContext).size.height * 0.7,
+            child: Column(
+              children: [
+                const ListTile(title: Text('章节')),
+                Expanded(
+                  child: ListView.builder(
+                    controller: controller,
+                    itemExtent: rowHeight,
+                    itemCount: pm.currentChapters.length,
+                    itemBuilder: (_, i) {
+                      final c = pm.currentChapters[i];
+                      final isCurrent = i == current;
+                      final isListened = i < current;
+                      return ListTile(
+                        dense: true,
+                        selected: isCurrent,
+                        leading: Text('${c.index}.'),
+                        title: Text(
+                          c.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: isCurrent
+                                ? Theme.of(sheetContext).colorScheme.primary
+                                : (isListened
+                                    ? Theme.of(sheetContext)
+                                        .colorScheme
+                                        .onSurfaceVariant
+                                    : null),
+                          ),
+                        ),
+                        subtitle: c.durationSec == null
+                            ? null
+                            : Text(formatDuration(c.durationSec!)),
+                        trailing: isCurrent
+                            ? Icon(Icons.volume_up,
+                                size: 18,
+                                color: Theme.of(sheetContext).colorScheme.primary)
+                            : (isListened
+                                ? Icon(Icons.check,
+                                    size: 16,
+                                    color: Theme.of(sheetContext)
+                                        .colorScheme
+                                        .onSurfaceVariant)
+                                : null),
+                        onTap: () {
+                          pm.playChapterAt(i);
+                          Navigator.of(sheetContext).pop();
+                        },
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     ).whenComplete(controller.dispose);
   }
 

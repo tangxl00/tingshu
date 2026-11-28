@@ -11,8 +11,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tingyou.app.ios
-        MARKETING_VERSION: 1.4.4
-        CURRENT_PROJECT_VERSION: 59
+        MARKETING_VERSION: 1.4.5
+        CURRENT_PROJECT_VERSION: 60
         INFOPLIST_FILE: TingYou/Info.plist
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
