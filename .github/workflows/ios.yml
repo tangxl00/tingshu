@@ -8,6 +8,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -205,3 +208,17 @@ jobs:
             ios/TingYou/archive.log
           if-no-files-found: warn
           retention-days: 7
+
+      # 打 v* tag 时把 unsigned IPA 附到同一个 Release（与 Android APK 并列）。
+      # 注意：IPA 未签名，只能用于 TestFlight/企业分发或自行签名，不能直接安装。
+      # 不传 generate_release_notes / body，避免覆盖 Android workflow 生成的 release notes。
+      - name: Attach IPA to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 听书 ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ios/TingYou/artifact/${{ env.IPA_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
