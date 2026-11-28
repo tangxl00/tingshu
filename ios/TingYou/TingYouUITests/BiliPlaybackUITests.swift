@@ -135,14 +135,14 @@ final class BiliPlaybackUITests: XCTestCase {
                           "用例 G 失败：点 (\(pt.dx), \(pt.dy)) 后 5s 内键盘未收起——全局收键盘覆盖空洞")
         }
 
-        // 导航哨兵：键盘收起后点书必须仍能进详情（recognizer 不吞事件）
-        // v2.0.0：多点位可能命中书行/播放器，先确保回到发现页再做导航哨兵。
-        if app.staticTexts["album_screen_title"].exists {
-            app.navigationBars.buttons.firstMatch.tap()
-        }
-        if app.buttons["完成"].exists { app.buttons["完成"].tap() }
-        if !field.exists { app.tabBars.buttons["发现"].tap() }
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "用例 G 哨兵前置失败：未回到发现页")
+        // 导航哨兵：多点位可能命中书行进入详情/播放器，页面状态不可控
+        //（sheet 上的「完成」按钮在转场瞬间 exists 为真但 tap 落空，已由 CI 证实）。
+        // 重新 launch 到干净态后验证「点书仍能进详情」——window recognizer 不破坏导航。
+        app.terminate()
+        app = XCUIApplication()
+        app.launch()
+        field = app.textFields["discover_search_field"]
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "用例 G 哨兵前置失败：重启后搜索框未出现")
         field.tap()
         field.typeText("水浒\n")
         let row = app.descendants(matching: .any)
