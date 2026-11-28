@@ -86,9 +86,9 @@ final class Build50FeatureTests: XCTestCase {
     /// Build29RegressionTests 守卫；此处复核 Info.plist）。
     func testBuild50Version() throws {
         let plist = try Self.loadSource("TingYou/Info.plist")
-        XCTAssertTrue(plist.contains("<string>62</string>"),
+        XCTAssertTrue(plist.contains("<string>63</string>"),
                       "Info.plist CFBundleVersion 必须为 63")
-        XCTAssertTrue(plist.contains("<string>1.4.7</string>"),
+        XCTAssertTrue(plist.contains("<string>1.4.8</string>"),
                       "Info.plist CFBundleShortVersionString 维持 1.4.8")
     }
 
