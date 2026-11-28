@@ -88,11 +88,7 @@ final class AggregateSearchTests: XCTestCase {
     }
 
     /// 聚合只搜启用源（关一个源少一个源的结果），且顺序 = searchSources 固定序。
-    /// build 36：听吧下架（7→6 源）后按 6 源现实重写断言；
-    /// build 37：听十五/书音FM 下架（6→4 源）后按 4 源现实重写；
-    /// build 38：59听书下架（4→3 源）后按 3 源现实重写；
-    /// build 45：悦听下架（3→2 源）后按 2 源现实重写；
-    /// build 50 补齐易听书（对齐 PC v1.1.8 三源基准）后按 3 源现实重写。
+    /// v2.0.1：易听书下架（3→2 源）后按 2 源现实重写断言，关闭的源不参与搜索。
     func testAggregatesOnlyEnabledSourcesInFixedOrder() async {
         let store = makeStore()
         store.setEnabled(SourceRegistry.BILI, false) // 关B站
@@ -106,12 +102,12 @@ final class AggregateSearchTests: XCTestCase {
         let outcome = await AggregateSearcher(searcher: searcher, enabledStore: store)
             .search(keyword: "书")
 
-        XCTAssertEqual(Set(searcher.searchedSources), Set([SourceRegistry.TINGYOU, SourceRegistry.BILI]),
+        XCTAssertEqual(Set(searcher.searchedSources), Set([SourceRegistry.TINGYOU]),
                        "v2.0.1 易听书下架（2 源）；关闭的源不参与搜索，参与集合仍 = 启用集")
-        XCTAssertEqual(searcher.searchedSources.count, 2, "每个启用源恰好搜索一次")
-        XCTAssertEqual(outcome.searchedSources, [SourceRegistry.TINGYOU, SourceRegistry.BILI],
+        XCTAssertEqual(searcher.searchedSources.count, 1, "每个启用源恰好搜索一次")
+        XCTAssertEqual(outcome.searchedSources, [SourceRegistry.TINGYOU],
                        "outcome.searchedSources 仍为固定序（结果组装以固定序进行）")
-        XCTAssertEqual(outcome.albums.map(\.title), ["听友书", "B站书"],
+        XCTAssertEqual(outcome.albums.map(\.title), ["听友书"],
                        "关闭源的结果不出现")
         XCTAssertTrue(outcome.failedSourceNames.isEmpty)
         XCTAssertFalse(outcome.allFailed)
@@ -201,7 +197,7 @@ final class AggregateSearchTests: XCTestCase {
 
     /// searchSources 固定清单：build 36 删听吧后 6 源；build 37 删听十五/书音FM 后 4 源；
     /// build 38 删 59听书后 3 源、不含导入；build 45 删悦听后 2 源；
-    /// build 50 补齐易听书（对齐 PC v1.1.8 三源基准）后 3 源。
+    /// v2.0.1 摘除易听书后仍 2 源（听友FM / B站），导入不参与。
     func testSearchSourcesFixedOrderExcludesImport() {
         XCTAssertEqual(SourceEnabledStore.searchSources, [
             SourceRegistry.TINGYOU,
@@ -242,8 +238,7 @@ final class SourceEnabledStoreGuardTests: XCTestCase {
     }
 
     /// 关到只剩一个搜索源后，关闭最后一个被拒绝（状态不变）。
-    /// build 45：悦听下架（3→2 源）；build 50 补齐易听书后 3 源——
-    /// 需先关掉两个才到「最后一个」边界。
+    /// v2.0.1：易听书下架后 2 源；关掉 B站后只剩听友，即到「最后一个」边界。
     func testLastEnabledSourceCannotBeDisabled() {
         // 全新 suite：默认全开（v2.0.1 后 2 源）。关掉 BILI（仍有听友启用 → 允许）
         XCTAssertTrue(store.setEnabledGuarded(SourceRegistry.BILI, false))
