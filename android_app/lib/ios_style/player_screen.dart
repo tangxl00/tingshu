@@ -2,7 +2,6 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 
 import 'playback_manager.dart';
 import 'storage.dart';
@@ -30,12 +29,19 @@ class PlayerScreen extends StatelessWidget {
         ],
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: Column(
-            children: [
-              CoverImage(url: pm.coverUrl, size: 240, radius: 16),
-              const SizedBox(height: 20),
+        // 播放器页面调整：一页完整展示、不滚动。用 LayoutBuilder 取可用高度，
+        // 封面按剩余空间自适应，保证小屏也不溢出。
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final coverSize = (constraints.maxHeight - 300).clamp(90.0, 240.0).toDouble();
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.max,
+                children: [
+              CoverImage(url: pm.coverUrl, size: coverSize, radius: 16),
+              const SizedBox(height: 12),
               Text(
                 pm.currentAlbumTitle,
                 style: Theme.of(context).textTheme.titleMedium,
@@ -113,24 +119,7 @@ class PlayerScreen extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  IconButton(
-                    onPressed: () => pm.seekRelative(-15000),
-                    icon: const Icon(Icons.replay),
-                  ),
-                  TextButton(
-                    onPressed: () => _showSpeedSheet(context),
-                    child: Text('${pm.speed.toStringAsFixed(1)}x'),
-                  ),
-                  IconButton(
-                    onPressed: () => pm.seekRelative(15000),
-                    icon: const Icon(Icons.forward),
-                  ),
-                ],
-              ),
+              // 播放器页面调整：删除 ±15 秒跳转与独立倍速行，功能统一收到底部一行。
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -153,26 +142,20 @@ class PlayerScreen extends StatelessWidget {
                     '收藏',
                     pm.toggleFavorite,
                   ),
+                  // 播放器页面调整：倍速下移，与章节/定时置于同一行（第 4 位）
+                  _speedAction(context, pm),
                   _action(
                     context,
                     Icons.settings,
                     '设置',
                     () => _showSettings(context),
                   ),
-                  _action(
-                    context,
-                    Icons.share,
-                    '分享',
-                    () => Share.share(
-                      pm.currentAlbumTitle.isEmpty
-                          ? '推荐一个听书 App'
-                          : '我在听《${pm.currentAlbumTitle}》，推荐给你',
-                    ),
-                  ),
                 ],
               ),
             ],
           ),
+        );
+          },
         ),
       ),
     );
@@ -189,6 +172,28 @@ class PlayerScreen extends StatelessWidget {
             Icon(icon, size: 22),
             const SizedBox(height: 2),
             Text(label, style: const TextStyle(fontSize: 11)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 倍速入口：与章节/定时同排，图标位显示当前倍速值，便于直接识别。
+  Widget _speedAction(BuildContext context, PlaybackManager pm) {
+    return InkWell(
+      onTap: () => _showSpeedSheet(context),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Column(
+          children: [
+            SizedBox(
+              height: 22,
+              child: Text('${pm.speed.toStringAsFixed(1)}x',
+                  style: const TextStyle(fontSize: 13)),
+            ),
+            const SizedBox(height: 2),
+            const Text('倍速', style: TextStyle(fontSize: 11)),
           ],
         ),
       ),
@@ -227,38 +232,85 @@ class PlayerScreen extends StatelessWidget {
 
   void _showChapters(BuildContext context) {
     final pm = context.read<PlaybackManager>();
+    // 播放器章节面板对齐发现页书籍章节列表：标题+时长两行、已听 ✓、当前章音量标志，
+    // 并让当前播放章落在视口中央（上下都有章节）。dense ListTile 带 subtitle 行高 72。
+    const double rowHeight = 72;
+    final current = pm.currentChapterIdx;
+    final controller = ScrollController();
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (sheetContext) => SafeArea(
-        child: SizedBox(
-          height: MediaQuery.of(sheetContext).size.height * 0.7,
-          child: Column(
-            children: [
-              const ListTile(title: Text('章节')),
-              Expanded(
-                child: ListView.builder(
-                  itemCount: pm.currentChapters.length,
-                  itemBuilder: (_, i) {
-                    final c = pm.currentChapters[i];
-                    return ListTile(
-                      dense: true,
-                      selected: i == pm.currentChapterIdx,
-                      leading: Text('${c.index}.'),
-                      title: Text(c.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      onTap: () {
-                        pm.playChapterAt(i);
-                        Navigator.of(sheetContext).pop();
-                      },
-                    );
-                  },
+      builder: (sheetContext) {
+        // 布局完成后按视口高度计算居中偏移，避免用 initialScrollOffset 把当前章顶到第一行。
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!controller.hasClients) return;
+          final viewport = controller.position.viewportDimension;
+          final target = current * rowHeight - (viewport - rowHeight) / 2;
+          controller.jumpTo(
+            target.clamp(0.0, controller.position.maxScrollExtent).toDouble(),
+          );
+        });
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(sheetContext).size.height * 0.7,
+            child: Column(
+              children: [
+                const ListTile(title: Text('章节')),
+                Expanded(
+                  child: ListView.builder(
+                    controller: controller,
+                    itemExtent: rowHeight,
+                    itemCount: pm.currentChapters.length,
+                    itemBuilder: (_, i) {
+                      final c = pm.currentChapters[i];
+                      final isCurrent = i == current;
+                      final isListened = i < current;
+                      return ListTile(
+                        dense: true,
+                        selected: isCurrent,
+                        leading: Text('${c.index}.'),
+                        title: Text(
+                          c.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: isCurrent
+                                ? Theme.of(sheetContext).colorScheme.primary
+                                : (isListened
+                                    ? Theme.of(sheetContext)
+                                        .colorScheme
+                                        .onSurfaceVariant
+                                    : null),
+                          ),
+                        ),
+                        subtitle: c.durationSec == null
+                            ? null
+                            : Text(formatDuration(c.durationSec!)),
+                        trailing: isCurrent
+                            ? Icon(Icons.volume_up,
+                                size: 18,
+                                color: Theme.of(sheetContext).colorScheme.primary)
+                            : (isListened
+                                ? Icon(Icons.check,
+                                    size: 16,
+                                    color: Theme.of(sheetContext)
+                                        .colorScheme
+                                        .onSurfaceVariant)
+                                : null),
+                        onTap: () {
+                          pm.playChapterAt(i);
+                          Navigator.of(sheetContext).pop();
+                        },
+                      );
+                    },
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ),
-    );
+        );
+      },
+    ).whenComplete(controller.dispose);
   }
 
   void _showSleepTimer(BuildContext context) {

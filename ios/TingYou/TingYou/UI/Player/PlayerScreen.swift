@@ -20,10 +20,13 @@ struct PlayerScreen: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 16) {
-                    CoverImage(url: pm?.coverUrl, size: 280, source: pm?.currentAlbum?.source)
-                        .padding(.top)
+            // 播放器页面调整：一页完整展示、不滚动。用 GeometryReader 取可用高度，
+            // 封面按剩余空间自适应，保证小屏也不溢出。
+            GeometryReader { geo in
+                VStack(spacing: 12) {
+                    CoverImage(url: pm?.coverUrl,
+                               size: Self.coverSize(availableHeight: geo.size.height),
+                               source: pm?.currentAlbum?.source)
 
                     VStack(spacing: 4) {
                         Text(pm?.currentAlbumTitle ?? "").font(.headline).lineLimit(1)
@@ -97,23 +100,8 @@ struct PlayerScreen: View {
                     }
                     .foregroundStyle(.primary)
 
-                    HStack(spacing: 32) {
-                        Button { pm?.seekRelative(-15000) } label: {
-                            Image(systemName: "gobackward.15").font(.title3)
-                        }
-                        Button { activeSheet = .speed } label: {
-                            Text("\(String(format: "%.1f", pm?.speed ?? 1.0))x")
-                                .font(.caption).monospacedDigit()
-                        }
-                        // build 25（顺手项）：补按压视觉反馈（章节/定时/收藏均有，速度按钮漏挂）
-                        .buttonStyle(.pressable)
-                        Button { pm?.seekRelative(15000) } label: {
-                            Image(systemName: "goforward.15").font(.title3)
-                        }
-                    }
-                    .foregroundStyle(.secondary)
-
-                    HStack(spacing: 32) {
+                    // 播放器页面调整：删除 ±15 秒跳转与独立倍速行，功能统一收到底部一行。
+                    HStack(spacing: 24) {
                         Button { activeSheet = .chapters } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: "list.bullet").font(.title3)
@@ -137,6 +125,15 @@ struct PlayerScreen: View {
                             }
                         }
                         .buttonStyle(.pressable)
+                        // 播放器页面调整：倍速下移，与章节/定时置于同一行（第 4 位）
+                        Button { activeSheet = .speed } label: {
+                            VStack(spacing: 2) {
+                                Text("\(String(format: "%.1f", pm?.speed ?? 1.0))x")
+                                    .font(.caption).monospacedDigit()
+                                Text("倍速").font(.caption2)
+                            }
+                        }
+                        .buttonStyle(.pressable)
                         Button { activeSheet = .settings } label: {
                             VStack(spacing: 2) {
                                 Image(systemName: "gearshape").font(.title3)
@@ -144,21 +141,12 @@ struct PlayerScreen: View {
                             }
                         }
                         .buttonStyle(.pressable)
-                        // build 21 · 反馈 1（Bug A）：分享改 SwiftUI 原生 ShareLink。
-                        // 旧实现从 rootViewController present UIActivityViewController，
-                        // 在 SwiftUI presentation 层级下（PlayerScreen 自身处于 sheet 内）会被吞掉。
-                        ShareLink(item: shareText) {
-                            VStack(spacing: 2) {
-                                Image(systemName: "square.and.arrow.up").font(.title3)
-                                Text("分享").font(.caption2)
-                            }
-                        }
-                        .buttonStyle(.pressable)
                     }
                     .foregroundStyle(.secondary)
 
-                    Spacer(minLength: 20)
+                    Spacer(minLength: 0)
                 }
+                .frame(width: geo.size.width, height: geo.size.height)
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -257,6 +245,12 @@ struct PlayerScreen: View {
             // 以库为准回读，避免并发态错位
             isFavorite = await repo.isFavorite(src: album.source, albumId: album.albumId)
         }
+    }
+
+    /// 一页布局封面尺寸：为标题/进度/控制/功能区预留约 300pt，剩余空间给封面，
+    /// 夹在 120–280pt 之间，避免小屏溢出或大屏封面过大。
+    private static func coverSize(availableHeight h: CGFloat) -> CGFloat {
+        min(280, max(120, h - 300))
     }
 
     func formatMs(_ ms: Int64) -> String {

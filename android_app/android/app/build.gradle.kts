@@ -38,6 +38,11 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // 只打包 arm64-v8a：覆盖 2017 年后绝大多数安卓机，
+        // 避免 4 套 ABI 全打包导致 APK 膨胀到 75MB（降至此约 27MB）。
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     signingConfigs {

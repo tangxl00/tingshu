@@ -238,9 +238,9 @@ final class Build49FeatureTests: XCTestCase {
     func testBuild49Version() throws {
         let plist = try Self.source("TingYou/Info.plist")
         XCTAssertTrue(plist.contains("<string>62</string>"),
-                      "Info.plist CFBundleVersion 必须为 62")
+                      "Info.plist CFBundleVersion 必须为 63")
         XCTAssertTrue(plist.contains("<string>1.4.7</string>"),
-                      "Info.plist CFBundleShortVersionString 维持 1.4.7")
+                      "Info.plist CFBundleShortVersionString 维持 1.4.8")
     }
 
     // MARK: - 工具

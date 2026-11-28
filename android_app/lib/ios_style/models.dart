@@ -243,6 +243,16 @@ class HistoryRecord {
     return p < 0 ? 0 : (p > 100 ? 100 : p);
   }
 
+  /// 精确进度文案：第 N 章 MM:SS（章号为音源原生 1 基，positionMs 为章内位置）。
+  String get chapterProgressText {
+    final sec = positionMs > 0 ? positionMs ~/ 1000 : 0;
+    final m = sec ~/ 60;
+    final s = sec % 60;
+    final mm = m.toString().padLeft(2, '0');
+    final ss = s.toString().padLeft(2, '0');
+    return '第$chapterIdx章 $mm:$ss';
+  }
+
   Map<String, dynamic> toJson() => {
         'source': source,
         'albumId': albumId,

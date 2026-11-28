@@ -414,7 +414,7 @@ struct HistoryRow: View {
 
     var progressText: String {
         let pct = history.durationMs > 0 ? Int(Double(history.positionMs) / Double(history.durationMs) * 100) : 0
-        return "已播 \(pct)%"
+        return "\(history.chapterProgressText) · 已播 \(pct)%"
     }
 }
 
@@ -453,7 +453,7 @@ struct FavoriteRow: View {
     private var progressCaption: String {
         guard let h = history else { return "未开始" }
         let pct = h.durationMs > 0 ? Int(Double(h.positionMs) / Double(h.durationMs) * 100) : 0
-        return "\(h.chapterTitle) · 已播 \(pct)%"
+        return "\(h.chapterProgressText) · 已播 \(pct)%"
     }
 }
 
@@ -473,8 +473,7 @@ struct FavoriteGridItem: View {
 
     private var progressCaption: String {
         guard let h = history else { return "未开始" }
-        let pct = h.durationMs > 0 ? Int(Double(h.positionMs) / Double(h.durationMs) * 100) : 0
-        return "已播 \(pct)%"
+        return h.chapterProgressText
     }
 }
 
